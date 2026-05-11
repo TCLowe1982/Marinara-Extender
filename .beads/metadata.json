@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "MarinaraExtender",
+  "project_id": "d188eb69-0d82-461b-92e3-ec57044b5f5d"
+}

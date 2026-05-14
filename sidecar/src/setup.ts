@@ -110,7 +110,7 @@ function buildSetupHtml(port: number): string {
       <div class="step-body">
         <h2>Install the extension</h2>
         <p>In Marinara &#8594; Settings &#8594; Extensions, add a new extension
-           and upload this file.</p>
+           named <strong>Marinara Extender</strong> and upload this file.</p>
         <div class="row" style="margin-top:8px">
           <a class="btn-primary" href="/extension.js" download="Marinara Extender.js">
             Download extension.js

@@ -771,14 +771,17 @@ async function loadPanelData() {
 
   try {
     const { chatId } = panelState.session;
+    console.log("[ME] loadPanelData — fetching entries/bookmarks for chatId:", chatId);
     const [entries, bookmarks] = await Promise.all([
       memFetch(`/api/entries?scope=chat&scopeId=${encodeURIComponent(chatId)}`),
       memFetch(`/api/bookmarks?scope=chat&scopeId=${encodeURIComponent(chatId)}`),
     ]);
+    console.log("[ME] entries:", entries, "bookmarks:", bookmarks);
     panelState.chatEntries = Array.isArray(entries) ? entries : [];
     panelState.bookmarks = Array.isArray(bookmarks) ? bookmarks : [];
-  } catch {
-    panelState.error = "Failed to load. Is the sidecar running?";
+  } catch (e) {
+    console.error("[ME] loadPanelData error:", e);
+    panelState.error = "Failed to load. Is the Memory Extender running?";
     panelState.chatEntries = [];
     panelState.bookmarks = [];
   }
@@ -844,6 +847,7 @@ async function openPanel() {
   if (!panel) return;
   panel.classList.add("open");
   if (!currentSession) currentSession = await resolveSession();
+  console.log("[ME] openPanel — session:", currentSession);
   panelState.session = currentSession;
   panelState.loading = true;
   renderPanel();
@@ -894,12 +898,16 @@ ensureRegexScript();
 
 async function resolveSession() {
   const match = location.pathname.match(/\/chat\/([^/?]+)/);
+  console.log("[ME] resolveSession — pathname:", location.pathname, "match:", match?.[1] ?? null);
   if (!match) return null;
   const chatId = match[1];
   try {
     const chat = await marinara.apiFetch(`/chats/${chatId}`);
+    console.log("[ME] chat API response:", JSON.stringify(chat));
     const chatData = parseData(chat);
+    console.log("[ME] chatData (parsed):", JSON.stringify(chatData));
     const characterId = chat?.characterId ?? chat?.character_id ?? chatData?.characterId ?? chatData?.character_id;
+    console.log("[ME] characterId resolved:", characterId);
     if (!characterId) return null;
 
     let characterName = null;
@@ -907,10 +915,12 @@ async function resolveSession() {
       const char = await marinara.apiFetch(`/characters/${characterId}`);
       const charData = parseData(char);
       characterName = char?.name ?? charData?.name ?? null;
-    } catch { /* non-fatal — name is cosmetic */ }
+      console.log("[ME] characterName resolved:", characterName);
+    } catch (e) { console.warn("[ME] character name fetch failed:", e); }
 
     return { characterId: String(characterId), chatId, characterName };
-  } catch {
+  } catch (e) {
+    console.error("[ME] resolveSession error:", e);
     return null;
   }
 }

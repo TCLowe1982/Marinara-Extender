@@ -318,8 +318,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
 
   // ── POST /api/digest ──────────────────────────────────────────────────────
   // Digests a batch of chat messages with an LLM and creates memory entries
-  // in the character scope. Requires at least one prior generation request
-  // through the sidecar (so the API key is cached in memory).
+  // in the character scope. Requires MARINARA_EXTENDER_API_KEY in .env.
   // Body: { characterId, characterName?, model?, messages: [{role, content}] }
 
   app.post<{

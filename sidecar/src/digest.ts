@@ -15,7 +15,7 @@ import { nanoid } from "./nanoid.js";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const DEFAULT_UPSTREAM = (process.env.MARINARA_EXTENDER_UPSTREAM ?? "https://api.openai.com")
+const DEFAULT_UPSTREAM = (process.env.MARINARA_EXTENDER_DIGEST_UPSTREAM ?? "https://api.openai.com")
   .replace(/\/$/, "");
 
 const DEFAULT_MODEL = process.env.MARINARA_EXTENDER_DIGEST_MODEL ?? "gpt-4o-mini";
@@ -80,7 +80,7 @@ async function callLlm(prompt: string, model: string): Promise<string> {
   const auth = getCachedAuth();
   if (!auth) {
     throw new Error(
-      "No API key available. Make at least one generation request through the sidecar first.",
+      "No API key available. Set MARINARA_EXTENDER_API_KEY in memory-extender/.env to use imports.",
     );
   }
 

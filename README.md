@@ -14,7 +14,7 @@ Marinara Extender is two components:
 
 **Extension** — client-side JS installed in Marinara. After each AI response it sends the message text to the memory server, which extracts any bookmarks and returns an updated memory block. The extension writes that block into a lorebook entry so Marinara injects it automatically on the next turn.
 
-```
+```text
                          ┌─── Memory Extender (localhost:3001) ───┐
 Extension (post-turn) ──▶│  extract bookmarks · run decay         │
                          │  build memory block                     │
@@ -68,10 +68,11 @@ That's it. The extension detects the active character and chat automatically, ke
 All optional. Set them in `memory-extender/.env` or as system environment variables.
 
 | Variable | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `MARINARA_EXTENDER_PORT` | `3001` | Port the server listens on |
 | `MARINARA_EXTENDER_DATA` | `./data` | Where YAML files are stored |
 | `MARINARA_EXTENDER_API_KEY` | — | API key used for past-chat imports (see below) |
+| `MARINARA_EXTENDER_DIGEST_UPSTREAM` | `https://api.openai.com` | LLM base URL used for past-chat imports |
 | `MARINARA_EXTENDER_DIGEST_MODEL` | `gpt-4o-mini` | Model used for past-chat imports |
 
 ---
@@ -82,7 +83,7 @@ All optional. Set them in `memory-extender/.env` or as system environment variab
 
 Data is organized into three nested scopes, each with its own directory:
 
-```
+```text
 data/
 ├── global/                  # conventions and rules that apply to all characters
 ├── characters/<id>/         # a specific character's persistent arc and lore
@@ -96,7 +97,7 @@ The loader walks chat → character → global with configurable token budgets (
 Within each scope, entries are divided into three lanes:
 
 | Lane | Purpose |
-|---|---|
+| --- | --- |
 | `open_threads` | Tasks and issues being tracked. The only lane with a "done" lifecycle. |
 | `user_topics` | Things the user keeps coming back to — kids, work, running jokes. |
 | `character_topics` | The character's own agenda. Things she wants to bring up. |
@@ -107,12 +108,12 @@ The loader prioritizes `open_threads` first, then `user_topics`, then `character
 
 The character can bookmark mid-reply by writing a tag anywhere in its response:
 
-```
+```xml
 <bookmark topic="sister-situation" weight="0.8" why="unresolved">User's sister going through a rough patch — they cut the topic short.</bookmark>
 ```
 
 | Attribute | Required | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `topic` | Yes | kebab-case identifier |
 | `weight` | No | 0.1–1.0, defaults to 0.5 |
 | `why` | No | `unresolved`, `important`, `emotional`, `promised`, `curious`, `follow-up` |
@@ -157,7 +158,7 @@ The Memory Extender server exposes a REST API on `http://127.0.0.1:3001/api/*`.
 
 ### Entries
 
-```
+```http
 GET    /api/entries?scope=&scopeId=&lane=&status=
 GET    /api/entries/:id?scope=&scopeId=
 POST   /api/entries          { scope, scopeId, lane, summary, content, status? }
@@ -169,21 +170,16 @@ DELETE /api/entries/:id?scope=&scopeId=
 
 ### Bookmarks
 
-```
+```http
 GET    /api/bookmarks?scope=&scopeId=
 PATCH  /api/bookmarks/:id    { scope, scopeId, weight?, why?, summary? }
 DELETE /api/bookmarks/:id?scope=&scopeId=
 ```
 
-### Scopes
+### Scopes and health
 
-```
+```http
 GET    /api/scopes            # lists all scopes that have data, with counts
-```
-
-### Other
-
-```
 GET    /api/health            # { ok: true }
 GET    /api/memory-block?characterId=&chatId=   # current memory block (read-only)
 POST   /api/process-turn      { characterId, chatId, turnNumber, messageText }
@@ -195,7 +191,7 @@ POST   /api/process-turn      { characterId, chatId, turnNumber, messageText }
 
 All data lives under the configured `data/` directory as plain YAML — diffable, inspectable with any text editor, and easy to back up.
 
-```
+```text
 data/chats/<chatId>/
 ├── index.yaml          # flat lookup table: id → path, summary, tokens, lane, status
 ├── threads/

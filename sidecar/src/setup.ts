@@ -162,7 +162,7 @@ export function registerSetupRoutes(
   app.get("/marinara-extender.js", async (_req, reply) => {
     const code = await readExtensionJs();
     if (!code) {
-      return reply.code(404).send("marinara-extender.js not found — run the sidecar from the sidecar/ directory.");
+      return reply.code(404).send("marinara-extender.js not found — run the server from the memory-extender/ directory.");
     }
     reply.header("Content-Type", "text/plain; charset=utf-8");
     return reply.send(code);

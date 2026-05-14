@@ -891,7 +891,7 @@ function showSetupBanner() {
 const OLD_REGEX_SCRIPT_NAMES = ["Marinara Extender: Strip bookmark tags"];
 
 async function ensureRegexScript() {
-  if (localStorage.getItem(REGEX_INSTALLED_KEY)) return;
+  if (localStorage.getItem(REGEX_INSTALLED_KEY)) { return; }
   try {
     const scripts = await marinara.apiFetch("/regex-scripts");
     const list = Array.isArray(scripts) ? scripts : [];
@@ -915,7 +915,8 @@ async function ensureRegexScript() {
       await marinara.apiFetch("/regex-scripts", { method: "POST", body: JSON.stringify(REGEX_MANIFEST) });
     } else {
       const d = parseData(current);
-      if ((current.findRegex ?? d.findRegex) !== REGEX_MANIFEST.findRegex) {
+      const existingRegex = current.findRegex ?? d.findRegex;
+      if (existingRegex !== REGEX_MANIFEST.findRegex) {
         const id = current.id ?? d.id;
         await marinara.apiFetch(`/regex-scripts/${id}`, {
           method: "PATCH",
@@ -925,7 +926,8 @@ async function ensureRegexScript() {
     }
 
     localStorage.setItem(REGEX_INSTALLED_KEY, "1");
-  } catch {
+  } catch (err) {
+    console.error("[ME] ensureRegexScript failed:", err);
     showSetupBanner();
   }
 }
@@ -942,12 +944,10 @@ let lastKnownChatId = null;
 async function resolveSession() {
   // Primary: chatId captured from Marinara's own generation events.
   const chatId = lastKnownChatId;
-  console.log("[ME] resolveSession — lastKnownChatId:", chatId);
   if (chatId) {
     try {
       const chat = await marinara.apiFetch(`/chats/${chatId}`);
       const characterId = getChatCharacterId(chat);
-      console.log("[ME] resolveSession — chat:", JSON.stringify(chat).slice(0,200), "characterId:", characterId);
       if (!characterId) return null;
 
       let characterName = null;
@@ -967,18 +967,11 @@ async function resolveSession() {
   // Fallback: read the character name from the header avatar img[alt] and look it up.
   const header = document.querySelector('.mari-messages-scroll > .sticky.top-0');
   const charNameFromUI = header?.querySelector('img[alt]')?.alt?.trim();
-  console.log("[ME] resolveSession fallback — header:", !!header, "img[alt]:", charNameFromUI);
-  if (!charNameFromUI) {
-    // Log all imgs in header so we can see the actual structure
-    const imgs = header ? [...header.querySelectorAll('img')].map(i => ({ alt: i.alt, src: i.src?.slice(-40) })) : [];
-    console.log("[ME] resolveSession — header imgs:", JSON.stringify(imgs));
-    return null;
-  }
+  if (!charNameFromUI) return null;
 
   try {
     const chars = await marinara.apiFetch("/characters");
     const list = Array.isArray(chars) ? chars : (chars?.characters ?? chars?.data ?? []);
-    console.log("[ME] resolveSession — characters count:", list.length, "names:", list.slice(0,5).map(c => c.name ?? parseData(c).name));
     const found = list.find(c => {
       const d = parseData(c);
       return (c.name ?? d.name ?? "") === charNameFromUI;
@@ -1000,7 +993,6 @@ async function resolveSession() {
         return new Date(bUp) - new Date(aUp);
       });
 
-    console.log("[ME] resolveSession — charChats count:", charChats.length);
     if (charChats.length === 0) return null;
     const latest = charChats[0];
     const latestData = parseData(latest);
@@ -1072,20 +1064,27 @@ async function ensureLorebookEntry(characterId) {
     }
   }
 
-  // Find our entry by comment marker via the entries list endpoint.
+  // Find our entry by name — delete duplicates, keep the one with content.
   try {
     const res = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries`);
-    console.log("[ME] GET entries raw:", JSON.stringify(res)?.slice(0, 400));
     const list = Array.isArray(res) ? res : (res?.entries ?? res?.data ?? []);
-    for (const e of list) {
+    const matches = list.filter(e => {
       const ed = e.data ?? e;
-      console.log("[ME] lorebook entry raw:", JSON.stringify(e)?.slice(0, 200));
-      if ((ed.comment ?? e.comment) === ME_ENTRY_COMMENT) {
-        const rawId = e.id ?? ed.id ?? e.uid ?? ed.uid ?? e._id ?? ed._id;
-        entryId = rawId != null ? String(rawId) : null;
-        console.log("[ME] matched entry — rawId:", rawId, "entryId:", entryId);
-        break;
+      return (e.name ?? ed.name ?? ed.comment ?? e.comment) === ME_ENTRY_COMMENT;
+    });
+    if (matches.length > 1) {
+      // Keep the entry with the most content, delete the rest.
+      matches.sort((a, b) => (b.content?.length ?? 0) - (a.content?.length ?? 0));
+      for (const dupe of matches.slice(1)) {
+        const did = dupe.id ?? parseData(dupe).id;
+        if (did) await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${did}`, { method: "DELETE" }).catch(() => {});
       }
+    }
+    if (matches.length > 0) {
+      const e = matches[0];
+      const ed = e.data ?? e;
+      const rawId = e.id ?? ed.id;
+      entryId = rawId != null ? String(rawId) : null;
     }
   } catch (err) { console.error("[ME] lorebook entry lookup failed:", err); }
 
@@ -1104,11 +1103,9 @@ async function ensureLorebookEntry(characterId) {
           order: 0,
         }),
       });
-      console.log("[ME] POST lorebook entry raw:", JSON.stringify(res)?.slice(0, 300));
       const d = res.data ?? res;
       const rawId = d.id ?? res.id ?? d.uid ?? res.uid ?? d._id ?? res._id;
       entryId = rawId != null ? String(rawId) : null;
-      console.log("[ME] created entry — rawId:", rawId, "entryId:", entryId);
     } catch (err) {
       console.error("[ME] entry create failed:", err);
       return null;
@@ -1126,13 +1123,11 @@ async function ensureLorebookEntry(characterId) {
 }
 
 async function updateLorebook(lorebookId, entryId, memoryBlock) {
-  console.log("[ME] updateLorebook — lorebookId:", lorebookId, "entryId:", entryId, "content length:", memoryBlock?.length);
   try {
-    const res = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${entryId}`, {
+    await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${entryId}`, {
       method: "PATCH",
       body: JSON.stringify({ content: memoryBlock, enabled: true }),
     });
-    console.log("[ME] updateLorebook — apiFetch resolved:", JSON.stringify(res)?.slice(0, 120));
   } catch (err) {
     console.error("[ME] lorebook update failed:", err);
   }
@@ -1153,7 +1148,6 @@ async function syncMemoryBlock(session) {
 // ── Post-generation hook ──────────────────────────────────────────────────────
 
 async function checkForNewMessage() {
-  console.log("[ME] checkForNewMessage — session:", currentSession);
   if (!currentSession) return;
   const { characterId, chatId } = currentSession;
   try {
@@ -1169,25 +1163,20 @@ async function checkForNewMessage() {
     const lastD = parseData(last);
     const msgId = String(last.id ?? lastD.id ?? "");
     const content = String(last.content ?? lastD.content ?? "");
-    console.log("[ME] last assistant msg:", msgId, content?.slice(0, 50));
-    if (msgId && msgId === lastMsgId[chatId]) { console.log("[ME] already processed, skipping"); return; }
+    if (msgId && msgId === lastMsgId[chatId]) { return; }
     lastMsgId[chatId] = msgId;
 
-    if (!content) { console.log("[ME] no content, skipping"); return; }
+    if (!content) { return; }
 
-    console.log("[ME] calling /api/process-turn");
     const result = await memFetch("/api/process-turn", {
       method: "POST",
       body: JSON.stringify({ characterId, chatId, turnNumber: msgs.length, messageText: content }),
     });
-    console.log("[ME] process-turn result:", JSON.stringify(result));
     if (!result?.memoryBlock) return;
 
     const entry = await ensureLorebookEntry(characterId);
-    console.log("[ME] lorebook entry:", entry);
     if (!entry) return;
     await updateLorebook(entry.lorebookId, entry.entryId, result.memoryBlock);
-    console.log("[ME] lorebook write attempted for entry:", entry.entryId, "content length:", result.memoryBlock.length);
 
     // If the character created new ledger entries, refresh the panel.
     if (result.created > 0 && panel?.classList.contains("open")) {
@@ -1210,7 +1199,6 @@ marinara.onCleanup(() => clearTimeout(msgDebounceTimer));
 // generation events to detect active chatId and chat switches.
 
 marinara.on(window, "marinara:generation-complete", async e => {
-  console.log("[ME] marinara:generation-complete fired — detail:", JSON.stringify(e.detail));
   if (!e.detail?.chatId) return;
   const chatId = String(e.detail.chatId);
   lastKnownChatId = chatId;

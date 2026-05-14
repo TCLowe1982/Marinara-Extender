@@ -15,11 +15,6 @@ import { nanoid } from "./nanoid.js";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const DEFAULT_UPSTREAM = (process.env.MARINARA_EXTENDER_DIGEST_UPSTREAM ?? "https://api.openai.com")
-  .replace(/\/$/, "");
-
-const DEFAULT_MODEL = process.env.MARINARA_EXTENDER_DIGEST_MODEL ?? "gpt-4o-mini";
-
 const MAX_MESSAGES = 200;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -84,12 +79,19 @@ async function callLlm(prompt: string, model: string): Promise<string> {
     );
   }
 
-  const res = await fetch(`${DEFAULT_UPSTREAM}/v1/chat/completions`, {
+  // Read at call time so .env values (loaded after module init) are always used.
+  const upstream = (process.env.MARINARA_EXTENDER_DIGEST_UPSTREAM ?? "https://api.openai.com")
+    .replace(/\/$/, "");
+
+  const headers = {
+    "Content-Type": "application/json",
+    "Authorization": auth,
+  };
+  console.log("[digest] request URL:", `${upstream}/v1/chat/completions`);
+  console.log("[digest] request headers:", JSON.stringify(headers));
+  const res = await fetch(`${upstream}/v1/chat/completions`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": auth,
-    },
+    headers,
     body: JSON.stringify({
       model,
       messages: [{ role: "user", content: prompt }],
@@ -165,7 +167,7 @@ export async function digestMessages(
   characterName: string,
   model?: string,
 ): Promise<DigestResult> {
-  const usedModel = model ?? DEFAULT_MODEL;
+  const usedModel = model ?? process.env.MARINARA_EXTENDER_DIGEST_MODEL ?? "gpt-4o-mini";
   const raw = await callLlm(buildPrompt(messages, characterName), usedModel);
 
   let extracted: ExtractedEntry[];

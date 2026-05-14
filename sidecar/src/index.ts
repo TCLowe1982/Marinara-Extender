@@ -1,0 +1,72 @@
+import Fastify from "fastify";
+import { readFile } from "fs/promises";
+import { join } from "path";
+import { registerApiRoutes } from "./api.js";
+import { registerSetupRoutes } from "./setup.js";
+
+// ── .env loader ───────────────────────────────────────────────────────────────
+// Reads sidecar/.env at startup so users can store their API key once instead
+// of re-entering it in every Marinara connection form.
+
+async function loadDotEnv(): Promise<void> {
+  try {
+    const raw = await readFile(join(process.cwd(), ".env"), "utf8");
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq < 1) continue;
+      const key = trimmed.slice(0, eq).trim();
+      const val = trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
+      if (key && val && process.env[key] === undefined) {
+        process.env[key] = val;
+      }
+    }
+  } catch {
+    // no .env — fine
+  }
+}
+
+await loadDotEnv();
+
+const PORT = parseInt(process.env.MARINARA_EXTENDER_PORT ?? "3001", 10);
+
+const app = Fastify({ logger: true });
+
+// ── CORS (for extension fetch() calls to /api/*) ──────────────────────────────
+
+app.addHook("onSend", async (_req, reply) => {
+  void reply.header("Access-Control-Allow-Origin", "*");
+  void reply.header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
+  void reply.header("Access-Control-Allow-Headers", "Content-Type,Authorization");
+});
+
+app.options("*", async (_req, reply) => reply.send());
+
+// ── Health ────────────────────────────────────────────────────────────────────
+
+app.get("/api/health", async (_req, reply) => {
+  return reply.send({ ok: true });
+});
+
+// ── Setup page ────────────────────────────────────────────────────────────────
+// http://127.0.0.1:{PORT}/setup — one-stop install page with copy buttons.
+// http://127.0.0.1:{PORT}/extension.js — raw extension file for the copy button.
+
+registerSetupRoutes(app, { port: PORT });
+
+// ── Management API ────────────────────────────────────────────────────────────
+
+registerApiRoutes(app);
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+
+app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
+  if (err) {
+    app.log.error(err);
+    process.exit(1);
+  }
+  console.log(`\nMarinara Extender sidecar running on http://127.0.0.1:${PORT}`);
+  console.log(`Setup page:   http://127.0.0.1:${PORT}/setup`);
+  console.log(`Data dir:     ${process.env.MARINARA_EXTENDER_DATA ?? "./data"}`);
+});

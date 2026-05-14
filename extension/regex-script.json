@@ -1,0 +1,13 @@
+{
+  "name": "Marinara Extender: Strip bookmark tags",
+  "enabled": true,
+  "findRegex": "<bookmark[^>]*>[\\s\\S]*?<\\/bookmark>",
+  "replaceString": "",
+  "placement": ["ai_output"],
+  "flags": "gi",
+  "trimStrings": [],
+  "promptOnly": false,
+  "minDepth": null,
+  "maxDepth": null,
+  "order": 0
+}

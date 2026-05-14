@@ -343,6 +343,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
       return reply.send(result);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
+      console.error("[digest] failed:", detail);
       if (detail.includes("No API key")) {
         return reply.code(503).send({ error: "no_api_key", detail });
       }

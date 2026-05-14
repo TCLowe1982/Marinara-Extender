@@ -18,9 +18,8 @@ async function loadDotEnv(): Promise<void> {
       if (eq < 1) continue;
       const key = trimmed.slice(0, eq).trim();
       const val = trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
-      if (key && val && process.env[key] === undefined) {
-        process.env[key] = val;
-      }
+      // .env always wins — overwrites stale system env vars (e.g. from Python venvs)
+      if (key && val) process.env[key] = val;
     }
   } catch {
     // no .env — fine
@@ -66,7 +65,11 @@ app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
     app.log.error(err);
     process.exit(1);
   }
+  const apiKey = process.env.MARINARA_EXTENDER_API_KEY;
   console.log(`\nMarinara Extender memory server running on http://127.0.0.1:${PORT}`);
-  console.log(`Setup page:  http://127.0.0.1:${PORT}/setup`);
-  console.log(`Data dir:    ${process.env.MARINARA_EXTENDER_DATA ?? "./data"}`);
+  console.log(`Setup page:   http://127.0.0.1:${PORT}/setup`);
+  console.log(`Data dir:     ${process.env.MARINARA_EXTENDER_DATA ?? "./data"}`);
+  console.log(`Digest URL:   ${process.env.MARINARA_EXTENDER_DIGEST_UPSTREAM ?? "https://api.openai.com"}/v1/chat/completions`);
+  console.log(`Digest model: ${process.env.MARINARA_EXTENDER_DIGEST_MODEL ?? "gpt-4o-mini"}`);
+  console.log(`API key:      ${apiKey ? `${apiKey.slice(0, 8)}…` : "NOT SET — imports will fail"}`);
 });

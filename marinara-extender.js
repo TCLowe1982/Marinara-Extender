@@ -751,6 +751,7 @@ async function importOneChat(chat) {
       panelState.importResults[chat.id] = { count: result.created ?? 0 };
     }
   } catch (err) {
+    console.error("[ME] import failed for chat", chat.id, ":", err);
     panelState.importResults[chat.id] = { error: String(err) };
   }
 
@@ -1033,7 +1034,11 @@ const ME_LOREBOOK_NAME = "Marinara Extender Memory";
 const ME_ENTRY_COMMENT = "marinara-extender-memory-block";
 
 async function ensureLorebookEntry(characterId) {
-  if (lorebookCache[characterId]) return lorebookCache[characterId];
+  // Guard against a previously cached bad value (e.g. entryId: "undefined").
+  const cached = lorebookCache[characterId];
+  if (cached && cached.lorebookId && cached.lorebookId !== "undefined"
+             && cached.entryId   && cached.entryId   !== "undefined") return cached;
+  delete lorebookCache[characterId];
 
   let lorebookId = null;
   let entryId = null;
@@ -1067,19 +1072,22 @@ async function ensureLorebookEntry(characterId) {
     }
   }
 
-  // Find our entry by comment marker
+  // Find our entry by comment marker via the entries list endpoint.
   try {
-    const res = await marinara.apiFetch(`/lorebooks/${lorebookId}`);
-    const d = res.data ?? res;
-    const entries = d.entries ?? [];
-    for (const e of entries) {
+    const res = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries`);
+    console.log("[ME] GET entries raw:", JSON.stringify(res)?.slice(0, 400));
+    const list = Array.isArray(res) ? res : (res?.entries ?? res?.data ?? []);
+    for (const e of list) {
       const ed = e.data ?? e;
+      console.log("[ME] lorebook entry raw:", JSON.stringify(e)?.slice(0, 200));
       if ((ed.comment ?? e.comment) === ME_ENTRY_COMMENT) {
-        entryId = String(e.id ?? ed.id);
+        const rawId = e.id ?? ed.id ?? e.uid ?? ed.uid ?? e._id ?? ed._id;
+        entryId = rawId != null ? String(rawId) : null;
+        console.log("[ME] matched entry — rawId:", rawId, "entryId:", entryId);
         break;
       }
     }
-  } catch { /* will create below */ }
+  } catch (err) { console.error("[ME] lorebook entry lookup failed:", err); }
 
   // Create entry if not found
   if (!entryId) {
@@ -1087,6 +1095,7 @@ async function ensureLorebookEntry(characterId) {
       const res = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries`, {
         method: "POST",
         body: JSON.stringify({
+          name: ME_ENTRY_COMMENT,
           content: "",
           keys: [],
           comment: ME_ENTRY_COMMENT,
@@ -1095,12 +1104,20 @@ async function ensureLorebookEntry(characterId) {
           order: 0,
         }),
       });
+      console.log("[ME] POST lorebook entry raw:", JSON.stringify(res)?.slice(0, 300));
       const d = res.data ?? res;
-      entryId = String(d.id ?? res.id);
+      const rawId = d.id ?? res.id ?? d.uid ?? res.uid ?? d._id ?? res._id;
+      entryId = rawId != null ? String(rawId) : null;
+      console.log("[ME] created entry — rawId:", rawId, "entryId:", entryId);
     } catch (err) {
       console.error("[ME] entry create failed:", err);
       return null;
     }
+  }
+
+  if (!entryId || entryId === "undefined") {
+    console.error("[ME] could not resolve entryId — see raw logs above");
+    return null;
   }
 
   const result = { lorebookId, entryId };
@@ -1109,11 +1126,13 @@ async function ensureLorebookEntry(characterId) {
 }
 
 async function updateLorebook(lorebookId, entryId, memoryBlock) {
+  console.log("[ME] updateLorebook — lorebookId:", lorebookId, "entryId:", entryId, "content length:", memoryBlock?.length);
   try {
-    await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${entryId}`, {
+    const res = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${entryId}`, {
       method: "PATCH",
       body: JSON.stringify({ content: memoryBlock, enabled: true }),
     });
+    console.log("[ME] updateLorebook — apiFetch resolved:", JSON.stringify(res)?.slice(0, 120));
   } catch (err) {
     console.error("[ME] lorebook update failed:", err);
   }
@@ -1134,6 +1153,7 @@ async function syncMemoryBlock(session) {
 // ── Post-generation hook ──────────────────────────────────────────────────────
 
 async function checkForNewMessage() {
+  console.log("[ME] checkForNewMessage — session:", currentSession);
   if (!currentSession) return;
   const { characterId, chatId } = currentSession;
   try {
@@ -1148,21 +1168,26 @@ async function checkForNewMessage() {
 
     const lastD = parseData(last);
     const msgId = String(last.id ?? lastD.id ?? "");
-    if (msgId && msgId === lastMsgId[chatId]) return;
+    const content = String(last.content ?? lastD.content ?? "");
+    console.log("[ME] last assistant msg:", msgId, content?.slice(0, 50));
+    if (msgId && msgId === lastMsgId[chatId]) { console.log("[ME] already processed, skipping"); return; }
     lastMsgId[chatId] = msgId;
 
-    const content = String(last.content ?? lastD.content ?? "");
-    if (!content) return;
+    if (!content) { console.log("[ME] no content, skipping"); return; }
 
+    console.log("[ME] calling /api/process-turn");
     const result = await memFetch("/api/process-turn", {
       method: "POST",
       body: JSON.stringify({ characterId, chatId, turnNumber: msgs.length, messageText: content }),
     });
+    console.log("[ME] process-turn result:", JSON.stringify(result));
     if (!result?.memoryBlock) return;
 
     const entry = await ensureLorebookEntry(characterId);
+    console.log("[ME] lorebook entry:", entry);
     if (!entry) return;
     await updateLorebook(entry.lorebookId, entry.entryId, result.memoryBlock);
+    console.log("[ME] lorebook write attempted for entry:", entry.entryId, "content length:", result.memoryBlock.length);
 
     // If the character created new ledger entries, refresh the panel.
     if (result.created > 0 && panel?.classList.contains("open")) {
@@ -1190,12 +1215,15 @@ marinara.on(window, "marinara:generation-complete", async e => {
   const chatId = String(e.detail.chatId);
   lastKnownChatId = chatId;
   if (currentSession?.chatId !== chatId) {
-    // Chat switched or first generation — rebuild the full session.
+    // Chat switched or first generation — rebuild the full session first.
     panelState.session = null;
     panelState.importChats = null;
     panelState.importExpanded = false;
     await refreshSession();
   }
+  // Call explicitly here so we're guaranteed currentSession is set,
+  // rather than relying on the DOM observer which races against refreshSession.
+  await checkForNewMessage();
 });
 
 marinara.on(window, "marinara:mari-phase", e => {

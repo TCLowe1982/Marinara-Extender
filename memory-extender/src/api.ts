@@ -26,7 +26,7 @@ import {
 } from "./storage.js";
 import { nanoid } from "./nanoid.js";
 import { digestMessages, type DigestMessage } from "./digest.js";
-import { processResponse } from "./writer.js";
+import { processResponse, extractRememberTags } from "./writer.js";
 import { loadContext } from "./loader.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -363,9 +363,35 @@ export function registerApiRoutes(app: FastifyInstance): void {
     if (!characterId || !chatId) {
       return reply.code(400).send({ error: "characterId and chatId are required" });
     }
+
+    // Extract <remember> tags and create permanent entries before bookmark processing.
+    const remembers = extractRememberTags(messageText);
+    let created = 0;
+    for (const rem of remembers) {
+      const scopeId = rem.scope === "character" ? characterId
+                    : rem.scope === "global"    ? "global"
+                    : chatId;
+      const summary = rem.content.replace(/\n+/g, " ").trim().slice(0, 120);
+      const id  = `${idPrefix(rem.lane)}-${nanoid(8)}`;
+      const now = today();
+      const entry: Entry = {
+        id, lane: rem.lane, summary, status: "open",
+        created: now, lastAccessed: now,
+        content: rem.content,
+        tokens: estimateTokens(`${summary} ${rem.content}`),
+      };
+      const relativePath = await writeEntry(rem.scope, scopeId, entry);
+      await upsertIndexEntry(rem.scope, scopeId, {
+        id, path: relativePath, summary,
+        tokens: entry.tokens, lane: rem.lane,
+        status: "open", lastAccessed: now,
+      });
+      created++;
+    }
+
     await processResponse(chatId, turnNumber, messageText);
     const { contextBlock } = await loadContext({ characterId, chatId, turnNumber });
-    return reply.send({ memoryBlock: contextBlock });
+    return reply.send({ memoryBlock: contextBlock, created });
   });
 
   // ── GET /api/memory-block ─────────────────────────────────────────────────

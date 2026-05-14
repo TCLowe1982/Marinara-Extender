@@ -129,10 +129,21 @@ How to use it:
 - Thread statuses: [in_progress] = active, [open] = not yet started, [deferred] = on hold.
   Acknowledge in-progress threads when they're relevant; don't inventory them aloud.
 
-How to save something for later:
-When you notice something worth remembering — unresolved emotion, a follow-up you owe,
-something the user keeps circling back to, something you want to bring up — write a
-bookmark tag anywhere in your response:
+How to save something permanently (ledger entry — no decay):
+Use <remember> when something is genuinely worth keeping long-term:
+
+  <remember lane="user_topics">User's daughter Emma just turned 8.</remember>
+  <remember lane="open_threads">User wants to plan Emma's birthday party.</remember>
+  <remember lane="character_topics">I want to ask how the party went next time.</remember>
+  <remember lane="user_topics" scope="character">User hates surprises — noted for all chats.</remember>
+
+  lane  — user_topics (facts about the user) · open_threads (tasks to track) ·
+          character_topics (things you want to bring up)
+  scope — chat (this conversation only, default) · character (all future chats with this user)
+
+How to save a soft signal (decays over time):
+For things that matter right now but may fade naturally — unresolved emotion,
+a follow-up you owe, something the user keeps circling back to:
 
   <bookmark topic="short-id" weight="0.8" why="unresolved">One sentence summary.</bookmark>
 
@@ -140,8 +151,8 @@ bookmark tag anywhere in your response:
   weight — 0.1 (minor note) · 0.5 (worth remembering) · 0.9 (must revisit)
   why    — unresolved | important | emotional | promised | curious | follow-up
 
-These tags are stripped from visible output automatically. Use them sparingly.
-Only bookmark things that genuinely matter — not every exchange needs one.
+Both tags are stripped from visible output automatically. Use them sparingly —
+not every exchange needs a memory. Save things that would genuinely matter next time.
 </memory_system>`;
 
 // ── Context assembly ──────────────────────────────────────────────────────────

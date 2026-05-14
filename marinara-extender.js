@@ -11,13 +11,13 @@
 // ╚══════════════════════════════════════════════════════════════════════════╝
 
 const MEMORY_EXTENDER = "http://127.0.0.1:3001";
-const REGEX_INSTALLED_KEY = `${marinara.extensionId}:regex-installed`;
-const REGEX_SCRIPT_NAME = "Marinara Extender: Strip bookmark tags";
+const REGEX_INSTALLED_KEY = `${marinara.extensionId}:regex-installed:v2`;
+const REGEX_SCRIPT_NAME = "Marinara Extender: Strip memory tags";
 
 const REGEX_MANIFEST = {
   name: REGEX_SCRIPT_NAME,
   enabled: true,
-  findRegex: "<bookmark[^>]*>[\\s\\S]*?<\\/bookmark>",
+  findRegex: "(<bookmark[^>]*>[\\s\\S]*?<\\/bookmark>|<remember[^>]*>[\\s\\S]*?<\\/remember>)",
   replaceString: "",
   placement: ["ai_output"],
   flags: "gi",
@@ -33,6 +33,22 @@ function parseData(obj) {
   const raw = obj?.data;
   if (typeof raw === "string") { try { return JSON.parse(raw); } catch { return {}; } }
   return raw ?? {};
+}
+
+// Chats in conversation mode use `characterIds` (JSON string array) instead of
+// `characterId`. Returns the first character ID regardless of which field is used.
+function getChatCharacterId(chat) {
+  const d = parseData(chat);
+  const direct = chat?.characterId ?? chat?.character_id ?? d?.characterId ?? d?.character_id;
+  if (direct) return String(direct);
+  const raw = chat?.characterIds ?? d?.characterIds;
+  if (raw) {
+    try {
+      const arr = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (Array.isArray(arr) && arr.length > 0) return String(arr[0]);
+    } catch {}
+  }
+  return null;
 }
 
 const LANES = [
@@ -679,10 +695,8 @@ async function loadImportChats() {
 
     panelState.importChats = list
       .filter(c => {
-        const d = parseData(c);
-        const cid = c.characterId ?? c.character_id ?? d.characterId ?? d.character_id;
-        const id  = c.id ?? d.id;
-        return String(cid) === String(characterId) && String(id) !== String(chatId);
+        const id = c.id ?? parseData(c).id;
+        return getChatCharacterId(c) === String(characterId) && String(id) !== String(chatId);
       })
       .map(c => {
         const d = parseData(c);
@@ -873,15 +887,42 @@ function showSetupBanner() {
   banner.querySelector("button")?.addEventListener("click", () => banner.remove());
 }
 
+const OLD_REGEX_SCRIPT_NAMES = ["Marinara Extender: Strip bookmark tags"];
+
 async function ensureRegexScript() {
   if (localStorage.getItem(REGEX_INSTALLED_KEY)) return;
   try {
     const scripts = await marinara.apiFetch("/regex-scripts");
-    const exists = Array.isArray(scripts) &&
-      scripts.some(s => s.name === REGEX_SCRIPT_NAME || parseData(s).name === REGEX_SCRIPT_NAME);
-    if (!exists) {
-      await marinara.apiFetch("/regex-scripts", { method: "POST", body: JSON.stringify(REGEX_MANIFEST) });
+    const list = Array.isArray(scripts) ? scripts : [];
+
+    // Remove any old-named script from a previous version.
+    for (const s of list) {
+      const d = parseData(s);
+      const name = s.name ?? d.name;
+      if (OLD_REGEX_SCRIPT_NAMES.includes(name)) {
+        const id = s.id ?? d.id;
+        if (id) await marinara.apiFetch(`/regex-scripts/${id}`, { method: "DELETE" }).catch(() => {});
+      }
     }
+
+    // Find current script by name and create or update it.
+    const current = list.find(s => {
+      const d = parseData(s);
+      return (s.name ?? d.name) === REGEX_SCRIPT_NAME;
+    });
+    if (!current) {
+      await marinara.apiFetch("/regex-scripts", { method: "POST", body: JSON.stringify(REGEX_MANIFEST) });
+    } else {
+      const d = parseData(current);
+      if ((current.findRegex ?? d.findRegex) !== REGEX_MANIFEST.findRegex) {
+        const id = current.id ?? d.id;
+        await marinara.apiFetch(`/regex-scripts/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ findRegex: REGEX_MANIFEST.findRegex, name: REGEX_SCRIPT_NAME }),
+        });
+      }
+    }
+
     localStorage.setItem(REGEX_INSTALLED_KEY, "1");
   } catch {
     showSetupBanner();
@@ -900,11 +941,12 @@ let lastKnownChatId = null;
 async function resolveSession() {
   // Primary: chatId captured from Marinara's own generation events.
   const chatId = lastKnownChatId;
+  console.log("[ME] resolveSession — lastKnownChatId:", chatId);
   if (chatId) {
     try {
       const chat = await marinara.apiFetch(`/chats/${chatId}`);
-      const chatData = parseData(chat);
-      const characterId = chat?.characterId ?? chat?.character_id ?? chatData?.characterId ?? chatData?.character_id;
+      const characterId = getChatCharacterId(chat);
+      console.log("[ME] resolveSession — chat:", JSON.stringify(chat).slice(0,200), "characterId:", characterId);
       if (!characterId) return null;
 
       let characterName = null;
@@ -915,7 +957,8 @@ async function resolveSession() {
       } catch { /* name is optional */ }
 
       return { characterId: String(characterId), chatId: String(chatId), characterName };
-    } catch {
+    } catch (e) {
+      console.error("[ME] resolveSession primary path error:", e);
       return null;
     }
   }
@@ -923,11 +966,18 @@ async function resolveSession() {
   // Fallback: read the character name from the header avatar img[alt] and look it up.
   const header = document.querySelector('.mari-messages-scroll > .sticky.top-0');
   const charNameFromUI = header?.querySelector('img[alt]')?.alt?.trim();
-  if (!charNameFromUI) return null;
+  console.log("[ME] resolveSession fallback — header:", !!header, "img[alt]:", charNameFromUI);
+  if (!charNameFromUI) {
+    // Log all imgs in header so we can see the actual structure
+    const imgs = header ? [...header.querySelectorAll('img')].map(i => ({ alt: i.alt, src: i.src?.slice(-40) })) : [];
+    console.log("[ME] resolveSession — header imgs:", JSON.stringify(imgs));
+    return null;
+  }
 
   try {
     const chars = await marinara.apiFetch("/characters");
     const list = Array.isArray(chars) ? chars : (chars?.characters ?? chars?.data ?? []);
+    console.log("[ME] resolveSession — characters count:", list.length, "names:", list.slice(0,5).map(c => c.name ?? parseData(c).name));
     const found = list.find(c => {
       const d = parseData(c);
       return (c.name ?? d.name ?? "") === charNameFromUI;
@@ -942,24 +992,22 @@ async function resolveSession() {
     const allChats = await marinara.apiFetch("/chats");
     const chatList = Array.isArray(allChats) ? allChats : (allChats?.chats ?? allChats?.data ?? []);
     const charChats = chatList
-      .filter(c => {
-        const d = parseData(c);
-        const cid = c.characterId ?? c.character_id ?? d.characterId ?? d.character_id;
-        return String(cid) === characterId;
-      })
+      .filter(c => getChatCharacterId(c) === characterId)
       .sort((a, b) => {
         const aUp = a.updatedAt ?? parseData(a).updatedAt ?? a.createdAt ?? 0;
         const bUp = b.updatedAt ?? parseData(b).updatedAt ?? b.createdAt ?? 0;
         return new Date(bUp) - new Date(aUp);
       });
 
+    console.log("[ME] resolveSession — charChats count:", charChats.length);
     if (charChats.length === 0) return null;
     const latest = charChats[0];
     const latestData = parseData(latest);
     const resolvedChatId = String(latest.id ?? latestData.id);
     lastKnownChatId = resolvedChatId;
     return { characterId, chatId: resolvedChatId, characterName };
-  } catch {
+  } catch (e) {
+    console.error("[ME] resolveSession fallback error:", e);
     return null;
   }
 }
@@ -1115,6 +1163,11 @@ async function checkForNewMessage() {
     const entry = await ensureLorebookEntry(characterId);
     if (!entry) return;
     await updateLorebook(entry.lorebookId, entry.entryId, result.memoryBlock);
+
+    // If the character created new ledger entries, refresh the panel.
+    if (result.created > 0 && panel?.classList.contains("open")) {
+      await loadPanelData();
+    }
   } catch (err) {
     console.error("[ME] post-gen hook failed:", err);
   }
@@ -1132,6 +1185,7 @@ marinara.onCleanup(() => clearTimeout(msgDebounceTimer));
 // generation events to detect active chatId and chat switches.
 
 marinara.on(window, "marinara:generation-complete", async e => {
+  console.log("[ME] marinara:generation-complete fired — detail:", JSON.stringify(e.detail));
   if (!e.detail?.chatId) return;
   const chatId = String(e.detail.chatId);
   lastKnownChatId = chatId;

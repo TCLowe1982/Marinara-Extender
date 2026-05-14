@@ -27,6 +27,13 @@ const REGEX_MANIFEST = {
   order: 0,
 };
 
+// Marinara stores structured fields as a JSON string in `data`. Parse it safely.
+function parseData(obj) {
+  const raw = obj?.data;
+  if (typeof raw === "string") { try { return JSON.parse(raw); } catch { return {}; } }
+  return raw ?? {};
+}
+
 const LANES = [
   { key: "open_threads",     label: "Open Threads",    color: "#3b82f6", addLabel: "+ Thread" },
   { key: "user_topics",      label: "User Topics",     color: "#a855f7", addLabel: "+ Topic"  },
@@ -671,14 +678,18 @@ async function loadImportChats() {
 
     panelState.importChats = list
       .filter(c => {
-        const cid = c.characterId ?? c.character_id ?? c.data?.characterId;
-        const id  = c.id ?? c.data?.id;
+        const d = parseData(c);
+        const cid = c.characterId ?? c.character_id ?? d.characterId ?? d.character_id;
+        const id  = c.id ?? d.id;
         return String(cid) === String(characterId) && String(id) !== String(chatId);
       })
-      .map(c => ({
-        id:   String(c.id ?? c.data?.id),
-        name: String(c.name ?? c.title ?? c.data?.name ?? c.data?.title ?? `Chat ${shorten(String(c.id ?? ""), 8)}`),
-      }));
+      .map(c => {
+        const d = parseData(c);
+        return {
+          id:   String(c.id ?? d.id),
+          name: String(c.name ?? c.title ?? d.name ?? d.title ?? `Chat ${shorten(String(c.id ?? ""), 8)}`),
+        };
+      });
   } catch {
     panelState.importChatsError = "Failed to load chat list.";
     panelState.importChats = [];
@@ -694,8 +705,9 @@ async function fetchChatMessages(chatId) {
     const list = Array.isArray(res) ? res : (res?.messages ?? res?.data ?? []);
     return list
       .map(m => {
-        const role    = m.role    ?? m.data?.role;
-        const content = m.content ?? m.data?.content;
+        const d = parseData(m);
+        const role    = m.role    ?? d.role;
+        const content = m.content ?? d.content;
         return (role && content) ? { role: String(role), content: String(content) } : null;
       })
       .filter(Boolean)
@@ -865,7 +877,7 @@ async function ensureRegexScript() {
   try {
     const scripts = await marinara.apiFetch("/regex-scripts");
     const exists = Array.isArray(scripts) &&
-      scripts.some(s => s.name === REGEX_SCRIPT_NAME || s.data?.name === REGEX_SCRIPT_NAME);
+      scripts.some(s => s.name === REGEX_SCRIPT_NAME || parseData(s).name === REGEX_SCRIPT_NAME);
     if (!exists) {
       await marinara.apiFetch("/regex-scripts", { method: "POST", body: JSON.stringify(REGEX_MANIFEST) });
     }
@@ -885,13 +897,15 @@ async function resolveSession() {
   const chatId = match[1];
   try {
     const chat = await marinara.apiFetch(`/chats/${chatId}`);
-    const characterId = chat?.characterId ?? chat?.character_id ?? chat?.data?.characterId;
+    const chatData = parseData(chat);
+    const characterId = chat?.characterId ?? chat?.character_id ?? chatData?.characterId ?? chatData?.character_id;
     if (!characterId) return null;
 
     let characterName = null;
     try {
       const char = await marinara.apiFetch(`/characters/${characterId}`);
-      characterName = char?.name ?? char?.data?.name ?? null;
+      const charData = parseData(char);
+      characterName = char?.name ?? charData?.name ?? null;
     } catch { /* non-fatal — name is cosmetic */ }
 
     return { characterId: String(characterId), chatId, characterName };
@@ -1029,16 +1043,17 @@ async function checkForNewMessage() {
     const msgs = Array.isArray(res) ? res : (res?.messages ?? res?.data ?? []);
 
     const last = [...msgs].reverse().find(m => {
-      const role = m.role ?? m.data?.role;
+      const role = m.role ?? parseData(m).role;
       return role === "assistant" || role === "character";
     });
     if (!last) return;
 
-    const msgId = String(last.id ?? last.data?.id ?? "");
+    const lastD = parseData(last);
+    const msgId = String(last.id ?? lastD.id ?? "");
     if (msgId && msgId === lastMsgId[chatId]) return;
     lastMsgId[chatId] = msgId;
 
-    const content = String(last.content ?? last.data?.content ?? "");
+    const content = String(last.content ?? lastD.content ?? "");
     if (!content) return;
 
     const result = await sidecarFetch("/api/process-turn", {

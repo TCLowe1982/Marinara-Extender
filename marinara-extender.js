@@ -900,6 +900,21 @@ async function resolveSession() {
   const url = location.pathname + location.hash + location.search;
   const match = url.match(/[/#]chat[/#]([^/?&#]+)/);
   console.log("[ME] resolveSession — url:", url, "hash:", location.hash, "match:", match?.[1] ?? null);
+
+  // DOM recon — log what's available so we can find the chat ID
+  console.log("[ME] document.title:", document.title);
+  const header = document.querySelector('.mari-messages-scroll > .sticky.top-0');
+  console.log("[ME] header innerHTML:", header?.innerHTML?.slice(0, 400));
+  const allDataIds = [...document.querySelectorAll('[data-id],[data-chat-id],[data-chat],[data-character-id]')]
+    .map(el => ({ tag: el.tagName, attrs: el.dataset }));
+  console.log("[ME] data-id elements:", allDataIds);
+  // Log any links or buttons with UUIDs in them
+  const uuidRe = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|^\d+$/;
+  const withIds = [...document.querySelectorAll('a[href],button,h1,h2,[class*="chat"],[class*="title"]')]
+    .map(el => ({ tag: el.tagName, cls: el.className?.toString?.().slice(0,60), text: el.textContent?.trim().slice(0,60), href: el.getAttribute?.('href') }))
+    .filter(el => el.href || (el.text && uuidRe.test(el.text)));
+  console.log("[ME] potential ID elements:", withIds.slice(0, 10));
+
   if (!match) return null;
   const chatId = match[1];
   try {

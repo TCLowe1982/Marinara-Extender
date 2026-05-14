@@ -3,3 +3,8 @@
 .dolt/
 *.db
 .beads-credential-key
+
+# Environment files — never commit secrets
+.env
+.env.local
+memory-extender/.env

@@ -264,7 +264,7 @@ function shorten(id, len = 12) {
 // ── Sidecar fetch helper ──────────────────────────────────────────────────────
 
 async function memFetch(path, options = {}) {
-  const r = await fetch(`${SIDECAR}${path}`, {
+  const r = await fetch(`${MEMORY_EXTENDER}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
@@ -297,7 +297,7 @@ marinara.onCleanup(() => document.getElementById('me-toggle')?.remove());
 async function checkSidecar() {
   const btn = document.getElementById('me-toggle');
   try {
-    const r = await fetch(`${SIDECAR}/api/health`, { signal: AbortSignal.timeout(2000) });
+    const r = await fetch(`${MEMORY_EXTENDER}/api/health`, { signal: AbortSignal.timeout(2000) });
     btn?.classList.toggle('sidecar-down', !r.ok);
   } catch {
     btn?.classList.add('sidecar-down');

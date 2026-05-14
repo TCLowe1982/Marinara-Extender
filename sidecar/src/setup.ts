@@ -1,4 +1,4 @@
-// Setup page — served at GET /setup and GET /extension.js.
+// Setup page — served at GET /setup and GET /marinara-extender.js.
 // Gives users a one-stop browser page for completing installation without
 // hunting through the file system.
 
@@ -10,8 +10,8 @@ import { join } from "path";
 
 async function readExtensionJs(): Promise<string | null> {
   const candidates = [
-    join(process.cwd(), "..", "extension", "extension.js"),
-    join(process.cwd(), "extension", "extension.js"),
+    join(process.cwd(), "..", "extension", "marinara-extender.js"),
+    join(process.cwd(), "extension", "marinara-extender.js"),
   ];
   for (const p of candidates) {
     try {
@@ -112,8 +112,8 @@ function buildSetupHtml(port: number): string {
         <p>In Marinara &#8594; Settings &#8594; Extensions, add a new extension
            named <strong>Marinara Extender</strong> and upload this file.</p>
         <div class="row" style="margin-top:8px">
-          <a class="btn-primary" href="/extension.js" download="Marinara Extender.js">
-            Download extension.js
+          <a class="btn-primary" href="/marinara-extender.js" download="Marinara Extender.js">
+            Download Marinara Extender.js
           </a>
         </div>
       </div>
@@ -159,10 +159,10 @@ export function registerSetupRoutes(
     return reply.send(buildSetupHtml(port));
   });
 
-  app.get("/extension.js", async (_req, reply) => {
+  app.get("/marinara-extender.js", async (_req, reply) => {
     const code = await readExtensionJs();
     if (!code) {
-      return reply.code(404).send("extension.js not found — run the sidecar from the sidecar/ directory.");
+      return reply.code(404).send("marinara-extender.js not found — run the sidecar from the sidecar/ directory.");
     }
     reply.header("Content-Type", "text/plain; charset=utf-8");
     return reply.send(code);

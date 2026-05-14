@@ -897,8 +897,9 @@ ensureRegexScript();
 // ── Session resolution ────────────────────────────────────────────────────────
 
 async function resolveSession() {
-  const match = location.pathname.match(/\/chat\/([^/?]+)/);
-  console.log("[ME] resolveSession — pathname:", location.pathname, "match:", match?.[1] ?? null);
+  const url = location.pathname + location.hash + location.search;
+  const match = url.match(/[/#]chat[/#]([^/?&#]+)/);
+  console.log("[ME] resolveSession — url:", url, "hash:", location.hash, "match:", match?.[1] ?? null);
   if (!match) return null;
   const chatId = match[1];
   try {

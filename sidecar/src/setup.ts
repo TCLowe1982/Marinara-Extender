@@ -10,8 +10,8 @@ import { join } from "path";
 
 async function readExtensionJs(): Promise<string | null> {
   const candidates = [
-    join(process.cwd(), "..", "extension", "marinara-extender.js"),
-    join(process.cwd(), "extension", "marinara-extender.js"),
+    join(process.cwd(), "..", "marinara-extender.js"),
+    join(process.cwd(), "marinara-extender.js"),
   ];
   for (const p of candidates) {
     try {

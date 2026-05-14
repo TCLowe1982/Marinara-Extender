@@ -10,22 +10,25 @@ Characters forget. Marinara Extender gives them a filing cabinet — YAML files 
 
 Marinara Extender is two components:
 
-**Sidecar** — a local Node.js server that sits between Marinara and your LLM. On every generation turn it runs a two-pass loader: first reads lightweight index files from all three scopes (global → character → chat), then loads only the specific entries relevant to this turn. It prepends a `<memory>` block to the system prompt, streams the response through, and post-processes it to extract any `<bookmark>` tags the character wrote.
+**Memory Extender server** — a local Node.js server that stores your memory data as YAML files and handles all the logic: loading relevant entries, building the memory block, extracting bookmarks, and running decay. It exposes a REST API that the extension calls.
 
-**Extension** — client-side JS that registers the active character and chat with the sidecar before each turn, and provides a ledger panel for viewing and managing threads, topics, and bookmarks without touching YAML directly.
+**Extension** — client-side JS installed in Marinara. After each AI response it sends the message text to the memory server, which extracts any bookmarks and returns an updated memory block. The extension writes that block into a lorebook entry so Marinara injects it automatically on the next turn.
 
 ```
-Marinara UI  ──[Extension]──▶  POST /api/register-session
-                                        │
-Marinara server ──────────────▶  POST /v1/chat/completions
-                                        │
-                               Sidecar (localhost:3001)
-                               ├── load indexes (pass 1)
-                               ├── load entries (pass 2)
-                               ├── inject <memory> block
-                               ├── forward to real LLM ──▶  streams back
-                               └── extract bookmarks, run decay
+                         ┌─── Memory Extender (localhost:3001) ───┐
+Extension (post-turn) ──▶│  extract bookmarks · run decay         │
+                         │  build memory block                     │
+                         └──────────────────┬────────────────────-┘
+                                            │ memoryBlock
+                         ┌──────────────────▼─────────────────────┐
+                         │  Lorebook entry (updated by extension)  │
+                         └──────────────────┬────────────────────-┘
+                                            │ injected by Marinara
+                                            ▼
+                                   Next generation turn
 ```
+
+No proxy. No special connection. Your LLM calls go straight from Marinara to your provider as normal.
 
 ---
 
@@ -38,46 +41,38 @@ Marinara server ──────────────▶  POST /v1/chat/com
 
 ## Installation
 
-### 1. Start the sidecar
+### 1. Install the extension
+
+Download [marinara-extender.js](./marinara-extender.js) from this repo. In Marinara → Settings → Extensions, add a new extension named **Marinara Extender** and upload the file.
+
+### 2. Start the Memory Extender server
 
 ```bash
-cd sidecar
+cd memory-extender
 npm install
 npm run dev          # development (tsx watch)
 # or
 npm start            # production (compiled)
 ```
 
-Environment variables (all optional):
+Then open **[http://127.0.0.1:3001/setup](http://127.0.0.1:3001/setup)** to confirm everything is running.
+
+### 3. Open any character chat
+
+That's it. The extension detects the active character and chat automatically, keeps the lorebook entry up to date, and starts tracking bookmarks from the first response.
+
+---
+
+## Environment variables
+
+All optional. Set them in `memory-extender/.env` or as system environment variables.
 
 | Variable | Default | Description |
 |---|---|---|
-| `MARINARA_EXTENDER_UPSTREAM` | `https://api.openai.com` | Your real LLM base URL |
-| `MARINARA_EXTENDER_PORT` | `3001` | Port the sidecar listens on |
+| `MARINARA_EXTENDER_PORT` | `3001` | Port the server listens on |
 | `MARINARA_EXTENDER_DATA` | `./data` | Where YAML files are stored |
+| `MARINARA_EXTENDER_API_KEY` | — | API key used for past-chat imports (see below) |
 | `MARINARA_EXTENDER_DIGEST_MODEL` | `gpt-4o-mini` | Model used for past-chat imports |
-
-### 2. Open the setup page
-
-Once the sidecar is running, open **[http://127.0.0.1:3001/setup](http://127.0.0.1:3001/setup)** in your browser. It walks through the remaining steps with copy buttons for everything — no file system hunting needed.
-
-The steps on that page:
-
-**Create a Marinara connection** — In Marinara → Settings → Connections, add a new connection using the Base URL copied from the setup page (`http://127.0.0.1:3001`). Set your real API key and usual model. The key is forwarded transparently to the upstream and never stored.
-
-If you use multiple LLM providers (OpenAI for some characters, Anthropic for others, a local Ollama for quick chats), see [Multiple upstreams](#multiple-upstreams-optional) below.
-
-**Install the extension** — In Marinara → Settings → Extensions, add a new extension. Click **Copy extension code** on the setup page and paste into the JS field. The extension will:
-
-- Auto-install the bookmark tag-stripping regex script on first run
-- Show a `≡` toggle button and a status dot at the bottom-left of the UI
-- Register sessions with the sidecar before each generation turn
-
-If the regex script auto-install fails, a banner appears with the manual configuration values.
-
-**Character cards** — No editing needed. The sidecar injects memory instructions automatically on every request. The `character-prompt-snippet.md` file is available if you want to fine-tune instructions for a specific character; the sidecar ignores the duplicate.
-
-**Switch chats** — For each chat where you want memory active, open the chat settings and switch the connection to the sidecar one. Chats on their original connection are unaffected.
 
 ---
 
@@ -122,15 +117,15 @@ The character can bookmark mid-reply by writing a tag anywhere in its response:
 | `weight` | No | 0.1–1.0, defaults to 0.5 |
 | `why` | No | `unresolved`, `important`, `emotional`, `promised`, `curious`, `follow-up` |
 
-Each turn, all bookmark weights decay by ×0.97. On turns where a bookmark's weight passes a random roll, it surfaces as a soft callback in the `<memory>` block — the character may weave it in naturally. Bookmarks below weight 0.1 are pruned automatically.
+Each turn, all bookmark weights decay by ×0.97. On turns where a bookmark's weight passes a random roll, it surfaces as a soft callback in the memory block — the character may weave it in naturally. Bookmarks below weight 0.1 are pruned automatically.
 
-The bookmark tags are stripped from visible output by the regex script.
+The bookmark tags are stripped from visible output by a regex script the extension installs automatically.
 
 ---
 
 ## Ledger panel
 
-Click the `≡` button at the bottom-left to open the ledger panel. It shows the active chat's threads, topics, agenda items, and bookmarks. You can:
+Click the `≡` button in the chat header to open the ledger panel. It shows the active chat's threads, topics, agenda items, and bookmarks. You can:
 
 - **Create** threads, topics, and agenda items with a summary
 - **Mark threads done** — done entries are hidden from the loader and the panel by default
@@ -143,22 +138,22 @@ The panel only shows chat-scope data. Character-scope and global entries can be 
 
 ## Importing past chats
 
-The ledger panel has an **Import from past chats** section at the bottom. It lists all other chats for the current character and lets you extract persistent memories from them using the LLM.
+The ledger panel has an **Import from past chats** section at the bottom. It lists all other chats for the current character and lets you extract persistent memories from them using an LLM.
 
 - **Import** — digest a single chat. The LLM reads the conversation and extracts threads, topics, and agenda items worth remembering.
-- **Import all** — digest every listed chat sequentially. A warning is shown: *This may take some time.* Each chat is processed one at a time; progress is shown inline.
+- **Import all** — digest every listed chat sequentially. Each chat is processed one at a time; progress is shown inline.
 
-Imported entries go into the **character scope**, so they're available across all future chats with that character — not just the one you're currently in.
+Imported entries go into the **character scope**, so they're available across all future chats with that character.
 
-The import uses the model configured in `MARINARA_EXTENDER_DIGEST_MODEL` (default: `gpt-4o-mini`). It reuses the API key from the most recent generation request through the sidecar; no extra configuration is needed as long as you've made at least one request first.
+The import calls an LLM directly and requires an API key. Set `MARINARA_EXTENDER_API_KEY` in `memory-extender/.env` before using this feature. The model is configurable via `MARINARA_EXTENDER_DIGEST_MODEL` (default: `gpt-4o-mini`).
 
-> **Note:** Because imports write to the character scope, they can't easily be undone in bulk. If something goes wrong — unexpected entries, duplicates, entries in the wrong lane — please [open an issue](https://github.com/Pasta-Devs/Marinara-Engine/issues) with a description of what happened. Individual entries can always be deleted via the management API.
+> **Note:** Because imports write to the character scope, they can't easily be undone in bulk. Individual entries can always be deleted via the management API.
 
 ---
 
 ## Management API
 
-The sidecar exposes a REST API on `http://127.0.0.1:3001/api/*`.
+The Memory Extender server exposes a REST API on `http://127.0.0.1:3001/api/*`.
 
 ### Entries
 
@@ -189,8 +184,9 @@ GET    /api/scopes            # lists all scopes that have data, with counts
 ### Other
 
 ```
-GET    /api/health            # { ok: true, upstream: "..." }
-POST   /api/register-session  { characterId, chatId, turnNumber }
+GET    /api/health            # { ok: true }
+GET    /api/memory-block?characterId=&chatId=   # current memory block (read-only)
+POST   /api/process-turn      { characterId, chatId, turnNumber, messageText }
 ```
 
 ---
@@ -212,44 +208,3 @@ data/chats/<chatId>/
 ```
 
 Indexes are updated automatically whenever an entry is created, patched, or deleted. You should not edit index files by hand; edit the entry YAML files directly if you need to make manual changes.
-
----
-
-## Multiple upstreams (optional)
-
-By default one connection pointing at `http://127.0.0.1:3001` handles everything. If you use more than one LLM provider you can route each to its own upstream without touching any config you've already set up.
-
-### Option A — profiles.yaml
-
-Copy `sidecar/profiles.example.yaml` to `sidecar/profiles.yaml` and fill in your upstreams:
-
-```yaml
-openai:     https://api.openai.com
-openrouter: https://openrouter.ai/api
-local:      http://127.0.0.1:11434
-```
-
-### Option B — environment variables
-
-```bash
-MARINARA_EXTENDER_PROFILE_OPENAI=https://api.openai.com
-MARINARA_EXTENDER_PROFILE_LOCAL=http://127.0.0.1:11434
-```
-
-Variable name after the `MARINARA_EXTENDER_PROFILE_` prefix becomes the profile name (case-insensitive).
-
-### Creating the Marinara connections
-
-For each profile, add a connection in Marinara → Settings → Connections:
-
-- **Base URL:** `http://127.0.0.1:3001/p/<profile-name>`
-- **API Key:** your key for that provider
-- **Model:** the model you use on that provider
-
-Then assign connections to chats as usual. Chats using the plain `http://127.0.0.1:3001` connection are unaffected.
-
----
-
-## Security note
-
-The sidecar forwards the `Authorization` header from Marinara's request to the upstream LLM. Your API key is never stored by the sidecar — it passes through from Marinara's encrypted connection store. Do not expose the sidecar port outside localhost.

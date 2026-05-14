@@ -89,7 +89,7 @@ function buildSetupHtml(port: number): string {
   <div class="header">
     <div class="status">
       <span class="dot"></span>
-      <span class="status-text">Sidecar running on port ${port}</span>
+      <span class="status-text">Memory Extender running on port ${port}</span>
     </div>
     <h1>Marinara Extender</h1>
     <p class="subtitle">Two steps and you&#8217;re done.</p>
@@ -100,7 +100,7 @@ function buildSetupHtml(port: number): string {
     <div class="step">
       <div class="step-num done">&#10003;</div>
       <div class="step-body">
-        <h2>Start the sidecar</h2>
+        <h2>Start the Memory Extender</h2>
         <p>Done &#8212; you&#8217;re already here.</p>
       </div>
     </div>

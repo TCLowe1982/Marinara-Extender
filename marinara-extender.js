@@ -3,13 +3,14 @@
 // ║                  Persistent scoped memory for characters                ║
 // ╠══════════════════════════════════════════════════════════════════════════╣
 // ║  INSTALLATION                                                            ║
-// ║  In Marinara → Settings → Extensions, add a new extension and upload    ║
-// ║  this file. The Marinara Extender sidecar must be running first:        ║
-// ║    cd sidecar && npm install && npm run dev                              ║
+// ║  In Marinara → Settings → Extensions, add a new extension named         ║
+// ║  "Marinara Extender" and upload this file. The Memory Extender server   ║
+// ║  must be running first:                                                  ║
+// ║    cd memory-extender && npm install && npm run dev                      ║
 // ║  Then open http://127.0.0.1:3001/setup for the full setup guide.        ║
 // ╚══════════════════════════════════════════════════════════════════════════╝
 
-const SIDECAR = "http://127.0.0.1:3001";
+const MEMORY_EXTENDER = "http://127.0.0.1:3001";
 const REGEX_INSTALLED_KEY = `${marinara.extensionId}:regex-installed`;
 const REGEX_SCRIPT_NAME = "Marinara Extender: Strip bookmark tags";
 
@@ -262,7 +263,7 @@ function shorten(id, len = 12) {
 
 // ── Sidecar fetch helper ──────────────────────────────────────────────────────
 
-async function sidecarFetch(path, options = {}) {
+async function memFetch(path, options = {}) {
   const r = await fetch(`${SIDECAR}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...options,
@@ -728,7 +729,7 @@ async function importOneChat(chat) {
     if (messages.length === 0) {
       panelState.importResults[chat.id] = { count: 0 };
     } else {
-      const result = await sidecarFetch("/api/digest", {
+      const result = await memFetch("/api/digest", {
         method: "POST",
         body: JSON.stringify({ characterId, characterName: characterName ?? "the character", messages }),
       });
@@ -771,8 +772,8 @@ async function loadPanelData() {
   try {
     const { chatId } = panelState.session;
     const [entries, bookmarks] = await Promise.all([
-      sidecarFetch(`/api/entries?scope=chat&scopeId=${encodeURIComponent(chatId)}`),
-      sidecarFetch(`/api/bookmarks?scope=chat&scopeId=${encodeURIComponent(chatId)}`),
+      memFetch(`/api/entries?scope=chat&scopeId=${encodeURIComponent(chatId)}`),
+      memFetch(`/api/bookmarks?scope=chat&scopeId=${encodeURIComponent(chatId)}`),
     ]);
     panelState.chatEntries = Array.isArray(entries) ? entries : [];
     panelState.bookmarks = Array.isArray(bookmarks) ? bookmarks : [];
@@ -790,7 +791,7 @@ async function loadPanelData() {
 
 async function markEntryDone(entry) {
   if (!panelState.session) return;
-  await sidecarFetch(`/api/entries/${entry.id}`, {
+  await memFetch(`/api/entries/${entry.id}`, {
     method: "PATCH",
     body: JSON.stringify({ scope: "chat", scopeId: panelState.session.chatId, status: "done" }),
   }).catch(() => {});
@@ -800,7 +801,7 @@ async function markEntryDone(entry) {
 async function removeEntry(entry) {
   if (!panelState.session) return;
   const { chatId } = panelState.session;
-  await sidecarFetch(
+  await memFetch(
     `/api/entries/${entry.id}?scope=chat&scopeId=${encodeURIComponent(chatId)}`,
     { method: "DELETE" },
   ).catch(() => {});
@@ -811,7 +812,7 @@ async function addEntry(laneKey, rawSummary) {
   const summary = (rawSummary ?? "").trim();
   if (!summary || !panelState.session) return;
 
-  await sidecarFetch("/api/entries", {
+  await memFetch("/api/entries", {
     method: "POST",
     body: JSON.stringify({
       scope: "chat",
@@ -830,7 +831,7 @@ async function addEntry(laneKey, rawSummary) {
 async function removeBookmark(bm) {
   if (!panelState.session) return;
   const { chatId } = panelState.session;
-  await sidecarFetch(
+  await memFetch(
     `/api/bookmarks/${bm.id}?scope=chat&scopeId=${encodeURIComponent(chatId)}`,
     { method: "DELETE" },
   ).catch(() => {});
@@ -1023,7 +1024,7 @@ async function updateLorebook(lorebookId, entryId, memoryBlock) {
 
 async function syncMemoryBlock(session) {
   try {
-    const res = await sidecarFetch(
+    const res = await memFetch(
       `/api/memory-block?characterId=${encodeURIComponent(session.characterId)}&chatId=${encodeURIComponent(session.chatId)}`,
     );
     if (!res?.memoryBlock) return;
@@ -1056,7 +1057,7 @@ async function checkForNewMessage() {
     const content = String(last.content ?? lastD.content ?? "");
     if (!content) return;
 
-    const result = await sidecarFetch("/api/process-turn", {
+    const result = await memFetch("/api/process-turn", {
       method: "POST",
       body: JSON.stringify({ characterId, chatId, turnNumber: msgs.length, messageText: content }),
     });

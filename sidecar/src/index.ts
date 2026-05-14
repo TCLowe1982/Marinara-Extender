@@ -66,7 +66,7 @@ app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
     app.log.error(err);
     process.exit(1);
   }
-  console.log(`\nMarinara Extender sidecar running on http://127.0.0.1:${PORT}`);
-  console.log(`Setup page:   http://127.0.0.1:${PORT}/setup`);
-  console.log(`Data dir:     ${process.env.MARINARA_EXTENDER_DATA ?? "./data"}`);
+  console.log(`\nMarinara Extender memory server running on http://127.0.0.1:${PORT}`);
+  console.log(`Setup page:  http://127.0.0.1:${PORT}/setup`);
+  console.log(`Data dir:    ${process.env.MARINARA_EXTENDER_DATA ?? "./data"}`);
 });

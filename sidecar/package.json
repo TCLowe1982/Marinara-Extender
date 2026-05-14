@@ -1,7 +1,7 @@
 {
-  "name": "marinara-extender-sidecar",
+  "name": "marinara-extender-memory",
   "version": "0.1.0",
-  "description": "Sidecar proxy that gives Marinara Engine characters persistent scoped memory",
+  "description": "Memory server that gives Marinara Engine characters persistent scoped memory",
   "type": "module",
   "main": "dist/index.js",
   "bin": {

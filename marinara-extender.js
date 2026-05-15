@@ -72,6 +72,10 @@ marinara.addStyle(`
   .me-toggle-btn:hover { }
   .me-toggle-btn.sidecar-down { color: #f87171; }
 
+  /* Hide memory/system tags that the AI renders as DOM elements.
+     CSS is React-proof — el.remove() gets undone on re-render, this doesn't. */
+  bookmark, remember, context, commands { display: none !important; }
+
   /* Panel — drops down from the top-right, below the chat header */
   #me-panel {
     position: fixed; top: 56px; right: 8px;
@@ -1131,18 +1135,15 @@ async function updateLorebook(lorebookId, entryId, memoryBlock) {
   }
 }
 
-// Strip <remember> and <bookmark> tags from the visible chat DOM.
-// Marinara's regex system runs server-side and doesn't update the rendered DOM,
-// so we do it ourselves after each generation turn.
-const VISIBLE_TAG_RE = /<(?:bookmark|remember)\b[^>]*>[\s\S]*?<\/(?:bookmark|remember)>/gi;
+// Strip memory/system tags from the visible chat DOM.
+// CSS handles AI messages (React-managed DOM — el.remove() gets undone on re-render).
+// Text-node replacement handles user messages (static HTML, no React ownership).
+const VISIBLE_TAG_RE = /<(?:bookmark|remember|context|commands)\b[^>]*>[\s\S]*?<\/(?:bookmark|remember|context|commands)>/gi;
 function stripVisibleMemoryTags() {
   const scroll = document.querySelector('.mari-messages-scroll');
   if (!scroll) return;
-  // Case 1: browser parsed them as actual DOM elements (rare but possible)
-  for (const tag of ['bookmark', 'remember']) {
-    for (const el of [...scroll.querySelectorAll(tag)]) el.remove();
-  }
-  // Case 2: raw tag strings inside text nodes
+  // Strip raw tag strings from text nodes (covers user messages and plain-text rendering).
+  // AI messages rendered as DOM elements are hidden by the CSS rule above instead.
   const walker = document.createTreeWalker(scroll, NodeFilter.SHOW_TEXT);
   const toStrip = [];
   let node;

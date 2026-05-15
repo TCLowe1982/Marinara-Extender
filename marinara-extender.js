@@ -1045,14 +1045,15 @@ function resolveEntryId(e) {
   return raw != null && String(raw) !== "undefined" ? String(raw) : null;
 }
 
-async function findOrCreateEntry(lorebookId, comment, order) {
+async function findOrCreateEntry(lorebookId, comment, displayName, order) {
   let entryId = null;
   try {
     const res = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries`);
     const list = Array.isArray(res) ? res : (res?.entries ?? res?.data ?? []);
     const matches = list.filter(e => {
       const ed = e.data ?? e;
-      return (e.name ?? ed.name ?? ed.comment ?? e.comment) === comment;
+      // Match on comment field — name is cosmetic and may have been renamed by the user.
+      return (ed.comment ?? e.comment) === comment;
     });
     // Deduplicate — keep the entry with the most content, delete the rest.
     if (matches.length > 1) {
@@ -1069,7 +1070,7 @@ async function findOrCreateEntry(lorebookId, comment, order) {
     try {
       const res = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries`, {
         method: "POST",
-        body: JSON.stringify({ name: comment, content: "", keys: [], comment, constant: true, enabled: true, order }),
+        body: JSON.stringify({ name: displayName, content: "", keys: [], comment, constant: true, enabled: true, order }),
       });
       entryId = resolveEntryId(res.data ?? res);
     } catch (err) {
@@ -1121,8 +1122,8 @@ async function ensureLorebookEntry(characterId, characterName) {
   // Instructions entry — always enabled, teaches the AI the bookmark/remember syntax.
   // Content entry     — enabled only when actual memory content exists.
   const [instructionsEntryId, contentEntryId] = await Promise.all([
-    findOrCreateEntry(lorebookId, ME_INSTRUCTIONS_COMMENT, 0),
-    findOrCreateEntry(lorebookId, ME_CONTENT_COMMENT, 1),
+    findOrCreateEntry(lorebookId, ME_INSTRUCTIONS_COMMENT, "Memory System — Instructions", 0),
+    findOrCreateEntry(lorebookId, ME_CONTENT_COMMENT,      "Memory System — Active Context", 1),
   ]);
 
   if (!instructionsEntryId || !contentEntryId) {

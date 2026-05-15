@@ -1016,7 +1016,7 @@ const lastMsgId = {};      // chatId → last processed assistant message id
 async function refreshSession() {
   currentSession = await resolveSession();
   if (currentSession) {
-    ensureLorebookEntry(currentSession.characterId).catch(() => {});
+    ensureLorebookEntry(currentSession.characterId, currentSession.characterName).catch(() => {});
     // Sync current memory block into the lorebook on chat load
     syncMemoryBlock(currentSession).catch(() => {});
   }
@@ -1027,23 +1027,25 @@ async function refreshSession() {
 const ME_LOREBOOK_NAME = "Marinara Extender Memory";
 const ME_ENTRY_COMMENT = "marinara-extender-memory-block";
 
-async function ensureLorebookEntry(characterId) {
+async function ensureLorebookEntry(characterId, characterName) {
   // Guard against a previously cached bad value (e.g. entryId: "undefined").
   const cached = lorebookCache[characterId];
   if (cached && cached.lorebookId && cached.lorebookId !== "undefined"
              && cached.entryId   && cached.entryId   !== "undefined") return cached;
   delete lorebookCache[characterId];
 
+  const lorebookName = `Marinara Extender — ${characterName ?? characterId}`;
   let lorebookId = null;
   let entryId = null;
 
-  // Find existing lorebook for this character
+  // Find existing lorebook for this character (prefix match handles old generic name too)
   try {
     const res = await marinara.apiFetch("/lorebooks");
     const list = Array.isArray(res) ? res : (res?.lorebooks ?? res?.data ?? []);
     for (const lb of list) {
       const d = lb.data ?? lb;
-      if ((d.name ?? lb.name) === ME_LOREBOOK_NAME &&
+      const name = d.name ?? lb.name ?? "";
+      if (name.startsWith("Marinara Extender") &&
           String(d.characterId ?? lb.characterId ?? "") === String(characterId)) {
         lorebookId = String(lb.id ?? d.id);
         break;
@@ -1056,7 +1058,7 @@ async function ensureLorebookEntry(characterId) {
     try {
       const res = await marinara.apiFetch("/lorebooks", {
         method: "POST",
-        body: JSON.stringify({ name: ME_LOREBOOK_NAME, characterId, enabled: true }),
+        body: JSON.stringify({ name: lorebookName, characterId, enabled: true }),
       });
       const d = res.data ?? res;
       lorebookId = String(d.id ?? res.id);
@@ -1125,10 +1127,13 @@ async function ensureLorebookEntry(characterId) {
 }
 
 async function updateLorebook(lorebookId, entryId, memoryBlock) {
+  // Disable the entry when there's no actual memory content (just base instructions).
+  // This prevents an empty slot from consuming context budget.
+  const hasContent = memoryBlock.includes("<memory>");
   try {
     await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${entryId}`, {
       method: "PATCH",
-      body: JSON.stringify({ content: memoryBlock, enabled: true }),
+      body: JSON.stringify({ content: memoryBlock, enabled: hasContent }),
     });
   } catch (err) {
     console.error("[ME] lorebook update failed:", err);
@@ -1163,7 +1168,7 @@ async function syncMemoryBlock(session) {
       `/api/memory-block?characterId=${encodeURIComponent(session.characterId)}&chatId=${encodeURIComponent(session.chatId)}`,
     );
     if (!res?.memoryBlock) return;
-    const entry = await ensureLorebookEntry(session.characterId);
+    const entry = await ensureLorebookEntry(session.characterId, session.characterName);
     if (!entry) return;
     await updateLorebook(entry.lorebookId, entry.entryId, res.memoryBlock);
   } catch { /* sidecar down — fine */ }
@@ -1198,7 +1203,7 @@ async function checkForNewMessage() {
     });
     if (!result?.memoryBlock) return;
 
-    const entry = await ensureLorebookEntry(characterId);
+    const entry = await ensureLorebookEntry(characterId, currentSession?.characterName);
     if (!entry) return;
     await updateLorebook(entry.lorebookId, entry.entryId, result.memoryBlock);
 

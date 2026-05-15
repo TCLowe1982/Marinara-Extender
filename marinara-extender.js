@@ -67,16 +67,9 @@ const STATUS_BADGE = {
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 marinara.addStyle(`
-  /* Toggle button — sits in the chat header alongside Marinara's own icons */
-  .me-toggle-btn {
-    background: none; border: none; border-radius: 4px;
-    color: var(--muted-foreground, #9ca3af);
-    font-size: 16px; line-height: 1; cursor: pointer;
-    padding: 4px 6px; flex-shrink: 0;
-    display: flex; align-items: center; justify-content: center;
-    transition: color 0.15s, background 0.15s;
-  }
-  .me-toggle-btn:hover { background: rgba(255,255,255,0.08); color: #e8e5e0; }
+  /* Toggle button — Tailwind classes handle layout/color; only non-Tailwind extras here */
+  .me-toggle-btn { font-size: 16px; line-height: 1; cursor: pointer; }
+  .me-toggle-btn:hover { }
   .me-toggle-btn.sidecar-down { color: #f87171; }
 
   /* Panel — drops down from the top-right, below the chat header */
@@ -295,13 +288,18 @@ function injectToggle() {
   if (!header || header.querySelector('#me-toggle')) return;
   const btn = document.createElement('button');
   btn.id = 'me-toggle';
-  btn.className = 'me-toggle-btn';
+  btn.className = 'me-toggle-btn flex items-center justify-center rounded-lg bg-[var(--card)]/80 p-1.5 text-foreground/80 backdrop-blur-sm transition-colors hover:bg-[var(--card)] hover:text-foreground dark:bg-black/30 dark:hover:bg-black/50';
   btn.title = 'Marinara Extender';
   btn.innerHTML = '&#8801;';
   btn.addEventListener('click', () => {
     panel?.classList.contains('open') ? closePanel() : openPanel();
   });
-  header.appendChild(btn);
+  const folderBtn = header.querySelector('[title="Manage Chat Files"]');
+  if (folderBtn) {
+    folderBtn.parentElement.insertBefore(btn, folderBtn);
+  } else {
+    header.appendChild(btn);
+  }
 }
 
 injectToggle();
@@ -1133,6 +1131,31 @@ async function updateLorebook(lorebookId, entryId, memoryBlock) {
   }
 }
 
+// Strip <remember> and <bookmark> tags from the visible chat DOM.
+// Marinara's regex system runs server-side and doesn't update the rendered DOM,
+// so we do it ourselves after each generation turn.
+const VISIBLE_TAG_RE = /<(?:bookmark|remember)\b[^>]*>[\s\S]*?<\/(?:bookmark|remember)>/gi;
+function stripVisibleMemoryTags() {
+  const scroll = document.querySelector('.mari-messages-scroll');
+  if (!scroll) return;
+  // Case 1: browser parsed them as actual DOM elements (rare but possible)
+  for (const tag of ['bookmark', 'remember']) {
+    for (const el of [...scroll.querySelectorAll(tag)]) el.remove();
+  }
+  // Case 2: raw tag strings inside text nodes
+  const walker = document.createTreeWalker(scroll, NodeFilter.SHOW_TEXT);
+  const toStrip = [];
+  let node;
+  while ((node = walker.nextNode())) {
+    VISIBLE_TAG_RE.lastIndex = 0;
+    if (VISIBLE_TAG_RE.test(node.textContent)) toStrip.push(node);
+  }
+  for (const n of toStrip) {
+    VISIBLE_TAG_RE.lastIndex = 0;
+    n.textContent = n.textContent.replace(VISIBLE_TAG_RE, '').replace(/\n{3,}/g, '\n\n').trimEnd();
+  }
+}
+
 async function syncMemoryBlock(session) {
   try {
     const res = await memFetch(
@@ -1177,6 +1200,7 @@ async function checkForNewMessage() {
     const entry = await ensureLorebookEntry(characterId);
     if (!entry) return;
     await updateLorebook(entry.lorebookId, entry.entryId, result.memoryBlock);
+    marinara.setTimeout(stripVisibleMemoryTags, 150);
 
     // If the character created new ledger entries, refresh the panel.
     if (result.created > 0 && panel?.classList.contains("open")) {

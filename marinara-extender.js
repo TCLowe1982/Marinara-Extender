@@ -1201,7 +1201,6 @@ async function checkForNewMessage() {
     const entry = await ensureLorebookEntry(characterId);
     if (!entry) return;
     await updateLorebook(entry.lorebookId, entry.entryId, result.memoryBlock);
-    marinara.setTimeout(stripVisibleMemoryTags, 150);
 
     // If the character created new ledger entries, refresh the panel.
     if (result.created > 0 && panel?.classList.contains("open")) {
@@ -1214,6 +1213,8 @@ async function checkForNewMessage() {
 
 let msgDebounceTimer = null;
 marinara.observe('.mari-messages-scroll', () => {
+  // Strip tags immediately on any DOM change — don't wait for the lorebook pipeline.
+  stripVisibleMemoryTags();
   clearTimeout(msgDebounceTimer);
   msgDebounceTimer = setTimeout(checkForNewMessage, 1200);
 });

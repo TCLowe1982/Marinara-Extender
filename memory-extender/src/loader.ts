@@ -187,17 +187,29 @@ export interface LoadResult {
   bookmarkCount: number;
 }
 
+const DBG = process.env.ME_DEBUG !== "0"; // set ME_DEBUG=0 in .env to silence
+function dbg(...args: unknown[]): void {
+  if (DBG) console.debug("[ME:loader]", ...args);
+}
+
 export async function loadContext(
   session: LoaderSession,
   budgets: TokenBudgets = DEFAULT_BUDGETS,
 ): Promise<LoadResult> {
+  dbg(`loadContext start — char:${session.characterId} chat:${session.chatId} turn:${session.turnNumber}`);
+
   // Pass 1 — indexes (always cheap; run all three in parallel)
   const indexes = await loadIndexes(session);
+  dbg(`indexes loaded — chat:${indexes.chat?.entries.length ?? 0} entries | char:${indexes.character?.entries.length ?? 0} entries | global:${indexes.global?.entries.length ?? 0} entries`);
 
   // Pass 2 — select and load entries per scope
   const chatSelection = selectEntries(indexes.chat, budgets.chat);
   const charSelection = selectEntries(indexes.character, budgets.character);
   const globalSelection = selectEntries(indexes.global, budgets.global);
+  dbg(`entries selected — chat:${chatSelection.selected.length}/${indexes.chat?.entries.length ?? 0} (${chatSelection.used} tokens) | char:${charSelection.selected.length}/${indexes.character?.entries.length ?? 0} (${charSelection.used} tokens) | global:${globalSelection.selected.length}/${indexes.global?.entries.length ?? 0} (${globalSelection.used} tokens)`);
+  if (chatSelection.selected.length) dbg(`  chat selected: ${chatSelection.selected.map(e => e.id).join(", ")}`);
+  if (charSelection.selected.length) dbg(`  char selected: ${charSelection.selected.map(e => e.id).join(", ")}`);
+  if (globalSelection.selected.length) dbg(`  global selected: ${globalSelection.selected.map(e => e.id).join(", ")}`);
 
   const [chatEntries, charEntries, globalEntries, chatBookmarks] = await Promise.all([
     loadSelectedEntries("chat", session.chatId, chatSelection.selected),
@@ -205,8 +217,10 @@ export async function loadContext(
     loadSelectedEntries("global", "global", globalSelection.selected),
     readBookmarks("chat", session.chatId),
   ]);
+  dbg(`entries loaded — chat:${chatEntries.length} char:${charEntries.length} global:${globalEntries.length} bookmarks:${chatBookmarks.length}`);
 
   const surfaced = surfaceBookmarks(chatBookmarks, session.turnNumber);
+  dbg(`bookmarks surfaced: ${surfaced.length}/${chatBookmarks.length} passed weight roll`);
 
   // Assemble sections bottom-up: global → character → chat → bookmarks
   const sections = [
@@ -215,6 +229,7 @@ export async function loadContext(
     formatEntries("Active threads & topics", chatEntries),
     formatBookmarks(surfaced),
   ].filter(Boolean);
+  dbg(`sections assembled: ${sections.length} non-empty section(s)`);
 
   const memoryBlock = sections.length > 0
     ? `<memory>\n${sections.join("\n\n")}\n</memory>`
@@ -224,6 +239,9 @@ export async function loadContext(
   const contextBlock = memoryBlock
     ? `${MEMORY_SYSTEM_INSTRUCTIONS}\n\n${memoryBlock}`
     : MEMORY_SYSTEM_INSTRUCTIONS;
+
+  dbg(`contextBlock assembled — total length:${contextBlock.length} (memoryBlock:${memoryBlock.length})`);
+  if (!memoryBlock) dbg("  ⚠ no memory content — only instructions will be injected");
 
   const indexTokensUsed =
     (indexes.chat?.entries.length ?? 0) * 50 + // rough cost of scanning an index row

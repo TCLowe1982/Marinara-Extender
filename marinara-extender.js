@@ -11,6 +11,8 @@
 // ╚══════════════════════════════════════════════════════════════════════════╝
 
 const MEMORY_EXTENDER = "http://127.0.0.1:3001";
+const ME_DEBUG = true;   // set false to silence pipeline tracing
+const dbg = (...a) => ME_DEBUG && console.debug("[ME:dbg]", ...a);
 const REGEX_INSTALLED_KEY = `${marinara.extensionId}:regex-installed:v2`;
 const REGEX_SCRIPT_NAME = "Marinara Extender: Strip memory tags";
 
@@ -1050,11 +1052,13 @@ async function findOrCreateEntry(lorebookId, comment, displayName, order) {
   try {
     const res = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries`);
     const list = Array.isArray(res) ? res : (res?.entries ?? res?.data ?? []);
+    dbg(`findOrCreateEntry(${comment}): lorebook has ${list.length} entries`);
     const matches = list.filter(e => {
       const ed = e.data ?? e;
       // Match on comment field — name is cosmetic and may have been renamed by the user.
       return (ed.comment ?? e.comment) === comment;
     });
+    dbg(`findOrCreateEntry(${comment}): ${matches.length} match(es) by comment`);
     // Deduplicate — keep the entry with the most content, delete the rest.
     if (matches.length > 1) {
       matches.sort((a, b) => ((b.data ?? b).content?.length ?? 0) - ((a.data ?? a).content?.length ?? 0));
@@ -1062,20 +1066,25 @@ async function findOrCreateEntry(lorebookId, comment, displayName, order) {
         const did = resolveEntryId(dupe);
         if (did) await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${did}`, { method: "DELETE" }).catch(() => {});
       }
+      dbg(`findOrCreateEntry(${comment}): deduplicated to 1`);
     }
     if (matches.length > 0) entryId = resolveEntryId(matches[0]);
   } catch (err) { console.error(`[ME] entry lookup (${comment}) failed:`, err); }
 
   if (!entryId) {
+    dbg(`findOrCreateEntry(${comment}): not found — creating`);
     try {
       const res = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries`, {
         method: "POST",
         body: JSON.stringify({ name: displayName, content: "", keys: [], comment, constant: true, enabled: true, order }),
       });
       entryId = resolveEntryId(res.data ?? res);
+      dbg(`findOrCreateEntry(${comment}): created entryId=${entryId}`);
     } catch (err) {
       console.error(`[ME] entry create (${comment}) failed:`, err);
     }
+  } else {
+    dbg(`findOrCreateEntry(${comment}): found entryId=${entryId}`);
   }
   return entryId;
 }
@@ -1084,7 +1093,10 @@ async function ensureLorebookEntry(characterId, characterName) {
   const cached = lorebookCache[characterId];
   if (cached && cached.lorebookId          && cached.lorebookId          !== "undefined"
              && cached.instructionsEntryId && cached.instructionsEntryId !== "undefined"
-             && cached.contentEntryId      && cached.contentEntryId      !== "undefined") return cached;
+             && cached.contentEntryId      && cached.contentEntryId      !== "undefined") {
+    dbg(`ensureLorebookEntry: cache hit — lb=${cached.lorebookId} instr=${cached.instructionsEntryId} content=${cached.contentEntryId}`);
+    return cached;
+  }
   delete lorebookCache[characterId];
 
   const lorebookName = `Marinara Extender — ${characterName ?? characterId}`;
@@ -1094,18 +1106,22 @@ async function ensureLorebookEntry(characterId, characterName) {
   try {
     const res = await marinara.apiFetch("/lorebooks");
     const list = Array.isArray(res) ? res : (res?.lorebooks ?? res?.data ?? []);
+    dbg(`ensureLorebookEntry: ${list.length} lorebooks in system`);
     for (const lb of list) {
       const d = lb.data ?? lb;
       const name = d.name ?? lb.name ?? "";
-      if (name.startsWith("Marinara Extender") &&
-          String(d.characterId ?? lb.characterId ?? "") === String(characterId)) {
+      const charId = String(d.characterId ?? lb.characterId ?? "");
+      dbg(`  lorebook "${name}" characterId="${charId}"`);
+      if (name.startsWith("Marinara Extender") && charId === String(characterId)) {
         lorebookId = String(lb.id ?? d.id);
+        dbg(`ensureLorebookEntry: found existing lorebookId=${lorebookId}`);
         break;
       }
     }
   } catch { /* will create below */ }
 
   if (!lorebookId) {
+    dbg(`ensureLorebookEntry: lorebook not found — creating "${lorebookName}"`);
     try {
       const res = await marinara.apiFetch("/lorebooks", {
         method: "POST",
@@ -1113,6 +1129,7 @@ async function ensureLorebookEntry(characterId, characterName) {
       });
       const d = res.data ?? res;
       lorebookId = String(d.id ?? res.id);
+      dbg(`ensureLorebookEntry: created lorebookId=${lorebookId}`);
     } catch (err) {
       console.error("[ME] lorebook create failed:", err);
       return null;
@@ -1138,16 +1155,24 @@ async function ensureLorebookEntry(characterId, characterName) {
 
 async function updateLorebook(lorebookId, instructionsEntryId, contentEntryId, memoryBlock) {
   const { instructions, content } = splitMemoryBlock(memoryBlock);
-  await Promise.all([
+  dbg(`updateLorebook: lb=${lorebookId}`);
+  dbg(`  instructions entry=${instructionsEntryId} length=${instructions.length} enabled=true`);
+  dbg(`  content      entry=${contentEntryId}      length=${content.length}       enabled=${content !== ''}`);
+  if (content) dbg(`  content preview: ${content.slice(0, 120).replace(/\n/g, "↵")}…`);
+
+  const [instrRes, contentRes] = await Promise.all([
     marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${instructionsEntryId}`, {
       method: "PATCH",
       body: JSON.stringify({ content: instructions, enabled: true }),
-    }).catch(err => console.error("[ME] instructions entry update failed:", err)),
+    }).catch(err => { console.error("[ME] instructions entry update failed:", err); return null; }),
     marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${contentEntryId}`, {
       method: "PATCH",
       body: JSON.stringify({ content, enabled: content !== '' }),
-    }).catch(err => console.error("[ME] content entry update failed:", err)),
+    }).catch(err => { console.error("[ME] content entry update failed:", err); return null; }),
   ]);
+
+  dbg(`  instructions PATCH → ${instrRes ? "ok" : "FAILED"}`);
+  dbg(`  content      PATCH → ${contentRes ? "ok" : "FAILED"}`);
 }
 
 // Strip memory/system tags from the visible chat DOM.
@@ -1173,46 +1198,52 @@ function stripVisibleMemoryTags() {
 }
 
 async function syncMemoryBlock(session) {
+  dbg(`syncMemoryBlock: char=${session.characterId} chat=${session.chatId}`);
   try {
     const res = await memFetch(
       `/api/memory-block?characterId=${encodeURIComponent(session.characterId)}&chatId=${encodeURIComponent(session.chatId)}`,
     );
-    if (!res?.memoryBlock) return;
+    dbg(`syncMemoryBlock: sidecar response memoryBlock length=${res?.memoryBlock?.length ?? "null"}`);
+    if (!res?.memoryBlock) { dbg("syncMemoryBlock: empty memoryBlock — skipping lorebook write"); return; }
     const entry = await ensureLorebookEntry(session.characterId, session.characterName);
-    if (!entry) return;
+    dbg(`syncMemoryBlock: entry=${JSON.stringify(entry)}`);
+    if (!entry) { dbg("syncMemoryBlock: ensureLorebookEntry returned null — aborting"); return; }
     await updateLorebook(entry.lorebookId, entry.instructionsEntryId, entry.contentEntryId, res.memoryBlock);
     console.info(`[ME] memory loaded for ${session.characterName ?? session.characterId}`);
-  } catch { /* sidecar down — fine */ }
+  } catch (err) { dbg("syncMemoryBlock: caught error (sidecar down?)", err); }
 }
 
 // ── Post-generation hook ──────────────────────────────────────────────────────
 
 async function checkForNewMessage() {
-  if (!currentSession) return;
+  if (!currentSession) { dbg("checkForNewMessage: no session — skip"); return; }
   const { characterId, chatId } = currentSession;
   try {
     const res = await marinara.apiFetch(`/chats/${chatId}/messages`);
     const msgs = Array.isArray(res) ? res : (res?.messages ?? res?.data ?? []);
+    dbg(`checkForNewMessage: ${msgs.length} messages in chat`);
 
     const last = [...msgs].reverse().find(m => {
       const role = m.role ?? parseData(m).role;
       return role === "assistant" || role === "character";
     });
-    if (!last) return;
+    if (!last) { dbg("checkForNewMessage: no assistant message found"); return; }
 
     const lastD = parseData(last);
     const msgId = String(last.id ?? lastD.id ?? "");
     const content = String(last.content ?? lastD.content ?? "");
-    if (msgId && msgId === lastMsgId[chatId]) { return; }
+    if (msgId && msgId === lastMsgId[chatId]) { dbg(`checkForNewMessage: msgId=${msgId} already processed`); return; }
     lastMsgId[chatId] = msgId;
 
-    if (!content) { return; }
+    if (!content) { dbg("checkForNewMessage: last message has no content"); return; }
+    dbg(`checkForNewMessage: new message msgId=${msgId} contentLength=${content.length} — calling process-turn`);
 
     const result = await memFetch("/api/process-turn", {
       method: "POST",
       body: JSON.stringify({ characterId, chatId, turnNumber: msgs.length, messageText: content }),
     });
-    if (!result?.memoryBlock) return;
+    dbg(`checkForNewMessage: process-turn response memoryBlock length=${result?.memoryBlock?.length ?? "null"} created=${result?.created} bookmarks=${result?.bookmarksExtracted}`);
+    if (!result?.memoryBlock) { dbg("checkForNewMessage: no memoryBlock in response — aborting"); return; }
 
     const entry = await ensureLorebookEntry(characterId, currentSession?.characterName);
     if (!entry) return;

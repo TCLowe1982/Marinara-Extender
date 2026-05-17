@@ -1183,14 +1183,19 @@ async function updateLorebook(lorebookId, instructionsEntryId, contentEntryId, m
 }
 
 // Strip memory/system tags from the visible chat DOM.
-// CSS handles AI messages (React-managed DOM — el.remove() gets undone on re-render).
-// Text-node replacement handles user messages (static HTML, no React ownership).
 const VISIBLE_TAG_RE = /<(?:bookmark|remember|context|commands)\b[^>]*>[\s\S]*?<\/(?:bookmark|remember|context|commands)>/gi;
 function stripVisibleMemoryTags() {
   const scroll = document.querySelector('.mari-messages-scroll');
   if (!scroll) return;
-  // Strip raw tag strings from text nodes (covers user messages and plain-text rendering).
-  // AI messages rendered as DOM elements are hidden by the CSS rule above instead.
+
+  // Pass 1 — tags rendered as actual DOM elements.
+  // CSS (display:none) already hides AI message elements that React will restore on re-render.
+  // el.remove() handles static/user-message elements that React doesn't own.
+  for (const el of scroll.querySelectorAll('bookmark, remember, context, commands')) {
+    el.remove();
+  }
+
+  // Pass 2 — tags rendered as literal text inside text nodes (plain-text or escaped-HTML rendering).
   const walker = document.createTreeWalker(scroll, NodeFilter.SHOW_TEXT);
   const toStrip = [];
   let node;

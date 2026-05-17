@@ -1076,7 +1076,12 @@ async function findOrCreateEntry(lorebookId, comment, displayName, order) {
     try {
       const res = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries`, {
         method: "POST",
-        body: JSON.stringify({ name: displayName, content: "", keys: [], comment, constant: true, enabled: true, order }),
+        body: JSON.stringify({
+          name: displayName, content: "", keys: [], comment, order,
+          constant: true, enabled: true, locked: true,
+          role: "system", noVector: true,
+          sticky: 0, cooldown: 0, delay: 0, ephemeral: 0,
+        }),
       });
       entryId = resolveEntryId(res.data ?? res);
       dbg(`findOrCreateEntry(${comment}): created entryId=${entryId}`);
@@ -1160,14 +1165,16 @@ async function updateLorebook(lorebookId, instructionsEntryId, contentEntryId, m
   dbg(`  content      entry=${contentEntryId}      length=${content.length}       enabled=${content !== ''}`);
   if (content) dbg(`  content preview: ${content.slice(0, 120).replace(/\n/g, "↵")}…`);
 
+  const ENTRY_DEFAULTS = { constant: true, locked: true, role: "system", noVector: true, sticky: 0, cooldown: 0, delay: 0, ephemeral: 0 };
+
   const [instrRes, contentRes] = await Promise.all([
     marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${instructionsEntryId}`, {
       method: "PATCH",
-      body: JSON.stringify({ content: instructions, enabled: true }),
+      body: JSON.stringify({ ...ENTRY_DEFAULTS, content: instructions, enabled: true }),
     }).catch(err => { console.error("[ME] instructions entry update failed:", err); return null; }),
     marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${contentEntryId}`, {
       method: "PATCH",
-      body: JSON.stringify({ content, enabled: content !== '' }),
+      body: JSON.stringify({ ...ENTRY_DEFAULTS, content, enabled: content !== '' }),
     }).catch(err => { console.error("[ME] content entry update failed:", err); return null; }),
   ]);
 

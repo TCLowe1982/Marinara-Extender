@@ -13,7 +13,7 @@
 const MEMORY_EXTENDER = "http://127.0.0.1:3001";
 const ME_DEBUG = true;   // set false to silence pipeline tracing
 const dbg = (...a) => ME_DEBUG && console.debug("[ME:dbg]", ...a);
-const REGEX_INSTALLED_KEY = `${marinara.extensionId}:regex-installed:v2`;
+const REGEX_INSTALLED_KEY = `${marinara.extensionId}:regex-installed:v3`;
 const REGEX_SCRIPT_NAME = "Marinara Extender: Strip memory tags";
 
 const REGEX_MANIFEST = {

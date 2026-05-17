@@ -392,6 +392,15 @@ export function registerApiRoutes(app: FastifyInstance): void {
 
     const { bookmarksExtracted } = await processResponse(chatId, turnNumber, messageText);
     const { contextBlock } = await loadContext({ characterId, chatId, turnNumber });
+
+    const saved = created + bookmarksExtracted;
+    if (saved > 0) {
+      const parts: string[] = [];
+      if (created > 0) parts.push(`${created} ledger entr${created === 1 ? "y" : "ies"}`);
+      if (bookmarksExtracted > 0) parts.push(`${bookmarksExtracted} bookmark${bookmarksExtracted === 1 ? "" : "s"}`);
+      console.info(`[ME] memory saved — char:${characterId} chat:${chatId} — ${parts.join(", ")}`);
+    }
+
     return reply.send({ memoryBlock: contextBlock, created, bookmarksExtracted });
   });
 
@@ -408,6 +417,9 @@ export function registerApiRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: "characterId and chatId are required" });
     }
     const { contextBlock } = await loadContext({ characterId, chatId, turnNumber: 0 });
+    if (contextBlock) {
+      console.info(`[ME] memory loaded — char:${characterId} chat:${chatId}`);
+    }
     return reply.send({ memoryBlock: contextBlock });
   });
 

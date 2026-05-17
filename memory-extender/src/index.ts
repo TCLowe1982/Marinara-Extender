@@ -44,7 +44,7 @@ app.options("*", async (_req, reply) => reply.send());
 
 // ── Health ────────────────────────────────────────────────────────────────────
 
-app.get("/api/health", async (_req, reply) => {
+app.get("/api/health", { logLevel: "silent" }, async (_req, reply) => {
   return reply.send({ ok: true });
 });
 

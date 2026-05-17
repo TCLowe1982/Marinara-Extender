@@ -1181,6 +1181,7 @@ async function syncMemoryBlock(session) {
     const entry = await ensureLorebookEntry(session.characterId, session.characterName);
     if (!entry) return;
     await updateLorebook(entry.lorebookId, entry.instructionsEntryId, entry.contentEntryId, res.memoryBlock);
+    console.info(`[ME] memory loaded for ${session.characterName ?? session.characterId}`);
   } catch { /* sidecar down — fine */ }
 }
 
@@ -1216,6 +1217,15 @@ async function checkForNewMessage() {
     const entry = await ensureLorebookEntry(characterId, currentSession?.characterName);
     if (!entry) return;
     await updateLorebook(entry.lorebookId, entry.instructionsEntryId, entry.contentEntryId, result.memoryBlock);
+
+    const charLabel = currentSession?.characterName ?? characterId;
+    const saved = (result.created ?? 0) + (result.bookmarksExtracted ?? 0);
+    if (saved > 0) {
+      const parts = [];
+      if (result.created > 0) parts.push(`${result.created} ledger entr${result.created === 1 ? "y" : "ies"}`);
+      if (result.bookmarksExtracted > 0) parts.push(`${result.bookmarksExtracted} bookmark${result.bookmarksExtracted === 1 ? "" : "s"}`);
+      console.info(`[ME] memory saved for ${charLabel}: ${parts.join(", ")}`);
+    }
 
     // If the character created new ledger entries, refresh the panel.
     if (result.created > 0 && panel?.classList.contains("open")) {

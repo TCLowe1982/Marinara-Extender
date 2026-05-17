@@ -390,9 +390,9 @@ export function registerApiRoutes(app: FastifyInstance): void {
       created++;
     }
 
-    await processResponse(chatId, turnNumber, messageText);
+    const { bookmarksExtracted } = await processResponse(chatId, turnNumber, messageText);
     const { contextBlock } = await loadContext({ characterId, chatId, turnNumber });
-    return reply.send({ memoryBlock: contextBlock, created });
+    return reply.send({ memoryBlock: contextBlock, created, bookmarksExtracted });
   });
 
   // ── GET /api/memory-block ─────────────────────────────────────────────────

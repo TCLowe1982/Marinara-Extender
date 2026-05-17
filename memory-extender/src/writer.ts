@@ -104,11 +104,16 @@ function decayBookmarks(bookmarks: Bookmark[]): Bookmark[] {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+export interface ProcessResult {
+  clean: string;
+  bookmarksExtracted: number;
+}
+
 export async function processResponse(
   chatId: string,
   turnNumber: number,
   rawText: string,
-): Promise<string> {
+): Promise<ProcessResult> {
   const extracted = extractBookmarks(rawText);
   const clean = stripRememberTags(stripBookmarkTags(rawText));
 
@@ -130,5 +135,5 @@ export async function processResponse(
   }
 
   await writeBookmarks("chat", chatId, bookmarks);
-  return clean;
+  return { clean, bookmarksExtracted: extracted.length };
 }

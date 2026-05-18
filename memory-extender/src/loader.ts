@@ -58,6 +58,12 @@ async function loadIndexes(session: LoaderSession): Promise<LoadedIndexes> {
   return { chat, character, global: global_ };
 }
 
+// ── Eidetic mode ──────────────────────────────────────────────────────────────
+// When MARINARA_EXTENDER_EIDETIC=1, all non-done entries are injected regardless
+// of token budget. Useful for debugging — confirms exactly what the character knows.
+
+export const EIDETIC_MODE = process.env.MARINARA_EXTENDER_EIDETIC === "1";
+
 // ── Pass 2: select entries within budget, then load them ─────────────────────
 
 function selectEntries(
@@ -74,6 +80,12 @@ function selectEntries(
       // within the same lane, most recently accessed first
       return b.lastAccessed.localeCompare(a.lastAccessed);
     });
+
+  // Eidetic mode: skip budget filtering entirely — load everything.
+  if (EIDETIC_MODE) {
+    const used = candidates.reduce((sum, e) => sum + e.tokens, 0);
+    return { selected: candidates, used };
+  }
 
   const selected: IndexEntry[] = [];
   let used = 0;
@@ -132,12 +144,9 @@ How to use it:
 
 How to save something permanently (ledger entry — no decay):
 BEFORE writing a <remember> tag, check the entries already in this block:
-  - If the topic is already captured, do NOT re-save it. Duplicates are pruned
-    by the system, but they waste a turn. One entry per topic is enough.
-  - Only save things that are true at the meta/OOC level — facts about the user,
-    real intentions, established character lore. Do NOT save roleplay scene events
-    or narrated fiction as biographical fact. (What happened in the scene is already
-    in the chat history; the ledger is for things that must survive a context wipe.)
+  - If the topic is already captured under the same lane, do NOT re-save it.
+    Duplicates are pruned automatically, but it still wastes a turn. One entry
+    per topic is enough.
   - Use ONE <remember> tag per distinct fact. Do not bundle multiple topics.
 
 Use <remember> when something is genuinely worth keeping long-term:

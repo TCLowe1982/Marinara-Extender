@@ -3,6 +3,7 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 import { registerApiRoutes } from "./api.js";
 import { registerSetupRoutes } from "./setup.js";
+import { EIDETIC_MODE } from "./loader.js";
 
 // ── .env loader ───────────────────────────────────────────────────────────────
 // Reads sidecar/.env at startup so users can store their API key once instead
@@ -72,4 +73,5 @@ app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
   console.log(`Digest URL:   ${process.env.MARINARA_EXTENDER_DIGEST_UPSTREAM ?? "https://api.openai.com"}/v1/chat/completions`);
   console.log(`Digest model: ${process.env.MARINARA_EXTENDER_DIGEST_MODEL ?? "gpt-4o-mini"}`);
   console.log(`API key:      ${apiKey ? `${apiKey.slice(0, 8)}…` : "NOT SET — imports will fail"}`);
+  console.log(`Eidetic mode: ${EIDETIC_MODE ? "ON — all entries injected (no budget limit)" : "off"}`);
 });

@@ -61,8 +61,11 @@ async function loadIndexes(session: LoaderSession): Promise<LoadedIndexes> {
 // ── Eidetic mode ──────────────────────────────────────────────────────────────
 // When MARINARA_EXTENDER_EIDETIC=1, all non-done entries are injected regardless
 // of token budget. Useful for debugging — confirms exactly what the character knows.
+// Read at call time so the .env loaded by index.ts is respected.
 
-export const EIDETIC_MODE = process.env.MARINARA_EXTENDER_EIDETIC === "1";
+export function isEideticMode(): boolean {
+  return process.env.MARINARA_EXTENDER_EIDETIC === "1";
+}
 
 // ── Pass 2: select entries within budget, then load them ─────────────────────
 
@@ -82,7 +85,7 @@ function selectEntries(
     });
 
   // Eidetic mode: skip budget filtering entirely — load everything.
-  if (EIDETIC_MODE) {
+  if (isEideticMode()) {
     const used = candidates.reduce((sum, e) => sum + e.tokens, 0);
     return { selected: candidates, used };
   }

@@ -2,6 +2,7 @@ import {
   readIndex,
   readEntry,
   readBookmarks,
+  upsertIndexEntry,
   type Scope,
   type ScopeIndex,
   type IndexEntry,
@@ -130,6 +131,15 @@ How to use it:
   Acknowledge in-progress threads when they're relevant; don't inventory them aloud.
 
 How to save something permanently (ledger entry — no decay):
+BEFORE writing a <remember> tag, check the entries already in this block:
+  - If the topic is already captured, do NOT re-save it. Duplicates are pruned
+    by the system, but they waste a turn. One entry per topic is enough.
+  - Only save things that are true at the meta/OOC level — facts about the user,
+    real intentions, established character lore. Do NOT save roleplay scene events
+    or narrated fiction as biographical fact. (What happened in the scene is already
+    in the chat history; the ledger is for things that must survive a context wipe.)
+  - Use ONE <remember> tag per distinct fact. Do not bundle multiple topics.
+
 Use <remember> when something is genuinely worth keeping long-term:
 
   <remember lane="user_topics">User's daughter Emma just turned 8.</remember>
@@ -242,6 +252,21 @@ export async function loadContext(
 
   dbg(`contextBlock assembled — total length:${contextBlock.length} (memoryBlock:${memoryBlock.length})`);
   if (!memoryBlock) dbg("  ⚠ no memory content — only instructions will be injected");
+
+  // Background: stamp lastAccessed on every entry we surfaced this turn.
+  // Fire-and-forget — don't block the response on file I/O.
+  const todayStr = new Date().toISOString().slice(0, 10);
+  void Promise.all([
+    ...chatSelection.selected.map((e) =>
+      upsertIndexEntry("chat", session.chatId, { ...e, lastAccessed: todayStr }),
+    ),
+    ...charSelection.selected.map((e) =>
+      upsertIndexEntry("character", session.characterId, { ...e, lastAccessed: todayStr }),
+    ),
+    ...globalSelection.selected.map((e) =>
+      upsertIndexEntry("global", "global", { ...e, lastAccessed: todayStr }),
+    ),
+  ]).catch(() => {});
 
   const indexTokensUsed =
     (indexes.chat?.entries.length ?? 0) * 50 + // rough cost of scanning an index row

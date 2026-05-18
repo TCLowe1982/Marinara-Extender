@@ -31,6 +31,27 @@ import { loadContext } from "./loader.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// Jaccard similarity on word bags — used to detect duplicate <remember> entries.
+function summarySimilarity(a: string, b: string): number {
+  const words = (s: string) =>
+    new Set(s.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean));
+  const wa = words(a);
+  const wb = words(b);
+  const intersection = [...wa].filter((w) => wb.has(w)).length;
+  const union = new Set([...wa, ...wb]).size;
+  return union === 0 ? 0 : intersection / union;
+}
+
+// Truncate a summary string at a word boundary ≤ maxLen characters.
+function truncateSummary(s: string, maxLen = 120): string {
+  if (s.length <= maxLen) return s;
+  const cut = s.slice(0, maxLen);
+  const lastSpace = cut.lastIndexOf(" ");
+  return lastSpace > 0 ? cut.slice(0, lastSpace) : cut;
+}
+
+const DEDUP_SIMILARITY_THRESHOLD = 0.45;
+
 const VALID_SCOPES: Scope[] = ["global", "character", "chat"];
 const VALID_LANES: Lane[] = ["open_threads", "user_topics", "character_topics"];
 const VALID_STATUSES: EntryStatus[] = ["open", "in_progress", "done", "deferred"];
@@ -368,11 +389,35 @@ export function registerApiRoutes(app: FastifyInstance): void {
     // Extract <remember> tags and create permanent entries before bookmark processing.
     const remembers = extractRememberTags(messageText);
     let created = 0;
+    // Cache index entries per scope+lane so we only read once per target, even
+    // when multiple <remember> tags in one message share the same scope.
+    const indexCache = new Map<string, import("./storage.js").IndexEntry[]>();
     for (const rem of remembers) {
       const scopeId = rem.scope === "character" ? characterId
                     : rem.scope === "global"    ? "global"
                     : chatId;
-      const summary = rem.content.replace(/\n+/g, " ").trim().slice(0, 120);
+      const rawSummary = rem.content.replace(/\n+/g, " ").trim();
+      if (rawSummary.length < 10) continue; // skip blank / near-blank entries
+      const summary = truncateSummary(rawSummary);
+
+      // Dedup: skip if a sufficiently similar entry already exists in this lane.
+      const cacheKey = `${rem.scope}/${scopeId}/${rem.lane}`;
+      if (!indexCache.has(cacheKey)) {
+        const idx = await readIndex(rem.scope, scopeId);
+        indexCache.set(
+          cacheKey,
+          (idx?.entries ?? []).filter((e) => e.lane === rem.lane),
+        );
+      }
+      const existing = indexCache.get(cacheKey)!;
+      const isDupe = existing.some(
+        (e) => summarySimilarity(e.summary, summary) >= DEDUP_SIMILARITY_THRESHOLD,
+      );
+      if (isDupe) {
+        console.info(`[ME] skipped duplicate entry: "${summary.slice(0, 60)}"`);
+        continue;
+      }
+
       const id  = `${idPrefix(rem.lane)}-${nanoid(8)}`;
       const now = today();
       const entry: Entry = {
@@ -387,6 +432,8 @@ export function registerApiRoutes(app: FastifyInstance): void {
         tokens: entry.tokens, lane: rem.lane,
         status: "open", lastAccessed: now,
       });
+      // Add to cache so later tags in the same message don't duplicate each other.
+      existing.push({ id, path: relativePath, summary, tokens: entry.tokens, lane: rem.lane, status: "open", lastAccessed: now });
       created++;
     }
 

@@ -1,0 +1,413 @@
+# Emotional Keyword Dictionaries
+# Edit freely — changes take effect on the next pipeline call.
+# Words are matched with word boundaries (\b) so "anger" won't match "danger".
+# Multi-word phrases are supported: "don't care", "i hate".
+# Keep entries lowercase; the classifier lowercases input before matching.
+
+fear:
+  # Core fear words
+  - afraid
+  - scared
+  - terrified
+  - terrifying
+  - frightened
+  - frightening
+  - dread
+  - dreading
+  - panic
+  - panicking
+  - horror
+  - horrified
+  - nightmare
+  - phobia
+  # Anticipatory fear
+  - what if
+  - what happens if
+  - going to happen
+  - something bad
+  - danger
+  - dangerous
+  - threat
+  - threatening
+  - unsafe
+  - not safe
+  # Protective / fleeing
+  - run away
+  - hide
+  - escape
+  - get away
+  - protect
+  - can't face
+  - can't handle
+  - can't deal
+  # Anxiety flavor
+  - worried
+  - worrying
+  - anxious
+  - anxiety
+  - nervous
+  - on edge
+  - uneasy
+  - tense
+  - hypervigilant
+
+shame:
+  # Direct shame
+  - ashamed
+  - shame
+  - shameful
+  - embarrassed
+  - humiliated
+  - humiliation
+  - disgrace
+  - disgraced
+  # Self-worth attacks
+  - worthless
+  - worthlessness
+  - disgusting
+  - disgusted with myself
+  - broken
+  - damaged
+  - damaged goods
+  - wrong with me
+  - something wrong with me
+  - pathetic
+  - pitiful
+  - useless
+  - a burden
+  - burden
+  - failure
+  - i failed
+  # Internalized blame
+  - my fault
+  - it's my fault
+  - i deserve
+  - i don't deserve
+  - shouldn't exist
+  - shouldn't be here
+  - hate myself
+  - hate who i am
+  - can't forgive myself
+  # Hiding / exposure
+  - don't look at me
+  - look away
+  - can't let anyone see
+  - hide this
+  - no one can know
+
+hope:
+  # Direct hope
+  - hope
+  - hopeful
+  - hopefully
+  - i hope
+  - hoping
+  # Possibility
+  - maybe someday
+  - one day
+  - could be different
+  - things could change
+  - what if it gets better
+  - believe in
+  - possibility
+  - possible
+  # Wish / want better
+  - wish things were
+  - want it to be
+  - dream of
+  - dreaming of
+  - looking forward
+  - can't wait
+  # Recovery / improvement
+  - getting better
+  - it'll be okay
+  - it will be okay
+  - going to be okay
+  - things will improve
+  - new start
+  - fresh start
+  - beginning again
+
+desire:
+  # Physical / emotional wanting
+  - want
+  - want you
+  - need you
+  - crave
+  - craving
+  - longing
+  - yearning
+  - ache
+  - aching for
+  - hunger
+  - hungering
+  # Pull toward
+  - drawn to
+  - can't stop thinking about
+  - obsessed
+  - can't get out of my head
+  # Specific desire language
+  - touch
+  - close to you
+  - be near
+  - near me
+  - hold me
+  - hold you
+  - with you
+  - beside you
+
+relief:
+  # Direct relief
+  - relief
+  - relieved
+  - thank goodness
+  - thank god
+  - finally
+  - at last
+  - over now
+  - it's done
+  # Tension release
+  - exhale
+  - breathe again
+  - can breathe
+  - off my chest
+  - weight lifted
+  - burden lifted
+  - no longer
+  # Safety achieved
+  - safe now
+  - okay now
+  - still here
+  - made it
+  - survived
+
+vulnerability:
+  # Explicit vulnerability
+  - vulnerable
+  - open
+  - exposed
+  - raw
+  - bare
+  - unguarded
+  # Admitting weakness
+  - can't do this alone
+  - i need help
+  - i need someone
+  - asking for help
+  - admitting
+  - i'll admit
+  - hard to say
+  - hard to tell you
+  - hard to admit
+  # Soft underbelly — phrases that show someone dropping their guard
+  - trust you with
+  - telling you this
+  - never told anyone
+  - only you know
+  - it scares me to say
+  # Being seen
+  - see me
+  - really see
+  - know me
+  - understand me
+  - hear me
+
+trust:
+  # Giving trust
+  - trust you
+  - i trust
+  - believe you
+  - count on you
+  - rely on you
+  - safe with you
+  - feel safe
+  # Earned trust
+  - you've never
+  - you always
+  - you came back
+  - you stayed
+  - you didn't leave
+  # Faith
+  - faith in you
+  - i know you will
+  - i know you won't
+  # Distrust (still under this lane — it's about trust dynamics)
+  - can't trust
+  - don't trust
+  - lied before
+  - always leave
+  - everyone leaves
+  - no one stays
+
+anger:
+  # Direct anger
+  - angry
+  - anger
+  - furious
+  - rage
+  - raging
+  - livid
+  - seething
+  # Frustration end
+  - so frustrated
+  - frustrated
+  - sick of this
+  - tired of this
+  - had enough
+  - fed up
+  # Betrayal anger
+  - how could you
+  - how dare you
+  - you promised
+  - you said you would
+  - you lied
+  - betrayed
+  - betrayal
+  - stabbed in the back
+  # Intensity markers
+  - scream
+  - want to scream
+  - want to break
+  - want to hit
+  # Contempt / dismissal
+  - pathetic
+  - disgusting
+  - don't care anymore
+  - forget it
+  - whatever
+
+joy:
+  # Direct joy
+  - happy
+  - happiness
+  - joyful
+  - joy
+  - elated
+  - elation
+  - ecstatic
+  - delighted
+  # Warmth / connection
+  - love
+  - loved
+  - love you
+  - cherish
+  - grateful
+  - gratitude
+  - thankful
+  - lucky to have
+  # Levity
+  - laugh
+  - laughing
+  - smile
+  - smiling
+  - giddy
+  - light
+  - feel light
+  # Peak moments
+  - perfect
+  - this is perfect
+  - couldn't be happier
+  - best feeling
+  - never been this happy
+
+# ── Dysregulation ─────────────────────────────────────────────────────────────
+# Two sub-lists: deflection words (weak signal, low scoring, but boost when
+# combined with attachment words) and direct dysregulation signals (scored normally).
+# The classifier handles the deflection/attachment logic separately via config.
+
+dysregulation:
+
+  # Deflection words — contextual amplifiers.
+  # Weak alone; combined with attachment_words they are strong dysregulation signals.
+  deflection:
+    - fine
+    - i'm fine
+    - it's fine
+    - whatever
+    - doesn't matter
+    - it doesn't matter
+    - don't care
+    - i don't care
+    - forget it
+    - nevermind
+    - never mind
+    - forget i said anything
+    - nothing
+    - nothing's wrong
+    - leave me alone
+    - just go
+    - go away
+    - i'm okay
+    - okay
+    - i'll be fine
+
+  # Attachment / boundary words — needed to trigger the combined boost.
+  attachment:
+    - leave
+    - leaving
+    - stay
+    - staying
+    - please stay
+    - don't go
+    - gone
+    - you'll leave
+    - you always leave
+    - everyone leaves
+    - abandon
+    - abandoned
+    - alone
+    - all alone
+    - by myself
+    - need you to stay
+    - want you to stay
+    - please don't
+    - don't leave me
+    - you'll go
+    - i need you
+    - need you
+
+  # Direct dysregulation signals — scored normally without needing the combined rule.
+  direct:
+    - losing control
+    - out of control
+    - can't control
+    - losing it
+    - falling apart
+    - can't hold it together
+    - spiraling
+    - in a spiral
+    - can't think straight
+    - can't think
+    - can't breathe
+    - shutting down
+    - shut down
+    - going numb
+    - numb
+    - empty
+    - hollow
+    - nothing inside
+    - dissociating
+    - not real
+    - isn't real
+    - not here
+    - not present
+    - floating
+    - watching myself
+    - outside myself
+    - this isn't happening
+    - unraveling
+    - breaking
+    - breaking down
+    - can't stop crying
+    - can't stop
+    - everything is too much
+    - too much
+    - overwhelmed
+    - completely overwhelmed
+    - don't know who i am
+    - don't recognize myself
+    - not myself
+    - making it worse
+    - self-destructive
+    - hurting myself
+    - hurt myself

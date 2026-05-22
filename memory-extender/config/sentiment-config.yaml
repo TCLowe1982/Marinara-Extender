@@ -1,0 +1,88 @@
+# Sentiment Analysis Pipeline — Tunable Configuration
+# Edit this file to adjust thresholds and weights without restarting the server.
+# All changes take effect on the next pipeline call.
+
+# ── Salience threshold ────────────────────────────────────────────────────────
+# Chunks with a salience score below this are skipped entirely.
+# Stage 1 routing: all chunks are scored regardless.
+# Stage 2 deep analysis (Gemma call): only chunks that pass this threshold.
+salience_threshold: 0.4
+
+# ── Per-emotion weights ───────────────────────────────────────────────────────
+# Scales the raw keyword match score for each emotion category.
+# Higher = more sensitive. Dysregulation and vulnerability are intentionally
+# weighted high because they appear in subtler language.
+emotion_weights:
+  fear:          0.80
+  shame:         0.85
+  hope:          0.60
+  desire:        0.65
+  relief:        0.55
+  vulnerability: 0.90
+  trust:         0.60
+  anger:         0.75
+  joy:           0.50
+  dysregulation: 0.90
+
+# ── Keyword match scoring ─────────────────────────────────────────────────────
+# Each keyword match contributes this much to the category score (capped at 1.0).
+# Matches compound: 2 matches = 2 × match_score_per_hit, etc.
+match_score_per_hit: 0.55
+
+# ── Compound amplification ────────────────────────────────────────────────────
+# When a chunk has multiple keyword matches across ALL emotion categories,
+# all scores get boosted. Mirrors the AutoTroll compound toxicity pattern.
+compound_boost:
+  two_matches:      1.30
+  three_plus:       1.50
+
+# ── Short-message boost ───────────────────────────────────────────────────────
+# Very short emotionally-charged messages tend to be more intense.
+short_message:
+  word_count_threshold: 10
+  multiplier:           1.20
+
+# ── Dysregulation contextual rule ────────────────────────────────────────────
+# Deflection words alone are weak signals (fear of committing to a score).
+# When a chunk also contains attachment/boundary words, the combination is
+# a strong dysregulation indicator — boost the dysregulation score.
+dysregulation_contextual:
+  combined_boost: 1.50
+
+# ── Structural patterns ───────────────────────────────────────────────────────
+# Syntactic/format-based signals that keyword lists cannot catch.
+# pattern: a regex string (applied case-insensitively to the chunk text)
+# score: contribution to the emotion score when matched (0.0–1.0)
+structural_patterns:
+  dissociation_grounding:
+    pattern: '"[a-z]{1,8}\."'
+    emotion: dysregulation
+    subpattern: dissociation
+    score: 0.75
+    description: >
+      Single quoted lowercase word with period — minimal grounding response
+      under dissociation (e.g. "ok.", "stay.", "here.", "safe.").
+
+  ellipsis_shutdown:
+    pattern: '\.{3,}'
+    emotion: dysregulation
+    subpattern: shutdown
+    score: 0.45
+    description: >
+      Three or more ellipsis dots — trailing off, inability to complete
+      thought, emotional shutdown or dissociation.
+
+  all_caps_burst:
+    pattern: '\b[A-Z]{4,}\b'
+    emotion: anger
+    score: 0.50
+    description: >
+      All-caps word of 4+ letters — emotional flooding, shouting.
+
+  self_erasure:
+    pattern: '\bi (don''t|shouldn''t|can''t|won''t) (exist|matter|deserve|be here)\b'
+    emotion: shame
+    subpattern: shutdown
+    score: 0.80
+    description: >
+      Self-erasure phrasing — deep shame or dissociative self-negation.

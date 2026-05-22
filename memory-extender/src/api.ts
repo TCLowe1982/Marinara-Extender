@@ -451,6 +451,129 @@ export function registerApiRoutes(app: FastifyInstance): void {
     return reply.send({ memoryBlock: contextBlock, created, bookmarksExtracted });
   });
 
+  // ── POST /api/ingest-commands ─────────────────────────────────────────────
+  // Called by Marinara Engine after parsing [remember: ...] or [bookmark: ...]
+  // native commands from an AI response. Creates ledger entries and bookmarks
+  // without running bookmark decay (decay runs in /api/process-turn each turn).
+  // Body: { characterId, chatId, turnNumber?, commands[] }
+
+  app.post<{
+    Body: {
+      characterId: string;
+      chatId: string;
+      turnNumber?: number;
+      commands: Array<
+        | { type: "remember"; lane: Lane; content: string; scope?: Scope }
+        | { type: "bookmark"; topic: string; weight: number; why: string; summary: string }
+      >;
+    };
+  }>("/api/ingest-commands", async (req, reply) => {
+    const { characterId, chatId, turnNumber = 0, commands } = req.body ?? {};
+    if (!characterId || !chatId) {
+      return reply.code(400).send({ error: "characterId and chatId are required" });
+    }
+    if (!Array.isArray(commands) || commands.length === 0) {
+      return reply.send({ created: 0, bookmarksAdded: 0 });
+    }
+
+    let created = 0;
+    let bookmarksAdded = 0;
+
+    // Process [remember: ...] commands (dedup + create ledger entries)
+    const indexCache = new Map<string, import("./storage.js").IndexEntry[]>();
+    for (const cmd of commands) {
+      if (cmd.type !== "remember") continue;
+      const scope = (cmd.scope ?? "chat") as Scope;
+      const scopeId =
+        scope === "character" ? characterId : scope === "global" ? "global" : chatId;
+      const rawSummary = cmd.content.replace(/\n+/g, " ").trim();
+      if (rawSummary.length < 10) continue;
+      const summary = truncateSummary(rawSummary);
+
+      const cacheKey = `${scope}/${scopeId}/${cmd.lane}`;
+      if (!indexCache.has(cacheKey)) {
+        const idx = await readIndex(scope, scopeId);
+        indexCache.set(
+          cacheKey,
+          (idx?.entries ?? []).filter((e) => e.lane === cmd.lane),
+        );
+      }
+      const existing = indexCache.get(cacheKey)!;
+      const isDupe = existing.some(
+        (e) => summarySimilarity(e.summary, summary) >= DEDUP_SIMILARITY_THRESHOLD,
+      );
+      if (isDupe) {
+        console.info(`[ME] skipped duplicate entry: "${summary.slice(0, 60)}"`);
+        continue;
+      }
+
+      const id = `${idPrefix(cmd.lane)}-${nanoid(8)}`;
+      const now = today();
+      const lane = cmd.lane as Lane;
+      const entry: Entry = {
+        id,
+        lane,
+        summary,
+        status: "open",
+        created: now,
+        lastAccessed: now,
+        content: cmd.content,
+        tokens: estimateTokens(`${summary} ${cmd.content}`),
+      };
+      const relativePath = await writeEntry(scope, scopeId, entry);
+      await upsertIndexEntry(scope, scopeId, {
+        id,
+        path: relativePath,
+        summary,
+        tokens: entry.tokens,
+        lane,
+        status: "open",
+        lastAccessed: now,
+      });
+      existing.push({
+        id,
+        path: relativePath,
+        summary,
+        tokens: entry.tokens,
+        lane,
+        status: "open",
+        lastAccessed: now,
+      });
+      created++;
+    }
+
+    // Process [bookmark: ...] commands (add without decay — decay runs in /process-turn)
+    const newBookmarks: import("./storage.js").Bookmark[] = [];
+    for (const cmd of commands) {
+      if (cmd.type !== "bookmark") continue;
+      newBookmarks.push({
+        id: nanoid(8),
+        topic: cmd.topic,
+        summary: cmd.summary,
+        weight: Math.max(0, Math.min(1, cmd.weight)),
+        why: cmd.why,
+        createdTurn: turnNumber,
+        lastSeenTurn: turnNumber,
+        decayRate: 0.97,
+      });
+      bookmarksAdded++;
+    }
+
+    if (newBookmarks.length > 0) {
+      const existing = await readBookmarks("chat", chatId);
+      await writeBookmarks("chat", chatId, [...existing, ...newBookmarks]);
+    }
+
+    if (created > 0 || bookmarksAdded > 0) {
+      const parts: string[] = [];
+      if (created > 0) parts.push(`${created} ledger entr${created === 1 ? "y" : "ies"}`);
+      if (bookmarksAdded > 0) parts.push(`${bookmarksAdded} bookmark${bookmarksAdded === 1 ? "" : "s"}`);
+      console.info(`[ME] memory saved — char:${characterId} chat:${chatId} — ${parts.join(", ")}`);
+    }
+
+    return reply.send({ created, bookmarksAdded });
+  });
+
   // ── GET /api/memory-block ─────────────────────────────────────────────────
   // Returns the current memory block without modifying any state.
   // Used by the extension on initial session load to populate the lorebook entry.

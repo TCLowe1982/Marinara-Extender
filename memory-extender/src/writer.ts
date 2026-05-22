@@ -29,9 +29,11 @@ function extractAttr(attrStr: string, name: string): string | undefined {
 
 export function extractBookmarks(text: string): ExtractedBookmark[] {
   const found: ExtractedBookmark[] = [];
-  const re = /<bookmark\b([^>]*)>([\s\S]*?)<\/bookmark>/gi;
+
+  // XML format: <bookmark topic="..." weight="0.8" why="...">summary</bookmark>
+  const xmlRe = /<bookmark\b([^>]*)>([\s\S]*?)<\/bookmark>/gi;
   let match: RegExpExecArray | null;
-  while ((match = re.exec(text)) !== null) {
+  while ((match = xmlRe.exec(text)) !== null) {
     const attrStr = match[1]!;
     const topic = extractAttr(attrStr, "topic");
     if (!topic) continue;
@@ -43,19 +45,38 @@ export function extractBookmarks(text: string): ExtractedBookmark[] {
       summary: match[2]!.trim(),
     });
   }
+
+  // Bracket format: [bookmark: topic="...", weight=0.8, why="...", summary="..."]
+  const bracketRe = /\[bookmark:\s*([^\]]*)\]/gi;
+  while ((match = bracketRe.exec(text)) !== null) {
+    const params = match[1]!;
+    const topic = parseBracketParam(params, "topic");
+    if (!topic) continue;
+    const weightRaw = parseBracketParam(params, "weight");
+    const summary = parseBracketParam(params, "summary") ?? "";
+    found.push({
+      topic,
+      weight: Math.min(1, Math.max(0, parseFloat(weightRaw ?? "0.5"))),
+      why: parseBracketParam(params, "why") ?? "unspecified",
+      summary: summary.trim(),
+    });
+  }
+
   return found;
 }
 
 export function stripBookmarkTags(text: string): string {
   return text
     .replace(/<bookmark\b[^>]*>[\s\S]*?<\/bookmark>/gi, "")
+    .replace(/\[bookmark:\s*[^\]]*\]/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
-// ── Remember tag parsing ──────────────────────────────────────────────────────
-// <remember lane="user_topics" scope="chat">Persistent note.</remember>
-// Creates a permanent ledger entry — no decay, shows up in the panel.
+// ── Remember tag / command parsing ───────────────────────────────────────────
+// Supports both:
+//   XML format (legacy):    <remember lane="user_topics" scope="chat">content</remember>
+//   Bracket format (Phase 0): [remember: lane="user_topics", content="...", scope="chat"]
 
 const VALID_LANES_SET = new Set<string>(["open_threads", "user_topics", "character_topics"]);
 const VALID_SCOPES_SET = new Set<string>(["chat", "character", "global"]);
@@ -66,11 +87,18 @@ export interface ExtractedRemember {
   content: string;
 }
 
+function parseBracketParam(params: string, key: string): string | undefined {
+  const re = new RegExp(`${key}\\s*=\\s*"([^"]*)"`, "i");
+  return params.match(re)?.[1];
+}
+
 export function extractRememberTags(text: string): ExtractedRemember[] {
   const found: ExtractedRemember[] = [];
-  const re = /<remember\b([^>]*)>([\s\S]*?)<\/remember>/gi;
+
+  // XML format: <remember lane="..." scope="...">content</remember>
+  const xmlRe = /<remember\b([^>]*)>([\s\S]*?)<\/remember>/gi;
   let match: RegExpExecArray | null;
-  while ((match = re.exec(text)) !== null) {
+  while ((match = xmlRe.exec(text)) !== null) {
     const attrStr = match[1]!;
     const content = match[2]!.trim();
     if (!content) continue;
@@ -82,21 +110,38 @@ export function extractRememberTags(text: string): ExtractedRemember[] {
       content,
     });
   }
+
+  // Bracket format: [remember: lane="...", content="...", scope="..."]
+  const bracketRe = /\[remember:\s*([^\]]*)\]/gi;
+  while ((match = bracketRe.exec(text)) !== null) {
+    const params = match[1]!;
+    const content = parseBracketParam(params, "content");
+    if (!content || content.trim().length === 0) continue;
+    const laneRaw  = parseBracketParam(params, "lane")  ?? "user_topics";
+    const scopeRaw = parseBracketParam(params, "scope") ?? "chat";
+    found.push({
+      lane:  (VALID_LANES_SET.has(laneRaw)  ? laneRaw  : "user_topics")  as Lane,
+      scope: (VALID_SCOPES_SET.has(scopeRaw) ? scopeRaw : "chat")         as Scope,
+      content: content.trim(),
+    });
+  }
+
   return found;
 }
 
 export function stripRememberTags(text: string): string {
   return text
     .replace(/<remember\b[^>]*>[\s\S]*?<\/remember>/gi, "")
+    .replace(/\[remember:\s*[^\]]*\]/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
 // ── Decay ─────────────────────────────────────────────────────────────────────
 
-const PRUNE_THRESHOLD = 0.1;
+export const PRUNE_THRESHOLD = 0.1;
 
-function decayBookmarks(bookmarks: Bookmark[]): Bookmark[] {
+export function decayBookmarks(bookmarks: Bookmark[]): Bookmark[] {
   return bookmarks
     .map((b) => ({ ...b, weight: b.weight * b.decayRate }))
     .filter((b) => b.weight >= PRUNE_THRESHOLD);

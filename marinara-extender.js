@@ -13,13 +13,14 @@
 const MEMORY_EXTENDER = "http://127.0.0.1:3001";
 const ME_DEBUG = true;   // set false to silence pipeline tracing
 const dbg = (...a) => ME_DEBUG && console.debug("[ME:dbg]", ...a);
-const REGEX_INSTALLED_KEY = `${marinara.extensionId}:regex-installed:v4`;
+const REGEX_INSTALLED_KEY = `${marinara.extensionId}:regex-installed:v5`;
 const REGEX_SCRIPT_NAME = "Marinara Extender: Strip memory tags";
 
+// v5: strips both legacy XML tags AND new bracket commands in one pass
 const REGEX_MANIFEST = {
   name: REGEX_SCRIPT_NAME,
   enabled: true,
-  findRegex: "<bookmark[^>]*>[\\s\\S]*?<\\/bookmark>|<remember[^>]*>[\\s\\S]*?<\\/remember>",
+  findRegex: "<bookmark[^>]*>[\\s\\S]*?<\\/bookmark>|<remember[^>]*>[\\s\\S]*?<\\/remember>|\\[remember:\\s*[^\\]]*\\]|\\[bookmark:\\s*[^\\]]*\\]",
   replaceString: "",
   placement: ["ai_output"],
   flags: "gi",
@@ -877,25 +878,14 @@ function closePanel() {
 
 
 // ── Regex script auto-install ─────────────────────────────────────────────────
-
-function showSetupBanner() {
-  const banner = marinara.addElement(document.body, "div", { id: "me-setup-banner" });
-  if (!banner) return;
-  banner.innerHTML = `
-    <button title="Dismiss">✕</button>
-    <strong>Marinara Extender setup needed</strong><br>
-    Add a regex script in <em>Settings → Regex Scripts</em>:<br><br>
-    Name: <code>${REGEX_SCRIPT_NAME}</code><br>
-    Find: <code>&lt;bookmark[^&gt;]*&gt;[\\s\\S]*?&lt;\\/bookmark&gt;</code><br>
-    Replace: <em>(empty)</em> · Placement: <code>AI Output</code> · Flags: <code>gi</code>
-  `;
-  banner.querySelector("button")?.addEventListener("click", () => banner.remove());
-}
+// Keeps the Marinara regex script in sync with REGEX_MANIFEST. Strips both
+// legacy <remember>/<bookmark> XML tags and new [remember: ...]/[bookmark: ...]
+// bracket commands from AI output. Bumping REGEX_INSTALLED_KEY forces a refresh.
 
 const OLD_REGEX_SCRIPT_NAMES = ["Marinara Extender: Strip bookmark tags"];
 
 async function ensureRegexScript() {
-  if (localStorage.getItem(REGEX_INSTALLED_KEY)) { return; }
+  if (localStorage.getItem(REGEX_INSTALLED_KEY)) return;
   try {
     const scripts = await marinara.apiFetch("/regex-scripts");
     const list = Array.isArray(scripts) ? scripts : [];
@@ -932,7 +922,6 @@ async function ensureRegexScript() {
     localStorage.setItem(REGEX_INSTALLED_KEY, "1");
   } catch (err) {
     console.error("[ME] ensureRegexScript failed:", err);
-    showSetupBanner();
   }
 }
 
@@ -1182,30 +1171,41 @@ async function updateLorebook(lorebookId, instructionsEntryId, contentEntryId, m
   dbg(`  content      PATCH → ${contentRes ? "ok" : "FAILED"}`);
 }
 
-// Strip memory/system tags from the visible chat DOM.
+// Strip memory commands from the visible chat DOM.
+// Native [remember: ...] / [bookmark: ...] commands are stripped by Marinara Engine
+// before messages are saved, so they're only visible during streaming. This handler
+// catches them in text nodes during that window, plus legacy <remember>/<bookmark>
+// XML tags from older character cards.
 const VISIBLE_TAG_RE = /<(?:bookmark|remember|context|commands)\b[^>]*>[\s\S]*?<\/(?:bookmark|remember|context|commands)>/gi;
+const BRACKET_CMD_RE = /\[(?:remember|bookmark):[^\]]*\]/gi;
 function stripVisibleMemoryTags() {
   const scroll = document.querySelector('.mari-messages-scroll');
   if (!scroll) return;
 
-  // Pass 1 — tags rendered as actual DOM elements.
-  // CSS (display:none) already hides AI message elements that React will restore on re-render.
-  // el.remove() handles static/user-message elements that React doesn't own.
+  // Pass 1 — legacy XML tags rendered as actual DOM elements.
   for (const el of scroll.querySelectorAll('bookmark, remember, context, commands')) {
     el.remove();
   }
 
-  // Pass 2 — tags rendered as literal text inside text nodes (plain-text or escaped-HTML rendering).
+  // Pass 2 — XML or bracket commands rendered as literal text inside text nodes.
   const walker = document.createTreeWalker(scroll, NodeFilter.SHOW_TEXT);
   const toStrip = [];
   let node;
   while ((node = walker.nextNode())) {
     VISIBLE_TAG_RE.lastIndex = 0;
-    if (VISIBLE_TAG_RE.test(node.textContent)) toStrip.push(node);
+    BRACKET_CMD_RE.lastIndex = 0;
+    if (VISIBLE_TAG_RE.test(node.textContent) || BRACKET_CMD_RE.test(node.textContent)) {
+      toStrip.push(node);
+    }
   }
   for (const n of toStrip) {
     VISIBLE_TAG_RE.lastIndex = 0;
-    n.textContent = n.textContent.replace(VISIBLE_TAG_RE, '').replace(/\n{3,}/g, '\n\n').trimEnd();
+    BRACKET_CMD_RE.lastIndex = 0;
+    n.textContent = n.textContent
+      .replace(VISIBLE_TAG_RE, '')
+      .replace(BRACKET_CMD_RE, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trimEnd();
   }
 }
 

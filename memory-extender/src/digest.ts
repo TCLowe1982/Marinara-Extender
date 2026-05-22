@@ -1,6 +1,6 @@
 // Digest a batch of chat messages into persistent memory entries.
-// Calls the upstream LLM once with an extraction prompt, parses the JSON
-// response, and writes the resulting entries to the character scope.
+// Tries the Marinara Engine's local Gemma sidecar first; falls back to an
+// external OpenAI-compatible API if the sidecar is unavailable.
 
 import { getCachedAuth } from "./auth-cache.js";
 import {
@@ -38,63 +38,76 @@ export interface DigestResult {
 
 // ── Extraction prompt ─────────────────────────────────────────────────────────
 
-function buildPrompt(messages: DigestMessage[], characterName: string): string {
+function buildSystemPrompt(characterName: string): string {
+  return `You are a memory archivist extracting insights from a chat log involving "${characterName}". Return raw JSON only — no explanation, no markdown fences.
+
+Format: {"entries":[{"lane":"...","summary":"...","content":"...","status":"..."}]}
+
+Lanes:
+- open_threads: Ongoing tasks, unresolved issues, promises, or follow-ups.
+- user_topics: Subjects the user mentioned repeatedly or cares about.
+- character_topics: Things ${characterName} would want to remember — emotional moments, lore, things to bring up.
+
+Each entry: lane, summary (≤80 chars), content (1-3 sentences), status (open_threads only: open|in_progress|done|deferred).
+Rules: Be selective. 3-8 entries typical. Fewer is better. Skip greetings and ephemeral small talk.`;
+}
+
+function buildUserPrompt(messages: DigestMessage[], characterName: string): string {
   const history = messages
     .slice(-MAX_MESSAGES)
     .map((m) => `${m.role === "user" ? "User" : characterName}: ${m.content}`)
     .join("\n\n");
-
-  return `You are a memory archivist. Analyze the following chat history between a user and an AI character named "${characterName}". Extract a small set of entries worth remembering in future conversations.
-
-Extract entries for three categories:
-- open_threads: Ongoing tasks, unresolved issues, promises, or things needing follow-up.
-- user_topics: Subjects the user mentioned repeatedly, cares about, or keeps returning to.
-- character_topics: Things ${characterName} would want to remember — emotional moments, things to bring up, character development, established lore.
-
-For each entry provide:
-  lane: "open_threads" | "user_topics" | "character_topics"
-  summary: one clear line, max 80 characters
-  content: 1-3 sentences of context and detail
-  status: (open_threads only) "open" | "in_progress" | "done" | "deferred"
-
-Rules:
-- Be selective. Only extract things that genuinely matter across future conversations.
-- A typical digest produces 3-8 entries. Fewer is better than padding.
-- Skip one-off exchanges, greetings, and ephemeral small talk.
-- Respond with raw JSON only — no explanation, no markdown fences.
-
-Format: {"entries":[{"lane":"...","summary":"...","content":"...","status":"..."}]}
-
-Chat history:
-${history}`;
+  return `Analyze this chat history and extract memory entries worth keeping:\n\n${history}`;
 }
 
-// ── LLM call ──────────────────────────────────────────────────────────────────
+// ── Sidecar call (Marinara Engine local model) ────────────────────────────────
 
-async function callLlm(prompt: string, model: string): Promise<string> {
+async function callSidecarLlm(systemPrompt: string, userPrompt: string): Promise<string | null> {
+  const engineUrl = (process.env.MARINARA_ENGINE_URL ?? "http://localhost:7860").replace(/\/$/, "");
+
+  try {
+    const res = await fetch(`${engineUrl}/api/sidecar/tracker`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ systemPrompt, userPrompt }),
+      signal: AbortSignal.timeout(120_000),
+    });
+
+    if (res.status === 503) return null; // sidecar model not running
+    if (!res.ok) return null;
+
+    const json = (await res.json()) as { result?: string };
+    return json.result ?? null;
+  } catch {
+    return null; // engine not reachable
+  }
+}
+
+// ── External API call (fallback) ──────────────────────────────────────────────
+
+async function callExternalLlm(systemPrompt: string, userPrompt: string, model: string): Promise<string> {
   const auth = getCachedAuth();
   if (!auth) {
     throw new Error(
-      "No API key available. Set MARINARA_EXTENDER_API_KEY in memory-extender/.env to use imports.",
+      "Local sidecar unavailable and no API key set. Either enable a local model in Marinara Engine → Settings → Local Model, or set MARINARA_EXTENDER_API_KEY in memory-extender/.env.",
     );
   }
 
-  // Read at call time so .env values (loaded after module init) are always used.
   const upstream = (process.env.MARINARA_EXTENDER_DIGEST_UPSTREAM ?? "https://api.openai.com")
     .replace(/\/$/, "");
 
-  const headers = {
-    "Content-Type": "application/json",
-    "Authorization": auth,
-  };
-  console.log("[digest] request URL:", `${upstream}/v1/chat/completions`);
-  console.log("[digest] request headers:", JSON.stringify(headers));
   const res = await fetch(`${upstream}/v1/chat/completions`, {
     method: "POST",
-    headers,
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": auth,
+    },
     body: JSON.stringify({
       model,
-      messages: [{ role: "user", content: prompt }],
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
       temperature: 0.3,
       max_tokens: 2000,
     }),
@@ -109,6 +122,19 @@ async function callLlm(prompt: string, model: string): Promise<string> {
   };
 
   return json?.choices?.[0]?.message?.content ?? "";
+}
+
+// ── LLM call (sidecar → external fallback) ───────────────────────────────────
+
+async function callLlm(systemPrompt: string, userPrompt: string, model: string): Promise<string> {
+  const sidecarResult = await callSidecarLlm(systemPrompt, userPrompt);
+  if (sidecarResult !== null) {
+    console.log("[digest] using local Marinara sidecar");
+    return sidecarResult;
+  }
+
+  console.log("[digest] sidecar unavailable, falling back to external API");
+  return callExternalLlm(systemPrompt, userPrompt, model);
 }
 
 // ── Entry creation ────────────────────────────────────────────────────────────
@@ -168,7 +194,11 @@ export async function digestMessages(
   model?: string,
 ): Promise<DigestResult> {
   const usedModel = model ?? process.env.MARINARA_EXTENDER_DIGEST_MODEL ?? "gpt-4o-mini";
-  const raw = await callLlm(buildPrompt(messages, characterName), usedModel);
+  const raw = await callLlm(
+    buildSystemPrompt(characterName),
+    buildUserPrompt(messages, characterName),
+    usedModel,
+  );
 
   let extracted: ExtractedEntry[];
   try {

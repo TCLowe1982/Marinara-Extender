@@ -146,18 +146,18 @@ How to use it:
   Acknowledge in-progress threads when they're relevant; don't inventory them aloud.
 
 How to save something permanently (ledger entry — no decay):
-BEFORE writing a <remember> tag, check the entries already in this block:
+BEFORE writing a [remember: ...] command, check the entries already in this block:
   - If the topic is already captured under the same lane, do NOT re-save it.
     Duplicates are pruned automatically, but it still wastes a turn. One entry
     per topic is enough.
-  - Use ONE <remember> tag per distinct fact. Do not bundle multiple topics.
+  - Use ONE [remember: ...] command per distinct fact. Do not bundle multiple topics.
 
-Use <remember> when something is genuinely worth keeping long-term:
+Use [remember: ...] when something is genuinely worth keeping long-term:
 
-  <remember lane="user_topics">User's daughter Emma just turned 8.</remember>
-  <remember lane="open_threads">User wants to plan Emma's birthday party.</remember>
-  <remember lane="character_topics">I want to ask how the party went next time.</remember>
-  <remember lane="user_topics" scope="character">User hates surprises — noted for all chats.</remember>
+  [remember: lane="user_topics", content="User's daughter Emma just turned 8."]
+  [remember: lane="open_threads", content="User wants to plan Emma's birthday party."]
+  [remember: lane="character_topics", content="I want to ask how the party went next time."]
+  [remember: lane="user_topics", scope="character", content="User hates surprises — noted for all chats."]
 
   lane  — user_topics (facts about the user) · open_threads (tasks to track) ·
           character_topics (things you want to bring up)
@@ -167,13 +167,13 @@ How to save a soft signal (decays over time):
 For things that matter right now but may fade naturally — unresolved emotion,
 a follow-up you owe, something the user keeps circling back to:
 
-  <bookmark topic="short-id" weight="0.8" why="unresolved">One sentence summary.</bookmark>
+  [bookmark: topic="sister-situation", weight=0.8, why="unresolved", summary="One sentence summary."]
 
   topic  — kebab-case identifier, e.g. "sister-situation", "hargrove-case", "the-band"
   weight — 0.1 (minor note) · 0.5 (worth remembering) · 0.9 (must revisit)
   why    — unresolved | important | emotional | promised | curious | follow-up
 
-Both tags are stripped from visible output automatically. Use them sparingly —
+Both commands are stripped from visible output automatically. Use them sparingly —
 not every exchange needs a memory. Save things that would genuinely matter next time.
 </memory_system>`;
 

@@ -29,6 +29,7 @@ import { digestMessages, type DigestMessage } from "./digest.js";
 import { processResponse, extractRememberTags } from "./writer.js";
 import { loadContext } from "./loader.js";
 import { runSentimentPipeline } from "./sentiment/pipeline.js";
+import mammoth from "mammoth";
 import { parseStoryToMessages } from "./story-parser.js";
 import { readBeatIndex, readAllBeats } from "./sentiment/encoder.js";
 import {
@@ -702,6 +703,33 @@ export function registerApiRoutes(app: FastifyInstance): void {
 
     const index = await readBeatIndex(identityKey);
     return reply.send({ entries: index?.entries ?? [] });
+  });
+
+  // ── POST /api/extract-text ───────────────────────────────────────────────
+  // Converts a .docx file (sent as base64) to plain text via mammoth.
+  // .txt files are handled client-side and don't need this endpoint.
+  // Body: { filename: string; data: string }  (data = base64-encoded file bytes)
+
+  app.post<{
+    Body: { filename: string; data: string };
+  }>("/api/extract-text", async (req, reply) => {
+    const { filename, data } = req.body ?? {};
+    if (!filename || !data) {
+      return reply.code(400).send({ error: "filename and data are required" });
+    }
+    const ext = filename.split(".").pop()?.toLowerCase();
+    if (ext !== "docx") {
+      return reply.code(400).send({ error: "only .docx is supported; read .txt client-side" });
+    }
+    try {
+      const buffer = Buffer.from(data, "base64");
+      const result = await mammoth.extractRawText({ buffer });
+      return reply.send({ text: result.value });
+    } catch (err) {
+      return reply.code(500).send({
+        error: err instanceof Error ? err.message : "Failed to extract text from .docx",
+      });
+    }
   });
 
   // ── POST /api/ingest-story ────────────────────────────────────────────────

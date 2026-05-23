@@ -281,6 +281,56 @@ marinara.addStyle(`
   .me-import-ok  { flex-shrink: 0; font-size: 10px; color: #34d399; }
   .me-import-err { flex-shrink: 0; font-size: 10px; color: #f87171; }
 
+  /* Story ingest section */
+  .me-ingest-section { border-top: 1px solid #2e2b27; }
+  .me-ingest-toggle {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 10px; cursor: pointer; width: 100%;
+    background: none; border: none; color: inherit; font-family: inherit;
+    font-size: 12px; text-align: left;
+  }
+  .me-ingest-toggle:hover { background: #252320; }
+  .me-ingest-body { padding: 6px 10px 8px; }
+  .me-ingest-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+  .me-ingest-lbl { font-size: 10px; color: #6b7280; flex-shrink: 0; width: 46px; }
+  .me-ingest-input {
+    flex: 1; background: #252320; border: 1px solid #3d3a36;
+    border-radius: 4px; color: #e8e5e0; font-size: 11px;
+    padding: 3px 6px; font-family: inherit; outline: none; min-width: 0;
+  }
+  .me-ingest-input:focus { border-color: #f97316; }
+  .me-ingest-file-row { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+  .me-ingest-file-btn {
+    flex-shrink: 0; background: #252320; border: 1px solid #3d3a36;
+    border-radius: 4px; color: #9ca3af; font-size: 11px;
+    cursor: pointer; padding: 3px 8px; font-family: inherit;
+  }
+  .me-ingest-file-btn:hover:not(:disabled) { border-color: #f97316; color: #f97316; }
+  .me-ingest-file-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .me-ingest-filename {
+    flex: 1; min-width: 0; font-size: 10px; color: #c9c5bf;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .me-ingest-clear {
+    flex-shrink: 0; background: none; border: none;
+    color: #6b7280; font-size: 14px; cursor: pointer; padding: 0 3px; line-height: 1;
+  }
+  .me-ingest-clear:hover { color: #f87171; }
+  .me-ingest-or { font-size: 10px; color: #4b5563; margin-bottom: 4px; }
+  .me-ingest-textarea {
+    width: 100%; box-sizing: border-box;
+    background: #252320; border: 1px solid #3d3a36;
+    border-radius: 4px; color: #e8e5e0; font-size: 11px;
+    padding: 5px 7px; font-family: inherit; outline: none;
+    resize: vertical; min-height: 80px;
+  }
+  .me-ingest-textarea:focus { border-color: #f97316; }
+  .me-ingest-bottom { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+  .me-ingest-count { font-size: 10px; color: #4b5563; flex: 1; text-align: right; }
+  .me-ingest-result { margin-top: 6px; font-size: 11px; line-height: 1.4; }
+  .me-ingest-ok { color: #34d399; }
+  .me-ingest-err { color: #f87171; }
+
   /* Setup banner */
   #me-setup-banner {
     position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
@@ -381,6 +431,13 @@ const panelState = {
   importAllActive: false,
   importAllProgress: null, // { current, total }
   importResults: {},       // { [chatId]: { count } | { error } }
+  // Story ingest section
+  ingestExpanded: false,
+  ingestPovChar: "",
+  ingestText: "",
+  ingestFileName: null,
+  ingestRunning: false,
+  ingestResult: null,
   // Identity section
   identityExpanded: false,
   identityKey: null,       // loaded from /api/identity on expand
@@ -446,6 +503,7 @@ function renderPanel() {
     content.appendChild(renderBookmarksSection(panelState.bookmarks));
     content.appendChild(renderIdentitySection());
     content.appendChild(renderImportSection());
+    content.appendChild(renderStoryIngestSection());
   }
 
   panel.appendChild(content);
@@ -767,6 +825,221 @@ async function doRelink(identityKey) {
     panelState.relinkStatus = String(err);
   }
   renderPanel();
+}
+
+// ── Story ingest helpers ──────────────────────────────────────────────────────
+
+// Safe base64 encode for large ArrayBuffers (avoids call-stack overflow).
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunk = 8192;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+// Singleton hidden file input — created once, reused across renders.
+let _ingestFileInput = null;
+function getIngestFileInput() {
+  if (!_ingestFileInput) {
+    _ingestFileInput = document.createElement("input");
+    _ingestFileInput.type = "file";
+    _ingestFileInput.accept = ".txt,.docx";
+    _ingestFileInput.style.display = "none";
+    document.body.appendChild(_ingestFileInput);
+    marinara.onCleanup(() => { _ingestFileInput?.remove(); _ingestFileInput = null; });
+    _ingestFileInput.addEventListener("change", () => {
+      const file = _ingestFileInput.files?.[0];
+      if (file) loadIngestFile(file);
+      _ingestFileInput.value = "";  // allow re-selecting the same file
+    });
+  }
+  return _ingestFileInput;
+}
+
+async function loadIngestFile(file) {
+  const name = file.name;
+  const ext = name.split(".").pop()?.toLowerCase();
+  panelState.ingestFileName = name;
+  panelState.ingestResult = null;
+
+  if (ext === "txt") {
+    const reader = new FileReader();
+    reader.onload = e => {
+      panelState.ingestText = e.target.result;
+      renderPanel();
+    };
+    reader.readAsText(file);
+  } else if (ext === "docx") {
+    panelState.ingestRunning = true;
+    renderPanel();
+    try {
+      const ab = await file.arrayBuffer();
+      const b64 = arrayBufferToBase64(ab);
+      const res = await memFetch("/api/extract-text", {
+        method: "POST",
+        body: JSON.stringify({ filename: name, data: b64 }),
+      });
+      if (res?.error) throw new Error(res.error);
+      panelState.ingestText = res.text ?? "";
+    } catch (err) {
+      panelState.ingestResult = { error: `Could not read .docx: ${err.message}` };
+      panelState.ingestFileName = null;
+    }
+    panelState.ingestRunning = false;
+    renderPanel();
+  }
+}
+
+async function doStoryIngest() {
+  if (!panelState.session || !panelState.ingestText.trim()) return;
+  panelState.ingestRunning = true;
+  panelState.ingestResult = null;
+  renderPanel();
+
+  try {
+    const { characterId, characterName } = panelState.session;
+    const body = {
+      characterId,
+      characterName: characterName ?? "the character",
+      text: panelState.ingestText,
+    };
+    const pov = panelState.ingestPovChar.trim();
+    if (pov) body.povCharacter = pov;
+
+    const res = await memFetch("/api/ingest-story", { method: "POST", body: JSON.stringify(body) });
+    if (res?.error) throw new Error(res.error);
+    panelState.ingestResult = {
+      beats:          res.beats,
+      chunksTotal:    res.chunksTotal,
+      chunksAnalyzed: res.chunksAnalyzed,
+      chunksFiltered: res.chunksFiltered,
+      chunksFailed:   res.chunksFailed,
+    };
+  } catch (err) {
+    panelState.ingestResult = { error: err.message ?? "Ingest failed" };
+  }
+
+  panelState.ingestRunning = false;
+  renderPanel();
+}
+
+// ── Story ingest section render ───────────────────────────────────────────────
+
+function renderStoryIngestSection() {
+  const wrap = el("div", "me-ingest-section");
+
+  const toggleBtn = el("button", "me-ingest-toggle");
+  const dot_ = el("span", "me-section-dot");
+  dot_.style.background = "#8b5cf6";
+  dot_.style.flexShrink = "0";
+  const label = el("span", "me-section-label");
+  label.textContent = "Story Ingest";
+  const chevron = el("span", "me-import-chevron");
+  chevron.textContent = "▶";
+  if (panelState.ingestExpanded) chevron.classList.add("open");
+  toggleBtn.append(dot_, label, chevron);
+  wrap.appendChild(toggleBtn);
+
+  toggleBtn.addEventListener("click", () => {
+    panelState.ingestExpanded = !panelState.ingestExpanded;
+    renderPanel();
+  });
+
+  if (!panelState.ingestExpanded) return wrap;
+
+  const body = el("div", "me-ingest-body");
+
+  // POV character field
+  const povRow = el("div", "me-ingest-row");
+  const povLbl = el("span", "me-ingest-lbl");
+  povLbl.textContent = "POV char";
+  const povInput = el("input", "me-ingest-input");
+  povInput.type = "text";
+  povInput.placeholder = "e.g. Mark (optional)";
+  povInput.value = panelState.ingestPovChar;
+  povInput.addEventListener("input", e => { panelState.ingestPovChar = e.target.value; });
+  povRow.append(povLbl, povInput);
+  body.appendChild(povRow);
+
+  // File upload row
+  const fileRow = el("div", "me-ingest-file-row");
+  const fileBtn = el("button", "me-ingest-file-btn");
+  fileBtn.textContent = "📎 Load file";
+  fileBtn.disabled = panelState.ingestRunning;
+  fileBtn.addEventListener("click", () => getIngestFileInput().click());
+
+  if (panelState.ingestFileName) {
+    const fnEl = el("span", "me-ingest-filename");
+    fnEl.textContent = panelState.ingestFileName;
+    fnEl.title = panelState.ingestFileName;
+    const clearBtn = el("button", "me-ingest-clear");
+    clearBtn.textContent = "×";
+    clearBtn.title = "Clear";
+    clearBtn.addEventListener("click", () => {
+      panelState.ingestFileName = null;
+      panelState.ingestText = "";
+      panelState.ingestResult = null;
+      renderPanel();
+    });
+    fileRow.append(fileBtn, fnEl, clearBtn);
+  } else {
+    const hint = el("span", "me-ingest-filename");
+    hint.textContent = ".txt or .docx";
+    hint.style.color = "#4b5563";
+    fileRow.append(fileBtn, hint);
+  }
+  body.appendChild(fileRow);
+
+  // Textarea
+  const orLbl = el("div", "me-ingest-or");
+  orLbl.textContent = "or paste text:";
+  body.appendChild(orLbl);
+
+  const textarea = el("textarea", "me-ingest-textarea");
+  textarea.rows = 6;
+  textarea.placeholder = "Paste story text here…";
+  textarea.value = panelState.ingestText;
+  textarea.addEventListener("input", e => {
+    panelState.ingestText = e.target.value;
+    panelState.ingestResult = null;
+  });
+  body.appendChild(textarea);
+
+  // Bottom row: run button + char count
+  const bottom = el("div", "me-ingest-bottom");
+  const runBtn = el("button", "me-btn-primary");
+  runBtn.disabled = panelState.ingestRunning || !panelState.ingestText.trim() || !panelState.session;
+  runBtn.textContent = panelState.ingestRunning ? "Analyzing…" : "Analyze";
+  runBtn.addEventListener("click", doStoryIngest);
+  const countEl = el("span", "me-ingest-count");
+  const len = panelState.ingestText.length;
+  countEl.textContent = len > 0 ? `${len.toLocaleString()} chars` : "";
+  bottom.append(runBtn, countEl);
+  body.appendChild(bottom);
+
+  // Result display
+  if (panelState.ingestResult) {
+    const resultEl = el("div", "me-ingest-result");
+    if (panelState.ingestResult.error) {
+      resultEl.className = "me-ingest-result me-ingest-err";
+      resultEl.textContent = `✗ ${panelState.ingestResult.error}`;
+    } else {
+      resultEl.className = "me-ingest-result me-ingest-ok";
+      const { beats, chunksTotal, chunksFiltered, chunksFailed } = panelState.ingestResult;
+      const beatCount = beats?.length ?? 0;
+      const lines = [`✓ ${beatCount} beat${beatCount === 1 ? "" : "s"} from ${chunksTotal} chunks`];
+      if (chunksFiltered > 0) lines.push(`${chunksFiltered} one-off speakers filtered`);
+      if (chunksFailed  > 0) lines.push(`${chunksFailed} failed`);
+      resultEl.textContent = lines.join(" · ");
+    }
+    body.appendChild(resultEl);
+  }
+
+  wrap.appendChild(body);
+  return wrap;
 }
 
 // ── Import section render ─────────────────────────────────────────────────────
@@ -1491,6 +1764,9 @@ marinara.on(window, "marinara:generation-complete", async e => {
     panelState.identityExpanded = false;
     panelState.relinkStatus = null;
     panelState.relinkInput = "";
+    panelState.ingestRunning = false;
+    panelState.ingestResult = null;
+    panelState.ingestFileName = null;
     await refreshSession();
   }
   // Call explicitly here so we're guaranteed currentSession is set,
@@ -1522,6 +1798,9 @@ marinara.observe('.mari-messages-scroll > .sticky.top-0', async () => {
     panelState.identityExpanded = false;
     panelState.relinkStatus = null;
     panelState.relinkInput = "";
+    panelState.ingestRunning = false;
+    panelState.ingestResult = null;
+    panelState.ingestFileName = null;
     await refreshSession();
   }
 });

@@ -127,6 +127,17 @@ hope:
   - new start
   - fresh start
   - beginning again
+  # Romance register — cautious hope, allowing possibility
+  - dared to hope
+  - let herself hope
+  - let himself hope
+  - allowed herself
+  - allowed himself
+  - for the first time
+  - maybe this time
+  - something different
+  - didn't dare hope
+  - almost believed
 
 desire:
   # Physical / emotional wanting
@@ -155,6 +166,38 @@ desire:
   - hold you
   - with you
   - beside you
+  # Romance / physical sensation register
+  # These appear in literary fiction where desire is shown through the body
+  # rather than named directly.
+  - breathless
+  - flush
+  - flushed
+  - shiver
+  - shivers
+  - shivering
+  - trembling
+  - tremble
+  - pulse raced
+  - heart raced
+  - heat rose
+  - warmth spread
+  - skin tingled
+  - couldn't resist
+  - gave in
+  - surrender
+  - surrendered
+  - desperate for
+  - couldn't get enough
+  - lost in
+  - consumed by
+  - pressed against
+  - pulled him close
+  - pulled her close
+  - drew him in
+  - drew her in
+  - all she wanted
+  - all he wanted
+  - starving for
 
 relief:
   # Direct relief
@@ -211,6 +254,23 @@ vulnerability:
   - know me
   - understand me
   - hear me
+  # Intimacy register — allowing closeness, giving access
+  # These appear in romance/adult fiction where vulnerability is physical
+  # or emotional surrender rather than verbal admission.
+  - gave herself
+  - gave himself
+  - let him in
+  - let her in
+  - let him see
+  - let her see
+  - nothing left to hide
+  - let herself be seen
+  - let himself be seen
+  - completely open
+  - all of me
+  - every part of me
+  - bared herself
+  - bared himself
 
 trust:
   # Giving trust
@@ -309,6 +369,26 @@ joy:
   - couldn't be happier
   - best feeling
   - never been this happy
+  # Post-intimacy warmth / romance register
+  # The quiet contentment and connection that follows closeness.
+  - nestled against
+  - curled against
+  - held her close
+  - held him close
+  - warmth bloomed
+  - warmth in her chest
+  - warmth in his chest
+  - light in her chest
+  - light in his chest
+  - didn't want it to end
+  - didn't want to move
+  - never wanted to leave
+  - felt whole
+  - felt complete
+  - peace
+  - at peace
+  - contentment
+  - content
 
 # ── Dysregulation ─────────────────────────────────────────────────────────────
 # Two sub-lists: deflection words (weak signal, low scoring, but boost when

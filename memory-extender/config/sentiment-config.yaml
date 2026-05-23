@@ -16,11 +16,16 @@ chunking:
   # turn only (no semantic merging). true = silent fallback, false = error.
   fallback_on_sidecar_unavailable: true
 
-# ── Salience threshold ────────────────────────────────────────────────────────
-# Chunks with a salience score below this are skipped entirely.
+# ── Salience thresholds ───────────────────────────────────────────────────────
+# Chunks with a salience score below the active threshold are skipped entirely.
 # Stage 1 routing: all chunks are scored regardless.
-# Stage 2 deep analysis (Gemma call): only chunks that pass this threshold.
-salience_threshold: 0.4
+# Stage 2 deep analysis (Gemma call): only chunks that pass the threshold.
+#
+# chat: direct conversational language; single keyword hit is often sufficient.
+# story: literary prose signals emotions obliquely — physical sensation, gesture,
+#   subtext. Lower threshold catches beats that keyword scoring underweights.
+salience_threshold: 0.40
+story_salience_threshold: 0.25
 
 # ── Per-emotion weights ───────────────────────────────────────────────────────
 # Scales the raw keyword match score for each emotion category.

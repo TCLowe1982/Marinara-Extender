@@ -28,6 +28,7 @@ export interface ChunkingConfig {
 export interface SentimentConfig {
   chunking: ChunkingConfig;
   salience_threshold: number;
+  story_salience_threshold: number;
   emotion_weights: Record<Emotion, number>;
   match_score_per_hit: number;
   compound_boost: { two_matches: number; three_plus: number };

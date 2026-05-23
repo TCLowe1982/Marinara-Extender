@@ -25,7 +25,7 @@ export async function runSentimentPipeline(
   const chunks = await chunkMessages(messages, characterName);
 
   // Stage 1: classify
-  const classifications = classifyChunks(chunks);
+  const classifications = classifyChunks(chunks, sourceType);
   const passing = classifications.filter((c) => c.passesThreshold);
 
   // Stage 2: deep analyze (only passing chunks)

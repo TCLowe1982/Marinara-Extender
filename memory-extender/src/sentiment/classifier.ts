@@ -31,9 +31,15 @@ function countMatches(text: string, keywords: string[]): number {
 
 // ── Core scoring ──────────────────────────────────────────────────────────────
 
-export function classifyChunk(chunk: Chunk): ClassificationResult {
+export function classifyChunk(
+  chunk: Chunk,
+  sourceType: "chat" | "story" = "chat",
+): ClassificationResult {
   const cfg = loadSentimentConfig();
   const kw = loadEmotionalKeywords();
+  const threshold = sourceType === "story"
+    ? (cfg.story_salience_threshold ?? 0.25)
+    : cfg.salience_threshold;
 
   const text = chunk.text.toLowerCase();
   const scores: Partial<Record<Emotion, number>> = {};
@@ -139,12 +145,15 @@ export function classifyChunk(chunk: Chunk): ClassificationResult {
     primaryEmotion,
     salience,
     structuralMatches,
-    passesThreshold: salience >= cfg.salience_threshold,
+    passesThreshold: salience >= threshold,
   };
 }
 
 // ── Batch helper ──────────────────────────────────────────────────────────────
 
-export function classifyChunks(chunks: Chunk[]): ClassificationResult[] {
-  return chunks.map(classifyChunk);
+export function classifyChunks(
+  chunks: Chunk[],
+  sourceType: "chat" | "story" = "chat",
+): ClassificationResult[] {
+  return chunks.map((c) => classifyChunk(c, sourceType));
 }

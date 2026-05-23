@@ -28,6 +28,8 @@ import { nanoid } from "./nanoid.js";
 import { digestMessages, type DigestMessage } from "./digest.js";
 import { processResponse, extractRememberTags } from "./writer.js";
 import { loadContext } from "./loader.js";
+import { runSentimentPipeline } from "./sentiment/pipeline.js";
+import { readBeatIndex, readAllBeats } from "./sentiment/encoder.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -622,5 +624,61 @@ export function registerApiRoutes(app: FastifyInstance): void {
     }
 
     return reply.send(results);
+  });
+
+  // ── POST /api/analyze-beats ───────────────────────────────────────────────
+  // Runs the full sentiment pipeline (Stage 0–3) on a list of chat messages
+  // and stores the resulting emotional beats under the character scope.
+  // Body: { messages, characterId, characterName, sourceType? }
+
+  app.post<{
+    Body: {
+      messages: DigestMessage[];
+      characterId: string;
+      characterName: string;
+      sourceType?: "chat" | "story";
+    };
+  }>("/api/analyze-beats", async (req, reply) => {
+    const { messages, characterId, characterName, sourceType = "chat" } = req.body ?? {};
+
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return reply.code(400).send({ error: "messages array is required and must not be empty" });
+    }
+    if (!characterId || !characterName) {
+      return reply.code(400).send({ error: "characterId and characterName are required" });
+    }
+
+    try {
+      const result = await runSentimentPipeline(messages, characterId, characterName, sourceType);
+      console.info(
+        `[ME] sentiment pipeline — char:${characterId} — ${result.beats.length} beats from ${result.chunksTotal} chunks`,
+      );
+      return reply.send(result);
+    } catch (err) {
+      return reply.code(500).send({
+        error: err instanceof Error ? err.message : "Sentiment pipeline failed",
+      });
+    }
+  });
+
+  // ── GET /api/beats ────────────────────────────────────────────────────────
+  // Returns the beat index (summaries) for a character.
+  // Query: characterId, full? (if true, returns full beat objects)
+
+  app.get<{
+    Querystring: { characterId: string; full?: string };
+  }>("/api/beats", async (req, reply) => {
+    const { characterId, full } = req.query;
+    if (!characterId) {
+      return reply.code(400).send({ error: "characterId is required" });
+    }
+
+    if (full === "true") {
+      const beats = await readAllBeats(characterId);
+      return reply.send({ beats });
+    }
+
+    const index = await readBeatIndex(characterId);
+    return reply.send({ entries: index?.entries ?? [] });
   });
 }

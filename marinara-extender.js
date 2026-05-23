@@ -282,6 +282,19 @@ marinara.addStyle(`
   .me-import-err { flex-shrink: 0; font-size: 10px; color: #f87171; }
 
   /* Story ingest section */
+  @keyframes me-spin { to { transform: rotate(360deg); } }
+  .me-spinner {
+    display: inline-block; width: 13px; height: 13px;
+    border: 2px solid #3d3a36; border-top-color: #8b5cf6;
+    border-radius: 50%;
+    animation: me-spin 0.75s linear infinite;
+    vertical-align: middle; flex-shrink: 0;
+  }
+  .me-ingest-running {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 0; color: #9ca3af; font-size: 11px;
+  }
+  .me-ingest-hint { font-size: 10px; color: #4b5563; margin-top: 2px; margin-bottom: 6px; }
   .me-ingest-section { border-top: 1px solid #2e2b27; }
   .me-ingest-toggle {
     display: flex; align-items: center; gap: 6px;
@@ -437,6 +450,7 @@ const panelState = {
   ingestText: "",
   ingestFileName: null,
   ingestRunning: false,
+  ingestStatus: "",    // short message shown while running
   ingestResult: null,
   // Identity section
   identityExpanded: false,
@@ -874,6 +888,7 @@ async function loadIngestFile(file) {
     reader.readAsText(file);
   } else if (ext === "docx") {
     panelState.ingestRunning = true;
+    panelState.ingestStatus = "Reading .docx…";
     renderPanel();
     try {
       const ab = await file.arrayBuffer();
@@ -889,6 +904,7 @@ async function loadIngestFile(file) {
       panelState.ingestFileName = null;
     }
     panelState.ingestRunning = false;
+    panelState.ingestStatus = "";
     renderPanel();
   }
 }
@@ -896,6 +912,7 @@ async function loadIngestFile(file) {
 async function doStoryIngest() {
   if (!panelState.session || !panelState.ingestText.trim()) return;
   panelState.ingestRunning = true;
+  panelState.ingestStatus = "Analyzing story…";
   panelState.ingestResult = null;
   renderPanel();
 
@@ -923,6 +940,7 @@ async function doStoryIngest() {
   }
 
   panelState.ingestRunning = false;
+  panelState.ingestStatus = "";
   renderPanel();
 }
 
@@ -951,6 +969,23 @@ function renderStoryIngestSection() {
   if (!panelState.ingestExpanded) return wrap;
 
   const body = el("div", "me-ingest-body");
+
+  // Loading state — replace body with spinner while a fetch is in flight
+  if (panelState.ingestRunning) {
+    const runWrap = el("div", "me-ingest-running");
+    const spinner = el("span", "me-spinner");
+    const statusTxt = el("span");
+    statusTxt.textContent = panelState.ingestStatus || "Working…";
+    runWrap.append(spinner, statusTxt);
+    body.appendChild(runWrap);
+
+    const hint = el("div", "me-ingest-hint");
+    hint.textContent = "Long stories can take 1–2 minutes — the model reads each chunk individually.";
+    body.appendChild(hint);
+
+    wrap.appendChild(body);
+    return wrap;
+  }
 
   // POV character field
   const povRow = el("div", "me-ingest-row");

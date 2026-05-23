@@ -157,13 +157,14 @@ function mergeByEmbedding(
   return chunks;
 }
 
-export function mergeByTurnOnly(turns: DialogueTurn[]): Chunk[] {
+export function mergeByTurnOnly(turns: DialogueTurn[], maxTurns = 6): Chunk[] {
   if (turns.length === 0) return [];
 
   const chunks: Chunk[] = [];
   let groupStart = 0;
   let groupSpeaker = turns[0]!.speaker;
   let groupTexts = [turns[0]!.text];
+  let groupCount = 1;
 
   const finalize = (endIndex: number) => {
     chunks.push({
@@ -176,13 +177,15 @@ export function mergeByTurnOnly(turns: DialogueTurn[]): Chunk[] {
 
   for (let i = 1; i < turns.length; i++) {
     const turn = turns[i]!;
-    if (turn.speaker === groupSpeaker) {
+    if (turn.speaker === groupSpeaker && groupCount < maxTurns) {
       groupTexts.push(turn.text);
+      groupCount++;
     } else {
       finalize(i - 1);
       groupStart = i;
       groupSpeaker = turn.speaker;
       groupTexts = [turn.text];
+      groupCount = 1;
     }
   }
 
@@ -216,5 +219,5 @@ export async function chunkMessages(
   }
 
   console.warn("[chunker] Sidecar unavailable — falling back to speaker-turn grouping only.");
-  return mergeByTurnOnly(turns);
+  return mergeByTurnOnly(turns, cfg.max_turns_per_chunk);
 }

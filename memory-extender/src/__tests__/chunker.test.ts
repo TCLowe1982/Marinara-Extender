@@ -196,4 +196,21 @@ describe("mergeByTurnOnly", () => {
     expect(chunks).toHaveLength(4);
     expect(chunks.map((c) => c.speaker)).toEqual(["A", "B", "A", "B"]);
   });
+
+  it("splits a same-speaker run at the maxTurns cap", () => {
+    // 8 same-speaker turns with maxTurns=3 → should produce 3 chunks: [3,3,2]
+    const turns = Array.from({ length: 8 }, (_, i) => ({
+      speaker: "Narrator",
+      text: `Para ${i + 1}.`,
+      turnIndex: i,
+    }));
+    const chunks = mergeByTurnOnly(turns, 3);
+    expect(chunks).toHaveLength(3);
+    expect(chunks[0]?.text).toContain("Para 1.");
+    expect(chunks[0]?.text).toContain("Para 3.");
+    expect(chunks[1]?.text).toContain("Para 4.");
+    expect(chunks[1]?.text).toContain("Para 6.");
+    expect(chunks[2]?.text).toContain("Para 7.");
+    expect(chunks[2]?.text).toContain("Para 8.");
+  });
 });

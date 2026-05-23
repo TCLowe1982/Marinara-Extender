@@ -2,6 +2,20 @@
 # Edit this file to adjust thresholds and weights without restarting the server.
 # All changes take effect on the next pipeline call.
 
+# ── Chunking (Stage 0) ───────────────────────────────────────────────────────
+# Controls how raw dialogue turns are merged into coherent chunks before
+# classification. Merging uses cosine similarity between embeddings.
+chunking:
+  # Similarity threshold for merging consecutive same-speaker turns.
+  # 1.0 = never merge, 0.0 = always merge. 0.72 catches same topic/thread.
+  merge_threshold: 0.72
+  # Maximum number of original turns that can be merged into one chunk.
+  # Prevents runaway merging of very long monologues.
+  max_turns_per_chunk: 6
+  # If the Marinara sidecar is unavailable, fall back to grouping by speaker
+  # turn only (no semantic merging). true = silent fallback, false = error.
+  fallback_on_sidecar_unavailable: true
+
 # ── Salience threshold ────────────────────────────────────────────────────────
 # Chunks with a salience score below this are skipped entirely.
 # Stage 1 routing: all chunks are scored regardless.

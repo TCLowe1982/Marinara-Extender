@@ -18,7 +18,14 @@ export interface StructuralPatternConfig {
   description?: string;
 }
 
+export interface ChunkingConfig {
+  merge_threshold: number;
+  max_turns_per_chunk: number;
+  fallback_on_sidecar_unavailable: boolean;
+}
+
 export interface SentimentConfig {
+  chunking: ChunkingConfig;
   salience_threshold: number;
   emotion_weights: Record<Emotion, number>;
   match_score_per_hit: number;

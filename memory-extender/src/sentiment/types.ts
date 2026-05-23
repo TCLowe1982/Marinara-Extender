@@ -62,8 +62,9 @@ export interface ClassificationResult {
 
 // Compound emotion: a named emotion paired with its relative weight (0–1).
 // Weights across a beat's emotion array should sum to ~1.0 but are not enforced.
+// The emotion label is freeform — richer vocabulary than the Emotion enum is intentional.
 export interface EmotionWeight {
-  emotion: Emotion;
+  emotion: string;
   weight: number;
 }
 

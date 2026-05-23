@@ -29,6 +29,7 @@ import { digestMessages, type DigestMessage } from "./digest.js";
 import { processResponse, extractRememberTags } from "./writer.js";
 import { loadContext } from "./loader.js";
 import { runSentimentPipeline } from "./sentiment/pipeline.js";
+import { parseStoryToMessages } from "./story-parser.js";
 import { readBeatIndex, readAllBeats } from "./sentiment/encoder.js";
 import {
   resolveIdentity,
@@ -701,6 +702,52 @@ export function registerApiRoutes(app: FastifyInstance): void {
 
     const index = await readBeatIndex(identityKey);
     return reply.send({ entries: index?.entries ?? [] });
+  });
+
+  // ── POST /api/ingest-story ────────────────────────────────────────────────
+  // Parses a prose story/narrative into emotional beats via the sentiment
+  // pipeline. The LLM first adds "Name: " attribution prefixes so the chunker
+  // can do per-speaker analysis; paragraph split is used as fallback.
+  // Body: { characterId, characterName, text, characters?, sourceType? }
+
+  app.post<{
+    Body: {
+      characterId: string;
+      characterName: string;
+      text: string;
+      characters?: string[];
+      sourceType?: "chat" | "story";
+    };
+  }>("/api/ingest-story", async (req, reply) => {
+    const {
+      characterId,
+      characterName,
+      text,
+      characters = [],
+      sourceType = "story",
+    } = req.body ?? {};
+
+    if (!characterId || !characterName) {
+      return reply.code(400).send({ error: "characterId and characterName are required" });
+    }
+    if (!text?.trim()) {
+      return reply.code(400).send({ error: "text is required" });
+    }
+
+    const identityKey = await resolveIdentity(characterId, characterName);
+
+    try {
+      const { messages, method } = await parseStoryToMessages(text, { characters });
+      const result = await runSentimentPipeline(messages, identityKey, characterName, sourceType);
+      console.info(
+        `[ME] story ingest — key:${identityKey} — method:${method} — ${result.beats.length} beats from ${result.chunksTotal} chunks`,
+      );
+      return reply.send({ ...result, parseMethod: method });
+    } catch (err) {
+      return reply.code(500).send({
+        error: err instanceof Error ? err.message : "Story ingest failed",
+      });
+    }
   });
 
   // ── GET /api/identity ─────────────────────────────────────────────────────

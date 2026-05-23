@@ -70,6 +70,8 @@ dysregulation_contextual:
 structural_patterns:
   dissociation_grounding:
     pattern: '"[a-z]{1,8}\."'
+    # No flags — case-sensitive. [a-z] intentionally matches only lowercase.
+    # "ok." is dissociative; "OK." is assertive.
     emotion: dysregulation
     subpattern: dissociation
     score: 0.75
@@ -79,6 +81,7 @@ structural_patterns:
 
   ellipsis_shutdown:
     pattern: '\.{3,}'
+    # No flags — dots are dots, case is irrelevant.
     emotion: dysregulation
     subpattern: shutdown
     score: 0.45
@@ -88,6 +91,8 @@ structural_patterns:
 
   all_caps_burst:
     pattern: '\b[A-Z]{4,}\b'
+    # No flags — MUST be case-sensitive. With "i" flag this would match
+    # every word of 4+ letters, defeating the purpose.
     emotion: anger
     score: 0.50
     description: >
@@ -95,6 +100,8 @@ structural_patterns:
 
   self_erasure:
     pattern: '\bi (don''t|shouldn''t|can''t|won''t) (exist|matter|deserve|be here)\b'
+    flags: 'i'
+    # Case-insensitive — must match both "i don't..." and "I don't...".
     emotion: shame
     subpattern: shutdown
     score: 0.80

@@ -12,6 +12,7 @@ const CONFIG_DIR = join(new URL(".", import.meta.url).pathname.replace(/^\/([A-Z
 
 export interface StructuralPatternConfig {
   pattern: string;
+  flags?: string;   // regex flags, e.g. "i" for case-insensitive. Default: "" (case-sensitive)
   emotion: Emotion;
   subpattern?: string;
   score: number;

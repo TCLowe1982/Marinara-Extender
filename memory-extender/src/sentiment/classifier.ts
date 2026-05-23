@@ -107,7 +107,7 @@ export function classifyChunk(chunk: Chunk): ClassificationResult {
   const structuralMatches: StructuralPatternMatch[] = [];
 
   for (const [patternId, patternCfg] of Object.entries(cfg.structural_patterns)) {
-    const re = new RegExp(patternCfg.pattern, "i");
+    const re = new RegExp(patternCfg.pattern, patternCfg.flags ?? "");
     if (!re.test(chunk.text)) continue;
 
     structuralMatches.push({

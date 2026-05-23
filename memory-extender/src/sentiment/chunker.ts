@@ -19,7 +19,7 @@ const SPEAKER_PREFIX_RE = /^([A-Za-z][A-Za-z0-9 _'-]{0,40})(?:\s*\([^)]*\))?\s*:
 // Narration blocks delimited by asterisks: *does something*
 const NARRATION_RE = /^\*[^*]+\*$/;
 
-function parseTurns(messages: DigestMessage[], characterName: string): DialogueTurn[] {
+export function parseTurns(messages: DigestMessage[], characterName: string): DialogueTurn[] {
   const turns: DialogueTurn[] = [];
   let index = 0;
 
@@ -95,7 +95,7 @@ async function fetchEmbeddings(texts: string[]): Promise<number[][] | null> {
 
 // ── Cosine similarity ─────────────────────────────────────────────────────────
 
-function cosine(a: number[], b: number[]): number {
+export function cosine(a: number[], b: number[]): number {
   let dot = 0, magA = 0, magB = 0;
   for (let i = 0; i < a.length; i++) {
     dot  += a[i]! * b[i]!;
@@ -157,7 +157,7 @@ function mergeByEmbedding(
   return chunks;
 }
 
-function mergeByTurnOnly(turns: DialogueTurn[]): Chunk[] {
+export function mergeByTurnOnly(turns: DialogueTurn[]): Chunk[] {
   if (turns.length === 0) return [];
 
   const chunks: Chunk[] = [];

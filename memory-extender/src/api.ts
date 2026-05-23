@@ -30,6 +30,15 @@ import { processResponse, extractRememberTags } from "./writer.js";
 import { loadContext } from "./loader.js";
 import { runSentimentPipeline } from "./sentiment/pipeline.js";
 import { readBeatIndex, readAllBeats } from "./sentiment/encoder.js";
+import {
+  resolveIdentity,
+  getIdentityMap,
+  relinkIdentity,
+  renameIdentityKey,
+  exportIdentity,
+  importIdentity,
+  type IdentityExportBundle,
+} from "./identity.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -361,8 +370,10 @@ export function registerApiRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: "messages array is required and must not be empty" });
     }
 
+    const identityKey = await resolveIdentity(characterId, characterName);
+
     try {
-      const result = await digestMessages(messages, characterId, characterName, model);
+      const result = await digestMessages(messages, identityKey, characterName, model);
       return reply.send(result);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
@@ -381,12 +392,14 @@ export function registerApiRoutes(app: FastifyInstance): void {
   // Body: { characterId, chatId, turnNumber, messageText }
 
   app.post<{
-    Body: { characterId: string; chatId: string; turnNumber?: number; messageText?: string };
+    Body: { characterId: string; characterName?: string; chatId: string; turnNumber?: number; messageText?: string };
   }>("/api/process-turn", async (req, reply) => {
-    const { characterId, chatId, turnNumber = 0, messageText = "" } = req.body ?? {};
+    const { characterId, characterName, chatId, turnNumber = 0, messageText = "" } = req.body ?? {};
     if (!characterId || !chatId) {
       return reply.code(400).send({ error: "characterId and chatId are required" });
     }
+
+    const identityKey = await resolveIdentity(characterId, characterName);
 
     // Extract <remember> tags and create permanent entries before bookmark processing.
     const remembers = extractRememberTags(messageText);
@@ -395,7 +408,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
     // when multiple <remember> tags in one message share the same scope.
     const indexCache = new Map<string, import("./storage.js").IndexEntry[]>();
     for (const rem of remembers) {
-      const scopeId = rem.scope === "character" ? characterId
+      const scopeId = rem.scope === "character" ? identityKey
                     : rem.scope === "global"    ? "global"
                     : chatId;
       const rawSummary = rem.content.replace(/\n+/g, " ").trim();
@@ -440,14 +453,14 @@ export function registerApiRoutes(app: FastifyInstance): void {
     }
 
     const { bookmarksExtracted } = await processResponse(chatId, turnNumber, messageText);
-    const { contextBlock } = await loadContext({ characterId, chatId, turnNumber });
+    const { contextBlock } = await loadContext({ characterId: identityKey, chatId, turnNumber });
 
     const saved = created + bookmarksExtracted;
     if (saved > 0) {
       const parts: string[] = [];
       if (created > 0) parts.push(`${created} ledger entr${created === 1 ? "y" : "ies"}`);
       if (bookmarksExtracted > 0) parts.push(`${bookmarksExtracted} bookmark${bookmarksExtracted === 1 ? "" : "s"}`);
-      console.info(`[ME] memory saved — char:${characterId} chat:${chatId} — ${parts.join(", ")}`);
+      console.info(`[ME] memory saved — key:${identityKey} chat:${chatId} — ${parts.join(", ")}`);
     }
 
     return reply.send({ memoryBlock: contextBlock, created, bookmarksExtracted });
@@ -462,6 +475,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
   app.post<{
     Body: {
       characterId: string;
+      characterName?: string;
       chatId: string;
       turnNumber?: number;
       commands: Array<
@@ -470,13 +484,15 @@ export function registerApiRoutes(app: FastifyInstance): void {
       >;
     };
   }>("/api/ingest-commands", async (req, reply) => {
-    const { characterId, chatId, turnNumber = 0, commands } = req.body ?? {};
+    const { characterId, characterName, chatId, turnNumber = 0, commands } = req.body ?? {};
     if (!characterId || !chatId) {
       return reply.code(400).send({ error: "characterId and chatId are required" });
     }
     if (!Array.isArray(commands) || commands.length === 0) {
       return reply.send({ created: 0, bookmarksAdded: 0 });
     }
+
+    const identityKey = await resolveIdentity(characterId, characterName);
 
     let created = 0;
     let bookmarksAdded = 0;
@@ -487,7 +503,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
       if (cmd.type !== "remember") continue;
       const scope = (cmd.scope ?? "chat") as Scope;
       const scopeId =
-        scope === "character" ? characterId : scope === "global" ? "global" : chatId;
+        scope === "character" ? identityKey : scope === "global" ? "global" : chatId;
       const rawSummary = cmd.content.replace(/\n+/g, " ").trim();
       if (rawSummary.length < 10) continue;
       const summary = truncateSummary(rawSummary);
@@ -570,7 +586,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
       const parts: string[] = [];
       if (created > 0) parts.push(`${created} ledger entr${created === 1 ? "y" : "ies"}`);
       if (bookmarksAdded > 0) parts.push(`${bookmarksAdded} bookmark${bookmarksAdded === 1 ? "" : "s"}`);
-      console.info(`[ME] memory saved — char:${characterId} chat:${chatId} — ${parts.join(", ")}`);
+      console.info(`[ME] memory saved — key:${identityKey} chat:${chatId} — ${parts.join(", ")}`);
     }
 
     return reply.send({ created, bookmarksAdded });
@@ -588,9 +604,10 @@ export function registerApiRoutes(app: FastifyInstance): void {
     if (!characterId || !chatId) {
       return reply.code(400).send({ error: "characterId and chatId are required" });
     }
-    const { contextBlock } = await loadContext({ characterId, chatId, turnNumber: 0 });
+    const identityKey = await resolveIdentity(characterId);
+    const { contextBlock } = await loadContext({ characterId: identityKey, chatId, turnNumber: 0 });
     if (contextBlock) {
-      console.info(`[ME] memory loaded — char:${characterId} chat:${chatId}`);
+      console.info(`[ME] memory loaded — key:${identityKey} chat:${chatId}`);
     }
     return reply.send({ memoryBlock: contextBlock });
   });
@@ -648,10 +665,12 @@ export function registerApiRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: "characterId and characterName are required" });
     }
 
+    const identityKey = await resolveIdentity(characterId, characterName);
+
     try {
-      const result = await runSentimentPipeline(messages, characterId, characterName, sourceType);
+      const result = await runSentimentPipeline(messages, identityKey, characterName, sourceType);
       console.info(
-        `[ME] sentiment pipeline — char:${characterId} — ${result.beats.length} beats from ${result.chunksTotal} chunks`,
+        `[ME] sentiment pipeline — key:${identityKey} — ${result.beats.length} beats from ${result.chunksTotal} chunks`,
       );
       return reply.send(result);
     } catch (err) {
@@ -673,12 +692,113 @@ export function registerApiRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: "characterId is required" });
     }
 
+    const identityKey = await resolveIdentity(characterId);
+
     if (full === "true") {
-      const beats = await readAllBeats(characterId);
+      const beats = await readAllBeats(identityKey);
       return reply.send({ beats });
     }
 
-    const index = await readBeatIndex(characterId);
+    const index = await readBeatIndex(identityKey);
     return reply.send({ entries: index?.entries ?? [] });
+  });
+
+  // ── GET /api/identity ─────────────────────────────────────────────────────
+  // Lists all known character identities with their card-ID mappings.
+
+  app.get("/api/identity", async (_req, reply) => {
+    const entries = await getIdentityMap();
+    return reply.send({ entries });
+  });
+
+  // ── POST /api/identity/relink ─────────────────────────────────────────────
+  // Points a (new) card ID at an existing identity key.
+  // Use after recreating a card to preserve its memories.
+  // Body: { characterId, identityKey }
+
+  app.post<{
+    Body: { characterId: string; identityKey: string };
+  }>("/api/identity/relink", async (req, reply) => {
+    const { characterId, identityKey } = req.body ?? {};
+    if (!characterId || !identityKey) {
+      return reply.code(400).send({ error: "characterId and identityKey are required" });
+    }
+    try {
+      await relinkIdentity(characterId, identityKey);
+      return reply.send({ ok: true, characterId, identityKey });
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ── PATCH /api/identity/:characterId ─────────────────────────────────────
+  // Rename the identity key bound to a character ID.
+  // Body: { newKey }
+
+  app.patch<{
+    Params: { characterId: string };
+    Body: { newKey: string };
+  }>("/api/identity/:characterId", async (req, reply) => {
+    const { characterId } = req.params;
+    const { newKey } = req.body ?? {};
+    if (!newKey?.trim()) {
+      return reply.code(400).send({ error: "newKey is required" });
+    }
+
+    // Find the current key for this characterId.
+    const entries = await getIdentityMap();
+    const current = entries.find((e) => e.characterId === characterId);
+    if (!current) {
+      return reply.code(404).send({ error: `No identity mapping found for characterId "${characterId}"` });
+    }
+
+    try {
+      await renameIdentityKey(current.identityKey, newKey);
+      return reply.send({ ok: true, oldKey: current.identityKey, newKey: newKey.trim() });
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ── GET /api/identity/:key/export ─────────────────────────────────────────
+  // Returns a portable JSON bundle of all memories for an identity key.
+  // Use for backup or moving a character's memories to another installation.
+
+  app.get<{
+    Params: { key: string };
+  }>("/api/identity/:key/export", async (req, reply) => {
+    const { key } = req.params;
+    try {
+      const bundle = await exportIdentity(key);
+      return reply
+        .header("Content-Disposition", `attachment; filename="${key}-memories.json"`)
+        .send(bundle);
+    } catch (err) {
+      return reply.code(404).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ── POST /api/identity/import ─────────────────────────────────────────────
+  // Imports a previously exported memory bundle.
+  // Body: the IdentityExportBundle JSON, optionally with targetKey to override the key.
+
+  app.post<{
+    Body: IdentityExportBundle & { targetKey?: string };
+  }>("/api/identity/import", async (req, reply) => {
+    const { targetKey, ...bundle } = req.body ?? {};
+    if (!bundle.version || !bundle.identityKey) {
+      return reply.code(400).send({ error: "invalid bundle: missing version or identityKey" });
+    }
+    try {
+      const resolvedKey = await importIdentity(bundle as IdentityExportBundle, targetKey);
+      return reply.code(201).send({
+        ok: true,
+        identityKey: resolvedKey,
+        entriesImported: bundle.entries?.length ?? 0,
+        beatsImported: bundle.beats?.length ?? 0,
+      });
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+    }
   });
 }

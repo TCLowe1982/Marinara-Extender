@@ -669,7 +669,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
     const identityKey = await resolveIdentity(characterId, characterName);
 
     try {
-      const result = await runSentimentPipeline(messages, identityKey, characterName, sourceType);
+      const result = await runSentimentPipeline(messages, identityKey, characterName, { sourceType });
       console.info(
         `[ME] sentiment pipeline — key:${identityKey} — ${result.beats.length} beats from ${result.chunksTotal} chunks`,
       );
@@ -708,7 +708,9 @@ export function registerApiRoutes(app: FastifyInstance): void {
   // Parses a prose story/narrative into emotional beats via the sentiment
   // pipeline. The LLM first adds "Name: " attribution prefixes so the chunker
   // can do per-speaker analysis; paragraph split is used as fallback.
-  // Body: { characterId, characterName, text, characters?, sourceType? }
+  // Body: { characterId, characterName, text, characters?, povCharacter?, sourceType? }
+  // characters: only beats for these speakers are saved; others are dropped.
+  // povCharacter: "Narrator" chunks are relabeled to this name (use for first-person prose).
 
   app.post<{
     Body: {
@@ -716,6 +718,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
       characterName: string;
       text: string;
       characters?: string[];
+      povCharacter?: string;
       sourceType?: "chat" | "story";
     };
   }>("/api/ingest-story", async (req, reply) => {
@@ -724,6 +727,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
       characterName,
       text,
       characters = [],
+      povCharacter,
       sourceType = "story",
     } = req.body ?? {};
 
@@ -738,9 +742,13 @@ export function registerApiRoutes(app: FastifyInstance): void {
 
     try {
       const { messages, method } = await parseStoryToMessages(text, { characters });
-      const result = await runSentimentPipeline(messages, identityKey, characterName, sourceType);
+      const result = await runSentimentPipeline(messages, identityKey, characterName, {
+        sourceType,
+        characters: characters.length ? characters : undefined,
+        povCharacter,
+      });
       console.info(
-        `[ME] story ingest — key:${identityKey} — method:${method} — ${result.beats.length} beats from ${result.chunksTotal} chunks`,
+        `[ME] story ingest — key:${identityKey} — method:${method} — ${result.beats.length} beats, ${result.chunksFiltered} filtered`,
       );
       return reply.send({ ...result, parseMethod: method });
     } catch (err) {

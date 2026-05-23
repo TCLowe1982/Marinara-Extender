@@ -60,11 +60,22 @@ export interface ClassificationResult {
 
 // ── Stage 2: Deep Analysis ────────────────────────────────────────────────────
 
+// Compound emotion: a named emotion paired with its relative weight (0–1).
+// Weights across a beat's emotion array should sum to ~1.0 but are not enforced.
+export interface EmotionWeight {
+  emotion: Emotion;
+  weight: number;
+}
+
 export interface BeatAnalysis {
   motivation: string;            // what is driving this person right now
   relationalDynamics: string;    // how this affects/is affected by the relationship
   outcome: string;               // what this moment implies for the future
   subpattern?: string;           // specific dysregulation pattern if applicable
+  // Compound emotion breakdown. The first entry is the primary emotion.
+  emotions?: EmotionWeight[];
+  // Emotional function of sexual/intimate content when present.
+  subtext?: string;
   salience: number;              // 0.0–1.0, model's own salience estimate
 }
 
@@ -73,8 +84,12 @@ export interface BeatAnalysis {
 export interface EmotionalBeat {
   id: string;
   speaker: string;
-  emotion: Emotion;
+  emotion: Emotion;              // primary emotion (highest weight)
   subpattern?: string;
+  // Compound breakdown — present when the beat carries mixed emotions.
+  emotions?: EmotionWeight[];
+  // Emotional subtext of sexual/intimate content when detected.
+  subtext?: string;
   text: string;                  // the chunk text
   motivation: string;
   relationalDynamics: string;

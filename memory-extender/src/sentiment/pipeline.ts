@@ -2,7 +2,7 @@
 // Runs Stages 0–3 in sequence on a list of chat messages.
 
 import type { DigestMessage } from "../digest.js";
-import type { EmotionalBeat } from "./types.js";
+import type { EmotionalBeat, ClassificationResult } from "./types.js";
 import { chunkMessages } from "./chunker.js";
 import { classifyChunks } from "./classifier.js";
 import { analyzeChunks } from "./analyzer.js";
@@ -27,6 +27,8 @@ export interface PipelineResult {
   chunksFiltered: number;
 }
 
+const NARRATIVE_POSITION_BOOST = 1.3;
+
 export async function runSentimentPipeline(
   messages: DigestMessage[],
   characterId: string,
@@ -49,22 +51,45 @@ export async function runSentimentPipeline(
   const classifications = classifyChunks(chunks, sourceType);
   const passing = classifications.filter((c) => c.passesThreshold);
 
-  // Drop chunks from characters not in the allow-list (e.g. walk-on NPCs).
-  const filtered = characters?.length
-    ? passing.filter((c) => characters.includes(c.chunk.speaker))
-    : passing;
+  // Drop one-off speakers in story mode when no explicit allow-list is given.
+  // Speakers appearing in only one chunk carry no arc and are walk-ons (taxi
+  // drivers, desk clerks). Count across all classifications, not just passing,
+  // so a one-off with a fluke-high salience chunk is still caught.
+  let filtered: ClassificationResult[];
+  if (sourceType === "story" && !characters?.length) {
+    const speakerCounts = new Map<string, number>();
+    for (const c of classifications) {
+      speakerCounts.set(c.chunk.speaker, (speakerCounts.get(c.chunk.speaker) ?? 0) + 1);
+    }
+    filtered = passing.filter((c) => (speakerCounts.get(c.chunk.speaker) ?? 0) > 1);
+  } else {
+    filtered = characters?.length
+      ? passing.filter((c) => characters.includes(c.chunk.speaker))
+      : passing;
+  }
 
   // Stage 2: deep analyze (only passing + allowed chunks)
   const analyzed = await analyzeChunks(filtered);
 
+  // Narrative position boost: the final 20% of a story carries climax and
+  // resolution weight. Boost stored salience so these beats surface first
+  // during retrieval without changing which chunks passed the threshold.
+  const totalTurns = chunks.length > 0 ? chunks[chunks.length - 1].turnEnd + 1 : 0;
+  const boostThresholdTurn = Math.floor(totalTurns * 0.8);
+  const boosted = analyzed.map(({ result, analysis }) =>
+    result.chunk.turnStart >= boostThresholdTurn
+      ? { result, analysis: { ...analysis, salience: Math.min(1.0, analysis.salience * NARRATIVE_POSITION_BOOST) } }
+      : { result, analysis },
+  );
+
   // Stage 3: encode to disk
-  const beats = await encodeBeats(characterId, analyzed, sourceType);
+  const beats = await encodeBeats(characterId, boosted, sourceType);
 
   return {
     beats,
     chunksTotal:    chunks.length,
-    chunksAnalyzed: analyzed.length,
-    chunksFailed:   filtered.length - analyzed.length,
+    chunksAnalyzed: boosted.length,
+    chunksFailed:   filtered.length - boosted.length,
     chunksFiltered: passing.length - filtered.length,
   };
 }

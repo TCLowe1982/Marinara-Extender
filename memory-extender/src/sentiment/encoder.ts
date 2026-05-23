@@ -146,6 +146,8 @@ export async function encodeBeat(
     speaker:           result.chunk.speaker,
     emotion:           result.primaryEmotion!,
     subpattern:        analysis.subpattern,
+    emotions:          analysis.emotions,
+    subtext:           analysis.subtext,
     text:              result.chunk.text,
     motivation:        analysis.motivation,
     relationalDynamics: analysis.relationalDynamics,

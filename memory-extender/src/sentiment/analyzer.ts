@@ -7,13 +7,52 @@
 //
 // Each emotion has its own system prompt tuned to ask the right questions.
 // Dysregulation is the most complex: it identifies which sub-pattern is
-// driving the behavior (bpd_testing, dissociation, anxious_protest, etc.)
-// and focuses on what's underneath the surface behavior.
+// driving the behavior and focuses on what's underneath the surface behavior.
+//
+// Context window: each chunk is analyzed with the preceding and following
+// chunks visible so the model understands tone-vs-intent and conversational
+// register rather than reading lines in isolation.
 
 import { getCachedAuth } from "../auth-cache.js";
-import type { BeatAnalysis, ClassificationResult, Emotion } from "./types.js";
+import type { BeatAnalysis, ClassificationResult, Emotion, EmotionWeight } from "./types.js";
+
+// ── Sexual content detector ───────────────────────────────────────────────────
+// Used to trigger subtext analysis on desire/joy/vulnerability beats.
+// Matches explicit and intimacy-register vocabulary without being exhaustive —
+// the goal is to catch content where the emotional function matters, not to
+// filter the content itself.
+
+const INTIMATE_KEYWORDS = [
+  "cock", "pussy", "breast", "nipple", "naked", "nude", "sex", "fuck",
+  "orgasm", "cum", "erection", "aroused", "masturbat", "blew", "blow job",
+  "thigh", "straddl", "grind", "thrust", "penetrat",
+  // intimacy-register phrases already in desire keywords that double as signals
+  "pressed against", "gave herself", "gave himself", "surrender",
+  "let him in", "let her in", "bared herself", "bared himself",
+];
+
+function hasIntimateContent(text: string): boolean {
+  const lower = text.toLowerCase();
+  return INTIMATE_KEYWORDS.some((kw) => lower.includes(kw));
+}
 
 // ── JSON extraction (handles markdown-fenced responses) ────────────────────
+
+function parseEmotions(raw: unknown): EmotionWeight[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const result: EmotionWeight[] = [];
+  for (const item of raw) {
+    if (typeof item === "object" && item !== null &&
+        typeof (item as Record<string, unknown>).emotion === "string" &&
+        typeof (item as Record<string, unknown>).weight === "number") {
+      result.push({
+        emotion: (item as { emotion: Emotion; weight: number }).emotion,
+        weight:  (item as { emotion: Emotion; weight: number }).weight,
+      });
+    }
+  }
+  return result.length > 0 ? result : undefined;
+}
 
 function parseAnalysisJson(raw: string): BeatAnalysis | null {
   const attempts = [
@@ -33,6 +72,9 @@ function parseAnalysisJson(raw: string): BeatAnalysis | null {
         relationalDynamics: parsed.relational_dynamics.trim(),
         outcome:           parsed.outcome.trim(),
         subpattern:        typeof parsed.subpattern === "string" ? parsed.subpattern : undefined,
+        emotions:          parseEmotions(parsed.emotions),
+        subtext:           typeof parsed.subtext === "string" && parsed.subtext.trim()
+                             ? parsed.subtext.trim() : undefined,
         salience:          typeof parsed.salience === "number"
                              ? Math.min(1, Math.max(0, parsed.salience))
                              : 0.5,
@@ -86,7 +128,7 @@ async function callExternal(systemPrompt: string, userPrompt: string): Promise<s
         { role: "user",   content: userPrompt },
       ],
       temperature: 0.2,
-      max_tokens: 500,
+      max_tokens: 600,
     }),
   });
   if (!res.ok) throw new Error(`Analyzer external API failed (${res.status}): ${await res.text()}`);
@@ -102,19 +144,24 @@ async function callLlm(systemPrompt: string, userPrompt: string): Promise<string
 
 // ── System prompts ─────────────────────────────────────────────────────────
 // Each prompt is tuned to extract the most meaningful signal for that emotion.
-// All output the same JSON shape; dysregulation also outputs subpattern.
+// All prompts request a compound emotions array and an optional subtext field.
 
-const JSON_FORMAT_STANDARD =
-  `{"motivation":"...","relational_dynamics":"...","outcome":"...","salience":0.0}`;
-const JSON_FORMAT_WITH_SUBPATTERN =
-  `{"motivation":"...","relational_dynamics":"...","outcome":"...","subpattern":"...","salience":0.0}`;
+const EMOTIONS_FORMAT = `[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}]`;
+
+const SUBTEXT_INSTRUCTION = `
+- subtext: If this chunk contains sexual or physically intimate content, analyze the EMOTIONAL FUNCTION of that content — what is it doing beyond arousal? Consider: trust-building, vulnerability, power exchange, marking/claiming, first-time significance, comfort-seeking, validation, grief, or avoidance. If no sexual/intimate content is present, omit this field or set it to null.`.trim();
 
 const SHARED_RULES = `
 Rules:
+- Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - Be specific to the text provided — do not generalize.
 - 1–3 sentences per field.
 - salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
+- emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
 - Respond with raw JSON only — no explanation, no markdown.`.trim();
+
+const JSON_FORMAT_STANDARD = `{"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":${EMOTIONS_FORMAT},"subtext":null,"salience":0.0}`;
+const JSON_FORMAT_WITH_SUBPATTERN = `{"motivation":"...","relational_dynamics":"...","outcome":"...","subpattern":"...","emotions":${EMOTIONS_FORMAT},"subtext":null,"salience":0.0}`;
 
 function fearPrompt(): string {
   return `You are analyzing a moment of fear in a conversation.
@@ -123,6 +170,7 @@ Extract the emotional beat as JSON:
 - motivation: What is this person actually afraid of? What threat — real or perceived — is activating the fear response? What does this fear protect or preserve?
 - relational_dynamics: How is the fear affecting or being shaped by the relationship in this moment? Does it push them toward clinging, fleeing, or freezing?
 - outcome: What does this moment of fear signal about what could happen next — in this relationship or within this person?
+${SUBTEXT_INSTRUCTION}
 
 ${SHARED_RULES}
 
@@ -136,6 +184,7 @@ Extract the emotional beat as JSON:
 - motivation: What core belief about the self is being activated? What did this person do, feel, or reveal that triggered shame — and what does that say about their self-image?
 - relational_dynamics: How is shame functioning relationally here? Is it causing hiding, withdrawal, self-attack, or a bid for reassurance?
 - outcome: What does this shame moment suggest about how this person will behave next — toward themselves or toward others?
+${SUBTEXT_INSTRUCTION}
 
 ${SHARED_RULES}
 
@@ -149,6 +198,7 @@ Extract the emotional beat as JSON:
 - motivation: What is this person hoping for? What does this hope reveal about what they want or need most right now?
 - relational_dynamics: How is hope functioning in the relationship — is it building trust, creating vulnerability, or setting up the risk of disappointment?
 - outcome: What does this moment of hope suggest about where this person or relationship is heading?
+${SUBTEXT_INSTRUCTION}
 
 ${SHARED_RULES}
 
@@ -162,6 +212,7 @@ Extract the emotional beat as JSON:
 - motivation: What does this person want — and what does that want reveal about what they feel is missing or possible? Is this desire for connection, safety, pleasure, or something else?
 - relational_dynamics: How is desire functioning between these people — is it drawing them closer, creating tension, or exposing vulnerability?
 - outcome: What does this desire moment suggest about what this person will do or feel next?
+${SUBTEXT_INSTRUCTION}
 
 ${SHARED_RULES}
 
@@ -175,6 +226,7 @@ Extract the emotional beat as JSON:
 - motivation: What tension, fear, or dread has just released? What had this person been carrying that they can now put down?
 - relational_dynamics: How does this relief affect the relationship dynamic — does it create closeness, lower defenses, or reveal how much pressure the person was under?
 - outcome: What does this moment of relief open up — for this person or for this relationship?
+${SUBTEXT_INSTRUCTION}
 
 ${SHARED_RULES}
 
@@ -188,6 +240,7 @@ Extract the emotional beat as JSON:
 - motivation: What is this person exposing, admitting, or allowing to be seen? What makes this moment an act of courage or risk for them?
 - relational_dynamics: How does this vulnerability land in the relationship? Does it invite reciprocity, create intimacy, or risk rejection?
 - outcome: What does this moment of openness suggest about where this person or relationship could go from here?
+${SUBTEXT_INSTRUCTION}
 
 ${SHARED_RULES}
 
@@ -201,6 +254,7 @@ Extract the emotional beat as JSON:
 - motivation: Is trust being offered, tested, confirmed, or broken here? What does this person's relationship with trust reveal about their history or current state?
 - relational_dynamics: How is trust functioning between these people — is it deepening the bond, revealing a wound, or exposing a pattern?
 - outcome: What does this trust moment predict about what will happen next in this relationship?
+${SUBTEXT_INSTRUCTION}
 
 ${SHARED_RULES}
 
@@ -214,6 +268,7 @@ Extract the emotional beat as JSON:
 - motivation: What is underneath the anger? Anger is usually a secondary emotion — what hurt, fear, or violated need is it protecting? What does this person feel has been taken from them or disrespected?
 - relational_dynamics: How is anger functioning between these people — is it creating distance, demanding to be seen, testing limits, or protecting something tender?
 - outcome: What does this anger signal about what this person needs, and what might happen if they don't get it?
+${SUBTEXT_INSTRUCTION}
 
 ${SHARED_RULES}
 
@@ -227,6 +282,7 @@ Extract the emotional beat as JSON:
 - motivation: What is generating this joy? What does it reveal about what this person values or has been missing?
 - relational_dynamics: How is joy affecting the connection between these people — is it creating intimacy, softening tension, or marking a turning point?
 - outcome: What does this moment of joy suggest about the relationship's potential or direction?
+${SUBTEXT_INSTRUCTION}
 
 ${SHARED_RULES}
 
@@ -256,6 +312,7 @@ Extract the emotional beat as JSON:
 - relational_dynamics: How is this dysregulation affecting the relationship dynamic right now? What is it asking of the other person?
 - outcome: If this pattern continues unaddressed, what happens? What does this person actually need in this moment?
 - subpattern: The single best-matching subpattern from the list above (exact key name), or null if none fits clearly.
+${SUBTEXT_INSTRUCTION}
 
 ${SHARED_RULES}
 
@@ -279,7 +336,14 @@ function buildSystemPrompt(emotion: Emotion, structuralSubpatterns: string[]): s
   }
 }
 
-function buildUserPrompt(result: ClassificationResult): string {
+// ── Context window ─────────────────────────────────────────────────────────
+
+export interface AnalysisContext {
+  before?: ClassificationResult;
+  after?: ClassificationResult;
+}
+
+function buildUserPrompt(result: ClassificationResult, context?: AnalysisContext): string {
   const { chunk, scores, primaryEmotion, salience, structuralMatches } = result;
 
   const scoreLines = Object.entries(scores)
@@ -291,7 +355,24 @@ function buildUserPrompt(result: ClassificationResult): string {
     ? `\nStructural signals detected: ${structuralMatches.map(m => m.patternId).join(", ")}`
     : "";
 
-  return `Speaker: ${chunk.speaker}
+  const beforeBlock = context?.before
+    ? `Preceding context (${context.before.chunk.speaker} — for tone/intent reference only):
+"""
+${context.before.chunk.text.slice(0, 400)}${context.before.chunk.text.length > 400 ? "…" : ""}
+"""
+
+`
+    : "";
+
+  const afterBlock = context?.after
+    ? `
+Following context (${context.after.chunk.speaker} — for tone/intent reference only):
+"""
+${context.after.chunk.text.slice(0, 400)}${context.after.chunk.text.length > 400 ? "…" : ""}
+"""`
+    : "";
+
+  return `${beforeBlock}ANALYZE THIS — Speaker: ${chunk.speaker}
 Primary emotion detected: ${primaryEmotion ?? "unknown"} (salience ${salience.toFixed(2)})
 All emotion scores:
 ${scoreLines}${structuralLines}
@@ -300,14 +381,16 @@ Dialogue chunk:
 """
 ${chunk.text}
 """
+${afterBlock}
 
-Analyze the emotional beat in this chunk.`;
+Analyze the emotional beat in the chunk marked "ANALYZE THIS".`;
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
 export async function analyzeChunk(
   result: ClassificationResult,
+  context?: AnalysisContext,
 ): Promise<BeatAnalysis | null> {
   if (!result.passesThreshold || !result.primaryEmotion) return null;
 
@@ -316,7 +399,7 @@ export async function analyzeChunk(
     .filter((s): s is string => Boolean(s));
 
   const systemPrompt = buildSystemPrompt(result.primaryEmotion, structuralSubpatterns);
-  const userPrompt   = buildUserPrompt(result);
+  const userPrompt   = buildUserPrompt(result, context);
 
   const raw = await callLlm(systemPrompt, userPrompt);
   return parseAnalysisJson(raw);
@@ -333,8 +416,18 @@ export async function analyzeChunks(
   const passing = results.filter((r) => r.passesThreshold && r.primaryEmotion);
   const output: AnalyzedBeat[] = [];
 
-  for (const result of passing) {
-    const analysis = await analyzeChunk(result);
+  for (let i = 0; i < passing.length; i++) {
+    const result = passing[i]!;
+    const context: AnalysisContext = {
+      before: passing[i - 1],
+      after:  passing[i + 1],
+    };
+    // Only pass context when there actually is a neighbor — avoids confusing
+    // the model with an empty context block.
+    const analysis = await analyzeChunk(result, {
+      before: context.before,
+      after:  context.after,
+    });
     if (analysis) output.push({ result, analysis });
   }
 

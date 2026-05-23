@@ -213,6 +213,40 @@ marinara.addStyle(`
   .me-loading, .me-empty, .me-error { padding: 12px 10px; color: #6b7280; font-size: 11px; text-align: center; }
   .me-error { color: #f87171; }
 
+  /* Identity section */
+  .me-identity-section { border-top: 1px solid #2e2b27; }
+  .me-identity-toggle {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 10px; cursor: pointer; width: 100%;
+    background: none; border: none; color: inherit; font-family: inherit;
+    font-size: 12px; text-align: left;
+  }
+  .me-identity-toggle:hover { background: #252320; }
+  .me-identity-body { padding: 4px 10px 8px; }
+  .me-id-field { display: flex; align-items: center; gap: 4px; margin-bottom: 5px; }
+  .me-id-label { font-size: 10px; color: #6b7280; flex-shrink: 0; width: 46px; }
+  .me-id-value {
+    flex: 1; min-width: 0; font-size: 10px; font-family: monospace;
+    color: #c9c5bf; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    cursor: pointer;
+  }
+  .me-id-value:hover { color: #e8e5e0; }
+  .me-id-copy {
+    flex-shrink: 0; background: none; border: none;
+    color: #6b7280; font-size: 11px; cursor: pointer; padding: 0 3px;
+  }
+  .me-id-copy:hover { color: #e8e5e0; }
+  .me-relink-label { font-size: 10px; color: #6b7280; margin: 6px 0 3px; }
+  .me-relink-row { display: flex; gap: 4px; }
+  .me-relink-input {
+    flex: 1; background: #252320; border: 1px solid #3d3a36;
+    border-radius: 4px; color: #e8e5e0; font-size: 11px;
+    padding: 3px 6px; font-family: inherit; outline: none; min-width: 0;
+  }
+  .me-relink-input:focus { border-color: #f97316; }
+  .me-relink-ok  { font-size: 10px; color: #34d399; margin-top: 4px; }
+  .me-relink-err { font-size: 10px; color: #f87171; margin-top: 4px; }
+
   /* Import section */
   .me-import-section { border-top: 1px solid #2e2b27; }
   .me-import-toggle {
@@ -347,6 +381,12 @@ const panelState = {
   importAllActive: false,
   importAllProgress: null, // { current, total }
   importResults: {},       // { [chatId]: { count } | { error } }
+  // Identity section
+  identityExpanded: false,
+  identityKey: null,       // loaded from /api/identity on expand
+  identityLoading: false,
+  relinkInput: "",
+  relinkStatus: null,      // null | "ok" | string (error message)
 };
 
 // ── Panel DOM ─────────────────────────────────────────────────────────────────
@@ -404,6 +444,7 @@ function renderPanel() {
       content.appendChild(renderLaneSection(lane, entries));
     }
     content.appendChild(renderBookmarksSection(panelState.bookmarks));
+    content.appendChild(renderIdentitySection());
     content.appendChild(renderImportSection());
   }
 
@@ -581,6 +622,151 @@ function renderBookmark(bm) {
   wrap.appendChild(why);
 
   return wrap;
+}
+
+// ── Identity section render ───────────────────────────────────────────────────
+
+function copyToClipboard(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = "✓";
+    marinara.setTimeout(() => { btn.textContent = orig; }, 1200);
+  }).catch(() => {});
+}
+
+function renderIdentitySection() {
+  if (!panelState.session) return el("div", "");
+  const { characterId, chatId } = panelState.session;
+
+  const wrap = el("div", "me-identity-section");
+
+  const toggleBtn = el("button", "me-identity-toggle");
+  const dot_ = el("span", "me-section-dot");
+  dot_.style.background = "#6366f1";
+  dot_.style.flexShrink = "0";
+  const label = el("span", "me-section-label");
+  label.textContent = "Identity";
+  const chevron = el("span", "me-import-chevron");
+  chevron.textContent = "▶";
+  if (panelState.identityExpanded) chevron.classList.add("open");
+  toggleBtn.append(dot_, label, chevron);
+  wrap.appendChild(toggleBtn);
+
+  toggleBtn.addEventListener("click", () => {
+    panelState.identityExpanded = !panelState.identityExpanded;
+    if (panelState.identityExpanded && panelState.identityKey === null) {
+      loadIdentityInfo();
+    } else {
+      renderPanel();
+    }
+  });
+
+  if (!panelState.identityExpanded) return wrap;
+
+  const body = el("div", "me-identity-body");
+
+  if (panelState.identityLoading) {
+    const msg = el("div", "me-loading"); msg.textContent = "Loading…";
+    body.appendChild(msg); wrap.appendChild(body); return wrap;
+  }
+
+  // Character ID row
+  const charRow = el("div", "me-id-field");
+  const charLbl = el("span", "me-id-label"); charLbl.textContent = "Card ID";
+  const charVal = el("span", "me-id-value"); charVal.textContent = characterId; charVal.title = characterId;
+  const charCopy = el("button", "me-id-copy"); charCopy.textContent = "⎘"; charCopy.title = "Copy";
+  charCopy.addEventListener("click", () => copyToClipboard(characterId, charCopy));
+  charRow.append(charLbl, charVal, charCopy);
+  body.appendChild(charRow);
+
+  // Chat ID row
+  const chatRow = el("div", "me-id-field");
+  const chatLbl = el("span", "me-id-label"); chatLbl.textContent = "Chat ID";
+  const chatVal = el("span", "me-id-value"); chatVal.textContent = chatId; chatVal.title = chatId;
+  const chatCopy = el("button", "me-id-copy"); chatCopy.textContent = "⎘"; chatCopy.title = "Copy";
+  chatCopy.addEventListener("click", () => copyToClipboard(chatId, chatCopy));
+  chatRow.append(chatLbl, chatVal, chatCopy);
+  body.appendChild(chatRow);
+
+  // Identity key row
+  if (panelState.identityKey) {
+    const keyRow = el("div", "me-id-field");
+    const keyLbl = el("span", "me-id-label"); keyLbl.textContent = "Key";
+    const keyVal = el("span", "me-id-value"); keyVal.textContent = panelState.identityKey; keyVal.title = panelState.identityKey;
+    const keyCopy = el("button", "me-id-copy"); keyCopy.textContent = "⎘"; keyCopy.title = "Copy";
+    keyCopy.addEventListener("click", () => copyToClipboard(panelState.identityKey, keyCopy));
+    keyRow.append(keyLbl, keyVal, keyCopy);
+    body.appendChild(keyRow);
+  }
+
+  // Relink form — points a new card ID at this character's memory bucket
+  const relinkLbl = el("div", "me-relink-label");
+  relinkLbl.textContent = "Card recreated? Link new ID to this identity:";
+  body.appendChild(relinkLbl);
+
+  const relinkRow = el("div", "me-relink-row");
+  const relinkInput = el("input", "me-relink-input");
+  relinkInput.type = "text";
+  relinkInput.placeholder = "New card ID…";
+  relinkInput.value = panelState.relinkInput;
+  relinkInput.addEventListener("input", e => { panelState.relinkInput = e.target.value; panelState.relinkStatus = null; });
+
+  const relinkBtn = el("button", "me-btn-primary");
+  relinkBtn.textContent = "Relink";
+  relinkBtn.style.flexShrink = "0";
+  relinkBtn.addEventListener("click", () => doRelink(panelState.identityKey ?? ""));
+  relinkRow.append(relinkInput, relinkBtn);
+  body.appendChild(relinkRow);
+
+  if (panelState.relinkStatus === "ok") {
+    const ok = el("div", "me-relink-ok"); ok.textContent = "✓ Relinked successfully";
+    body.appendChild(ok);
+  } else if (panelState.relinkStatus) {
+    const err = el("div", "me-relink-err"); err.textContent = panelState.relinkStatus;
+    body.appendChild(err);
+  }
+
+  wrap.appendChild(body);
+  return wrap;
+}
+
+async function loadIdentityInfo() {
+  if (!panelState.session) return;
+  panelState.identityLoading = true;
+  renderPanel();
+  try {
+    const res = await memFetch("/api/identity");
+    const entries = Array.isArray(res?.entries) ? res.entries : [];
+    const match = entries.find(e => String(e.characterId) === String(panelState.session.characterId));
+    panelState.identityKey = match?.identityKey ?? null;
+  } catch {
+    panelState.identityKey = null;
+  }
+  panelState.identityLoading = false;
+  renderPanel();
+}
+
+async function doRelink(identityKey) {
+  const newId = panelState.relinkInput.trim();
+  if (!newId || !identityKey) {
+    panelState.relinkStatus = "Enter a card ID and ensure identity key is loaded.";
+    renderPanel(); return;
+  }
+  try {
+    const res = await memFetch("/api/identity/relink", {
+      method: "POST",
+      body: JSON.stringify({ characterId: newId, identityKey }),
+    });
+    if (res?.ok) {
+      panelState.relinkStatus = "ok";
+      panelState.relinkInput = "";
+    } else {
+      panelState.relinkStatus = res?.error ?? "Relink failed.";
+    }
+  } catch (err) {
+    panelState.relinkStatus = String(err);
+  }
+  renderPanel();
 }
 
 // ── Import section render ─────────────────────────────────────────────────────
@@ -1301,6 +1487,10 @@ marinara.on(window, "marinara:generation-complete", async e => {
     panelState.session = null;
     panelState.importChats = null;
     panelState.importExpanded = false;
+    panelState.identityKey = null;
+    panelState.identityExpanded = false;
+    panelState.relinkStatus = null;
+    panelState.relinkInput = "";
     await refreshSession();
   }
   // Call explicitly here so we're guaranteed currentSession is set,
@@ -1328,6 +1518,10 @@ marinara.observe('.mari-messages-scroll > .sticky.top-0', async () => {
     panelState.session = null;
     panelState.importChats = null;
     panelState.importExpanded = false;
+    panelState.identityKey = null;
+    panelState.identityExpanded = false;
+    panelState.relinkStatus = null;
+    panelState.relinkInput = "";
     await refreshSession();
   }
 });

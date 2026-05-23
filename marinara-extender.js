@@ -942,12 +942,6 @@ async function loadIngestFile(file) {
 
 async function doStoryIngest() {
   if (!panelState.session || !panelState.ingestText.trim()) return;
-
-  // Ask for notification permission now — we're inside a click handler (valid gesture).
-  if ("Notification" in window && Notification.permission === "default") {
-    await Notification.requestPermission();
-  }
-
   panelState.ingestRunning = true;
   panelState.ingestStatus = "Analyzing story…";
   panelState.ingestResult = null;
@@ -1087,7 +1081,13 @@ function renderStoryIngestSection() {
   const runBtn = el("button", "me-btn-primary");
   runBtn.disabled = panelState.ingestRunning || !panelState.ingestText.trim() || !panelState.session;
   runBtn.textContent = panelState.ingestRunning ? "Analyzing…" : "Analyze";
-  runBtn.addEventListener("click", doStoryIngest);
+  runBtn.addEventListener("click", () => {
+    // Must be synchronous in the click handler — Firefox rejects requestPermission from async fns.
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+    doStoryIngest();
+  });
   const countEl = el("span", "me-ingest-count");
   const len = panelState.ingestText.length;
   countEl.textContent = len > 0 ? `${len.toLocaleString()} chars` : "";

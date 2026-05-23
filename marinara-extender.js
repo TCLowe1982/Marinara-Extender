@@ -71,9 +71,17 @@ const STATUS_BADGE = {
 
 marinara.addStyle(`
   /* Toggle button — Tailwind classes handle layout/color; only non-Tailwind extras here */
-  .me-toggle-btn { font-size: 16px; line-height: 1; cursor: pointer; }
+  .me-toggle-btn { font-size: 16px; line-height: 1; cursor: pointer; position: relative; }
   .me-toggle-btn:hover { }
   .me-toggle-btn.sidecar-down { color: #f87171; }
+
+  /* Notification badge on the toggle button */
+  .me-badge {
+    position: absolute; top: 0px; right: -2px;
+    background: #8b5cf6; border: 1.5px solid #1a1917;
+    border-radius: 50%; width: 8px; height: 8px;
+    pointer-events: none;
+  }
 
   /* Hide memory/system tags that the AI renders as DOM elements.
      CSS is React-proof — el.remove() gets undone on re-render, this doesn't. */
@@ -372,6 +380,29 @@ function escHtml(s) {
 
 function shorten(id, len = 12) {
   return id.length > len ? id.slice(0, len) + "…" : id;
+}
+
+// ── Ingest completion notification ───────────────────────────────────────────
+
+function showIngestBadge() {
+  const btn = document.getElementById("me-toggle");
+  if (!btn || btn.querySelector(".me-badge")) return;
+  const dot = document.createElement("span");
+  dot.className = "me-badge";
+  btn.appendChild(dot);
+}
+
+function clearIngestBadge() {
+  document.getElementById("me-toggle")?.querySelector(".me-badge")?.remove();
+}
+
+function notifyIngestDone(characterName, beatCount) {
+  showIngestBadge();
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  new Notification("Story analysis complete", {
+    body: `${beatCount} beat${beatCount === 1 ? "" : "s"} saved for ${characterName ?? "character"}`,
+    silent: true,
+  });
 }
 
 // ── Sidecar fetch helper ──────────────────────────────────────────────────────
@@ -911,6 +942,12 @@ async function loadIngestFile(file) {
 
 async function doStoryIngest() {
   if (!panelState.session || !panelState.ingestText.trim()) return;
+
+  // Ask for notification permission now — we're inside a click handler (valid gesture).
+  if ("Notification" in window && Notification.permission === "default") {
+    await Notification.requestPermission();
+  }
+
   panelState.ingestRunning = true;
   panelState.ingestStatus = "Analyzing story…";
   panelState.ingestResult = null;
@@ -935,8 +972,10 @@ async function doStoryIngest() {
       chunksFiltered: res.chunksFiltered,
       chunksFailed:   res.chunksFailed,
     };
+    notifyIngestDone(characterName, res.beats?.length ?? 0);
   } catch (err) {
     panelState.ingestResult = { error: err.message ?? "Ingest failed" };
+    notifyIngestDone(characterName, 0);  // badge still appears so they know it finished
   }
 
   panelState.ingestRunning = false;
@@ -1357,6 +1396,7 @@ async function removeBookmark(bm) {
 async function openPanel() {
   if (!panel) return;
   panel.classList.add("open");
+  clearIngestBadge();
   if (!currentSession) currentSession = await resolveSession();
   panelState.session = currentSession;
   panelState.loading = true;

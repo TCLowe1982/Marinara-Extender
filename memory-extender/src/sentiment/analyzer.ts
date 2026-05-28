@@ -95,7 +95,7 @@ async function callSidecar(systemPrompt: string, userPrompt: string): Promise<st
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ systemPrompt, userPrompt }),
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) return null;
     const json = (await res.json()) as { result?: string };
@@ -138,7 +138,11 @@ async function callExternal(systemPrompt: string, userPrompt: string): Promise<s
 
 async function callLlm(systemPrompt: string, userPrompt: string): Promise<string> {
   const result = await callSidecar(systemPrompt, userPrompt);
-  if (result !== null) return result;
+  if (result !== null) {
+    console.debug("[analyzer] sidecar ok");
+    return result;
+  }
+  console.warn("[analyzer] sidecar unavailable — falling back to external API");
   return callExternal(systemPrompt, userPrompt);
 }
 

@@ -157,11 +157,11 @@ Use [remember: ...] when something is genuinely worth keeping long-term:
   [remember: lane="user_topics", content="User's daughter Emma just turned 8."]
   [remember: lane="open_threads", content="User wants to plan Emma's birthday party."]
   [remember: lane="character_topics", content="I want to ask how the party went next time."]
-  [remember: lane="user_topics", scope="character", content="User hates surprises — noted for all chats."]
+  [remember: lane="open_threads", scope="chat", content="We are currently mid-way through editing the cover letter."]
 
   lane  — user_topics (facts about the user) · open_threads (tasks to track) ·
           character_topics (things you want to bring up)
-  scope — chat (this conversation only, default) · character (all future chats with this user)
+  scope — character (persists across all future chats, default) · chat (this conversation only)
 
 How to save a soft signal (decays over time):
 For things that matter right now but may fade naturally — unresolved emotion,

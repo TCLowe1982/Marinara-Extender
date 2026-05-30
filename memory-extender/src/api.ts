@@ -31,7 +31,7 @@ import { loadContext } from "./loader.js";
 import { runSentimentPipeline } from "./sentiment/pipeline.js";
 import mammoth from "mammoth";
 import { parseStoryToMessages } from "./story-parser.js";
-import { readBeatIndex, readAllBeats } from "./sentiment/encoder.js";
+import { readBeatIndex, readAllBeats, clearBeats } from "./sentiment/encoder.js";
 import {
   resolveIdentity,
   getIdentityMap,
@@ -784,6 +784,21 @@ export function registerApiRoutes(app: FastifyInstance): void {
         error: err instanceof Error ? err.message : "Story ingest failed",
       });
     }
+  });
+
+  // ── DELETE /api/beats/:characterId ───────────────────────────────────────
+  // Wipes all saved beats for a character (index + individual files).
+  // Use before re-ingesting a story with corrected settings (e.g. POV char).
+
+  app.delete<{
+    Params: { characterId: string };
+  }>("/api/beats/:characterId", async (req, reply) => {
+    const { characterId } = req.params;
+    if (!characterId) return reply.code(400).send({ error: "characterId is required" });
+    const identityKey = await resolveIdentity(characterId);
+    const deleted = await clearBeats(identityKey);
+    console.info(`[ME] beats cleared — key:${identityKey} — ${deleted} beats removed`);
+    return reply.send({ ok: true, deleted });
   });
 
   // ── GET /api/identity ─────────────────────────────────────────────────────

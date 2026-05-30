@@ -7,7 +7,7 @@
 // without reading every beat file. The beats store is intentionally separate
 // from the main entries/ index so the existing memory UI is unaffected.
 
-import { readFile, writeFile, mkdir, access } from "fs/promises";
+import { readFile, writeFile, mkdir, access, rm } from "fs/promises";
 import { join, dirname } from "path";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 import { nanoid } from "../nanoid.js";
@@ -161,6 +161,26 @@ export async function encodeBeat(
 
   await writeBeat(characterId, beat);
   return beat;
+}
+
+// ── Beat clear ─────────────────────────────────────────────────────────────
+
+export async function clearBeats(characterId: string): Promise<number> {
+  const index = await readBeatIndex(characterId);
+  if (!index) return 0;
+
+  let deleted = 0;
+  for (const entry of index.entries) {
+    try {
+      await rm(beatFilePath(characterId, entry.id));
+      deleted++;
+    } catch { /* file already gone */ }
+  }
+  try {
+    await rm(beatIndexPath(characterId));
+  } catch { /* already gone */ }
+
+  return deleted;
 }
 
 export async function encodeBeats(

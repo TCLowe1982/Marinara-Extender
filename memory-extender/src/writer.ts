@@ -103,7 +103,7 @@ export function extractRememberTags(text: string): ExtractedRemember[] {
     const content = match[2]!.trim();
     if (!content) continue;
     const laneRaw  = extractAttr(attrStr, "lane")  ?? "user_topics";
-    const scopeRaw = extractAttr(attrStr, "scope") ?? "chat";
+    const scopeRaw = extractAttr(attrStr, "scope") ?? "character";
     found.push({
       lane:  (VALID_LANES_SET.has(laneRaw)  ? laneRaw  : "user_topics")  as Lane,
       scope: (VALID_SCOPES_SET.has(scopeRaw) ? scopeRaw : "chat")         as Scope,
@@ -118,7 +118,7 @@ export function extractRememberTags(text: string): ExtractedRemember[] {
     const content = parseBracketParam(params, "content");
     if (!content || content.trim().length === 0) continue;
     const laneRaw  = parseBracketParam(params, "lane")  ?? "user_topics";
-    const scopeRaw = parseBracketParam(params, "scope") ?? "chat";
+    const scopeRaw = parseBracketParam(params, "scope") ?? "character";
     found.push({
       lane:  (VALID_LANES_SET.has(laneRaw)  ? laneRaw  : "user_topics")  as Lane,
       scope: (VALID_SCOPES_SET.has(scopeRaw) ? scopeRaw : "chat")         as Scope,

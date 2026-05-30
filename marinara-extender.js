@@ -351,6 +351,41 @@ marinara.addStyle(`
   .me-ingest-result { margin-top: 6px; font-size: 11px; line-height: 1.4; }
   .me-ingest-ok { color: #34d399; }
   .me-ingest-err { color: #f87171; }
+  .me-ingest-clear-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; padding-top: 6px; border-top: 1px dashed #2e2b27; }
+  .me-btn-danger {
+    background: none; border: 1px solid #3d3a36; border-radius: 4px;
+    color: #9ca3af; font-size: 11px; cursor: pointer;
+    padding: 3px 8px; font-family: inherit;
+  }
+  .me-btn-danger:hover:not(:disabled) { border-color: #f87171; color: #f87171; background: #3f1414; }
+  .me-btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Settings section */
+  .me-settings-section { border-top: 1px solid #2e2b27; }
+  .me-settings-toggle {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 10px; cursor: pointer; width: 100%;
+    background: none; border: none; color: inherit; font-family: inherit;
+    font-size: 12px; text-align: left;
+  }
+  .me-settings-toggle:hover { background: #252320; }
+  .me-settings-body { padding: 4px 10px 8px; }
+  .me-settings-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+  .me-settings-lbl { font-size: 11px; color: #c9c5bf; flex: 1; }
+  .me-settings-lbl small { display: block; font-size: 10px; color: #4b5563; margin-top: 1px; }
+  .me-toggle-pill {
+    flex-shrink: 0; width: 34px; height: 18px; border-radius: 9px;
+    border: none; cursor: pointer; position: relative; transition: background 0.2s;
+    background: #3d3a36;
+  }
+  .me-toggle-pill.on { background: #8b5cf6; }
+  .me-toggle-pill:disabled { opacity: 0.5; cursor: not-allowed; }
+  .me-toggle-pill::after {
+    content: ''; position: absolute; top: 2px; left: 2px;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: #9ca3af; transition: transform 0.2s, background 0.2s;
+  }
+  .me-toggle-pill.on::after { transform: translateX(16px); background: #fff; }
 
   /* Setup banner */
   #me-setup-banner {
@@ -483,6 +518,13 @@ const panelState = {
   ingestRunning: false,
   ingestStatus: "",    // short message shown while running
   ingestResult: null,
+  ingestClearRunning: false,
+  ingestClearResult: null,
+  // Settings section
+  settingsExpanded: false,
+  stripTagsEnabled: null,   // null = not yet loaded
+  stripTagsScriptId: null,
+  stripTagsLoading: false,
   // Identity section
   identityExpanded: false,
   identityKey: null,       // loaded from /api/identity on expand
@@ -490,6 +532,106 @@ const panelState = {
   relinkInput: "",
   relinkStatus: null,      // null | "ok" | string (error message)
 };
+
+// ── Settings helpers ──────────────────────────────────────────────────────────
+
+async function loadStripTagsState() {
+  panelState.stripTagsLoading = true;
+  renderPanel();
+  try {
+    const scripts = await marinara.apiFetch("/regex-scripts");
+    const list = Array.isArray(scripts) ? scripts : [];
+    const found = list.find(s => {
+      const d = parseData(s);
+      return (s.name ?? d.name) === REGEX_SCRIPT_NAME;
+    });
+    if (found) {
+      const d = parseData(found);
+      panelState.stripTagsScriptId = String(found.id ?? d.id);
+      panelState.stripTagsEnabled = found.enabled ?? d.enabled ?? true;
+    } else {
+      panelState.stripTagsEnabled = false;
+      panelState.stripTagsScriptId = null;
+    }
+  } catch {
+    panelState.stripTagsEnabled = null;
+  }
+  panelState.stripTagsLoading = false;
+  renderPanel();
+}
+
+async function toggleStripTags() {
+  if (!panelState.stripTagsScriptId || panelState.stripTagsLoading) return;
+  const next = !panelState.stripTagsEnabled;
+  panelState.stripTagsLoading = true;
+  panelState.stripTagsEnabled = next;  // optimistic update
+  renderPanel();
+  try {
+    await marinara.apiFetch(`/regex-scripts/${panelState.stripTagsScriptId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled: next }),
+    });
+  } catch {
+    panelState.stripTagsEnabled = !next;  // revert on failure
+  }
+  panelState.stripTagsLoading = false;
+  renderPanel();
+}
+
+function renderSettingsSection() {
+  const wrap = el("div", "me-settings-section");
+
+  const toggleBtn = el("button", "me-settings-toggle");
+  const dot_ = el("span", "me-section-dot");
+  dot_.style.background = "#6b7280";
+  dot_.style.flexShrink = "0";
+  const label = el("span", "me-section-label");
+  label.textContent = "Settings";
+  const chevron = el("span", "me-import-chevron");
+  chevron.textContent = "▶";
+  if (panelState.settingsExpanded) chevron.classList.add("open");
+  toggleBtn.append(dot_, label, chevron);
+  wrap.appendChild(toggleBtn);
+
+  toggleBtn.addEventListener("click", () => {
+    panelState.settingsExpanded = !panelState.settingsExpanded;
+    if (panelState.settingsExpanded && panelState.stripTagsEnabled === null && !panelState.stripTagsLoading) {
+      loadStripTagsState();
+    } else {
+      renderPanel();
+    }
+  });
+
+  if (!panelState.settingsExpanded) return wrap;
+
+  const body = el("div", "me-settings-body");
+
+  const row = el("div", "me-settings-row");
+  const lbl = el("div", "me-settings-lbl");
+  lbl.textContent = "Strip memory tags from chat";
+  const small = el("small");
+  if (panelState.stripTagsLoading) {
+    small.textContent = "Loading…";
+  } else if (panelState.stripTagsEnabled === null) {
+    small.textContent = "Script not found — run a chat turn to install it";
+  } else {
+    small.textContent = panelState.stripTagsEnabled
+      ? "Tags hidden from chat output (normal)"
+      : "Tags visible — for debugging only";
+  }
+  lbl.appendChild(small);
+
+  const pill = el("button", "me-toggle-pill");
+  pill.disabled = panelState.stripTagsLoading || panelState.stripTagsScriptId === null;
+  if (panelState.stripTagsEnabled) pill.classList.add("on");
+  pill.title = panelState.stripTagsEnabled ? "Click to show tags" : "Click to hide tags";
+  pill.addEventListener("click", toggleStripTags);
+
+  row.append(lbl, pill);
+  body.appendChild(row);
+  wrap.appendChild(body);
+  return wrap;
+}
 
 // ── Panel DOM ─────────────────────────────────────────────────────────────────
 
@@ -550,6 +692,9 @@ function renderPanel() {
     content.appendChild(renderImportSection());
     content.appendChild(renderStoryIngestSection());
   }
+
+  // Settings is always rendered regardless of session state
+  content.appendChild(renderSettingsSection());
 
   panel.appendChild(content);
 }
@@ -945,6 +1090,7 @@ async function doStoryIngest() {
   panelState.ingestRunning = true;
   panelState.ingestStatus = "Analyzing story…";
   panelState.ingestResult = null;
+  panelState.ingestClearResult = null;
   renderPanel();
 
   try {
@@ -974,6 +1120,24 @@ async function doStoryIngest() {
 
   panelState.ingestRunning = false;
   panelState.ingestStatus = "";
+  renderPanel();
+}
+
+async function doClearBeats() {
+  if (!panelState.session) return;
+  if (!confirm("Delete all saved beats for this character? This cannot be undone.")) return;
+  panelState.ingestClearRunning = true;
+  panelState.ingestClearResult = null;
+  renderPanel();
+  try {
+    const { characterId } = panelState.session;
+    const res = await memFetch(`/api/beats/${encodeURIComponent(characterId)}`, { method: "DELETE" });
+    if (res?.error) throw new Error(res.error);
+    panelState.ingestClearResult = { deleted: res.deleted ?? 0 };
+  } catch (err) {
+    panelState.ingestClearResult = { error: err.message ?? "Failed to clear beats" };
+  }
+  panelState.ingestClearRunning = false;
   renderPanel();
 }
 
@@ -1031,6 +1195,12 @@ function renderStoryIngestSection() {
   povInput.addEventListener("input", e => { panelState.ingestPovChar = e.target.value; });
   povRow.append(povLbl, povInput);
   body.appendChild(povRow);
+
+  // Saving-for hint — shows which character's beats will be stored
+  const savingHint = el("div", "me-ingest-hint");
+  const charLabel = panelState.session?.characterName ?? "this character";
+  savingHint.textContent = `Saves beats for: ${charLabel}. Open each character's chat and run separately for multi-character stories.`;
+  body.appendChild(savingHint);
 
   // File upload row
   const fileRow = el("div", "me-ingest-file-row");
@@ -1111,6 +1281,30 @@ function renderStoryIngestSection() {
     }
     body.appendChild(resultEl);
   }
+
+  // Clear beats row — always visible when expanded and not running
+  const clearRow = el("div", "me-ingest-clear-row");
+  const clearBtn = el("button", "me-btn-danger");
+  clearBtn.textContent = panelState.ingestClearRunning ? "Clearing…" : "Clear all beats";
+  clearBtn.disabled = panelState.ingestClearRunning || !panelState.session;
+  clearBtn.title = "Delete all saved beats for this character";
+  clearBtn.addEventListener("click", doClearBeats);
+  clearRow.appendChild(clearBtn);
+
+  if (panelState.ingestClearResult) {
+    const clearMsg = el("span");
+    if (panelState.ingestClearResult.error) {
+      clearMsg.className = "me-ingest-err";
+      clearMsg.textContent = `✗ ${panelState.ingestClearResult.error}`;
+    } else {
+      clearMsg.className = "me-ingest-ok";
+      const n = panelState.ingestClearResult.deleted;
+      clearMsg.textContent = `✓ ${n} beat${n === 1 ? "" : "s"} removed`;
+    }
+    clearRow.appendChild(clearMsg);
+  }
+
+  body.appendChild(clearRow);
 
   wrap.appendChild(body);
   return wrap;
@@ -1555,12 +1749,14 @@ const ME_CONTENT_COMMENT      = "marinara-extender-memory-block";
 
 // Split the sidecar's combined memoryBlock into the static instructions portion
 // and the per-turn <memory> content portion.
+// The loader separates the two with "\n\n", so we search for "\n\n<memory>" to
+// avoid hitting the "<memory>" mention inside the instructions prose text itself.
 function splitMemoryBlock(memoryBlock) {
-  const idx = memoryBlock.indexOf('<memory>');
+  const idx = memoryBlock.indexOf('\n\n<memory>');
   if (idx === -1) return { instructions: memoryBlock.trim(), content: '' };
   return {
     instructions: memoryBlock.slice(0, idx).trim(),
-    content: memoryBlock.slice(idx).trim(),
+    content: memoryBlock.slice(idx + 2).trim(),  // skip the leading \n\n
   };
 }
 
@@ -1842,6 +2038,7 @@ marinara.on(window, "marinara:generation-complete", async e => {
     panelState.ingestRunning = false;
     panelState.ingestResult = null;
     panelState.ingestFileName = null;
+    panelState.ingestClearResult = null;
     await refreshSession();
   }
   // Call explicitly here so we're guaranteed currentSession is set,
@@ -1876,6 +2073,7 @@ marinara.observe('.mari-messages-scroll > .sticky.top-0', async () => {
     panelState.ingestRunning = false;
     panelState.ingestResult = null;
     panelState.ingestFileName = null;
+    panelState.ingestClearResult = null;
     await refreshSession();
   }
 });

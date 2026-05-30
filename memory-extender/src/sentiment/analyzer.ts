@@ -16,26 +16,6 @@
 import { getCachedAuth } from "../auth-cache.js";
 import type { BeatAnalysis, ClassificationResult, Emotion, EmotionWeight } from "./types.js";
 
-// ── Sexual content detector ───────────────────────────────────────────────────
-// Used to trigger subtext analysis on desire/joy/vulnerability beats.
-// Matches explicit and intimacy-register vocabulary without being exhaustive —
-// the goal is to catch content where the emotional function matters, not to
-// filter the content itself.
-
-const INTIMATE_KEYWORDS = [
-  "cock", "pussy", "breast", "nipple", "naked", "nude", "sex", "fuck",
-  "orgasm", "cum", "erection", "aroused", "masturbat", "blew", "blow job",
-  "thigh", "straddl", "grind", "thrust", "penetrat",
-  // intimacy-register phrases already in desire keywords that double as signals
-  "pressed against", "gave herself", "gave himself", "surrender",
-  "let him in", "let her in", "bared herself", "bared himself",
-];
-
-function hasIntimateContent(text: string): boolean {
-  const lower = text.toLowerCase();
-  return INTIMATE_KEYWORDS.some((kw) => lower.includes(kw));
-}
-
 // ── JSON extraction (handles markdown-fenced responses) ────────────────────
 
 function parseEmotions(raw: unknown): EmotionWeight[] | undefined {
@@ -86,20 +66,31 @@ function parseAnalysisJson(raw: string): BeatAnalysis | null {
   return null;
 }
 
-// ── Sidecar call ───────────────────────────────────────────────────────────
+// ── Local model (Ollama or any OpenAI-compatible local server) ────────────
 
-async function callSidecar(systemPrompt: string, userPrompt: string): Promise<string | null> {
-  const engineUrl = (process.env.MARINARA_ENGINE_URL ?? "http://localhost:7860").replace(/\/$/, "");
+async function callLocal(systemPrompt: string, userPrompt: string): Promise<string | null> {
+  const base = (process.env.MARINARA_EXTENDER_LOCAL_URL ?? "").replace(/\/$/, "");
+  if (!base) return null;  // not configured — skip
+  const model = process.env.MARINARA_EXTENDER_LOCAL_MODEL ?? "phi3:mini";
+
   try {
-    const res = await fetch(`${engineUrl}/api/sidecar/tracker`, {
+    const res = await fetch(`${base}/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ systemPrompt, userPrompt }),
-      signal: AbortSignal.timeout(120_000),
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user",   content: userPrompt },
+        ],
+        temperature: 0.2,
+        stream: false,
+      }),
+      signal: AbortSignal.timeout(60_000),
     });
     if (!res.ok) return null;
-    const json = (await res.json()) as { result?: string };
-    return json.result ?? null;
+    const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    return json?.choices?.[0]?.message?.content ?? null;
   } catch {
     return null;
   }
@@ -137,12 +128,14 @@ async function callExternal(systemPrompt: string, userPrompt: string): Promise<s
 }
 
 async function callLlm(systemPrompt: string, userPrompt: string): Promise<string> {
-  const result = await callSidecar(systemPrompt, userPrompt);
-  if (result !== null) {
-    console.debug("[analyzer] sidecar ok");
-    return result;
+  const local = await callLocal(systemPrompt, userPrompt);
+  if (local !== null) {
+    console.debug("[analyzer] local model ok");
+    return local;
   }
-  console.warn("[analyzer] sidecar unavailable — falling back to external API");
+  if (process.env.MARINARA_EXTENDER_LOCAL_URL) {
+    console.warn("[analyzer] local model unavailable — falling back to external API");
+  }
   return callExternal(systemPrompt, userPrompt);
 }
 

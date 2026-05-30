@@ -51,21 +51,19 @@ export async function runSentimentPipeline(
   const classifications = classifyChunks(chunks, sourceType);
   const passing = classifications.filter((c) => c.passesThreshold);
 
-  // Drop one-off speakers in story mode when no explicit allow-list is given.
-  // Speakers appearing in only one chunk carry no arc and are walk-ons (taxi
-  // drivers, desk clerks). Count across all classifications, not just passing,
-  // so a one-off with a fluke-high salience chunk is still caught.
+  // Speaker filter: each run saves beats only for ONE character so beats land in
+  // the right character directory. In story mode the default is characterName —
+  // run the ingest once per character from that character's chat to populate each.
+  // Pass an explicit characters list to override (e.g. for alias matching).
   let filtered: ClassificationResult[];
-  if (sourceType === "story" && !characters?.length) {
-    const speakerCounts = new Map<string, number>();
-    for (const c of classifications) {
-      speakerCounts.set(c.chunk.speaker, (speakerCounts.get(c.chunk.speaker) ?? 0) + 1);
-    }
-    filtered = passing.filter((c) => (speakerCounts.get(c.chunk.speaker) ?? 0) > 1);
+  if (characters?.length) {
+    const needles = characters.map((n) => n.trim().toLowerCase());
+    filtered = passing.filter((c) => needles.includes(c.chunk.speaker.trim().toLowerCase()));
+  } else if (sourceType === "story") {
+    const nameLower = characterName.trim().toLowerCase();
+    filtered = passing.filter((c) => c.chunk.speaker.trim().toLowerCase() === nameLower);
   } else {
-    filtered = characters?.length
-      ? passing.filter((c) => characters.includes(c.chunk.speaker))
-      : passing;
+    filtered = passing;
   }
 
   // Stage 2: deep analyze (only passing + allowed chunks)

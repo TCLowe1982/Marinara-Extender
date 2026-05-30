@@ -73,5 +73,8 @@ app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
   console.log(`Digest URL:   ${process.env.MARINARA_EXTENDER_DIGEST_UPSTREAM ?? "https://api.openai.com"}/v1/chat/completions`);
   console.log(`Digest model: ${process.env.MARINARA_EXTENDER_DIGEST_MODEL ?? "gpt-4o-mini"}`);
   console.log(`API key:      ${apiKey ? `${apiKey.slice(0, 8)}…` : "NOT SET — imports will fail"}`);
+  const localUrl = process.env.MARINARA_EXTENDER_LOCAL_URL;
+  const localModel = process.env.MARINARA_EXTENDER_LOCAL_MODEL ?? "phi3:mini";
+  console.log(`Local model:  ${localUrl ? `${localModel} @ ${localUrl}` : "not configured"}`);
   console.log(`Eidetic mode: ${isEideticMode() ? "ON — all entries injected (no budget limit)" : "off"}`);
 });

@@ -1560,6 +1560,49 @@ async function importAllChats(chats) {
   renderPanel();
 }
 
+// ── Recitation detection ──────────────────────────────────────────────────────
+
+function jaccardWords(a, b) {
+  const words = s => new Set(s.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean));
+  const wa = words(a), wb = words(b);
+  let intersection = 0;
+  for (const w of wa) if (wb.has(w)) intersection++;
+  const union = new Set([...wa, ...wb]).size;
+  return union === 0 ? 0 : intersection / union;
+}
+
+async function detectRecitations(surfacedIds, responseText, characterId, chatId) {
+  if (!surfacedIds?.length || !responseText) return;
+
+  // Fetch the summary text for each surfaced entry so we can compare.
+  // We use the panel's loaded entries if available; otherwise skip (don't add
+  // an extra API call on every turn just for recitation scoring).
+  const chatEntries   = panelState.chatEntries   ?? [];
+  const charBookmarks = panelState.bookmarks      ?? [];
+
+  // Build a quick summary map from whatever we have cached in panel state.
+  const summaryMap = new Map();
+  for (const e of chatEntries) summaryMap.set(e.id, { summary: e.summary, scope: "chat",      scopeId: chatId });
+
+  // For character-scope entries we'd need a separate fetch — skip for now and
+  // rely on the chat entries cache. This means recitation only fires for chat-
+  // scoped memories. Character-scoped recitation will be wired when the panel
+  // loads character entries separately.
+
+  const RECITATION_THRESHOLD = 0.3;
+  for (const id of surfacedIds) {
+    const meta = summaryMap.get(id);
+    if (!meta) continue;
+    if (jaccardWords(meta.summary, responseText) >= RECITATION_THRESHOLD) {
+      dbg(`recitation detected for entry ${id}: "${meta.summary.slice(0, 50)}"`);
+      await memFetch(`/api/entries/${id}/recite`, {
+        method: "POST",
+        body: JSON.stringify({ scope: meta.scope, scopeId: meta.scopeId }),
+      }).catch(() => {});
+    }
+  }
+}
+
 // ── Data loading ──────────────────────────────────────────────────────────────
 
 async function loadPanelData() {
@@ -2042,6 +2085,12 @@ async function checkForNewMessage() {
     const entry = await ensureLorebookEntry(characterId, currentSession?.characterName);
     if (!entry) return;
     await updateLorebook(entry.lorebookId, entry.instructionsEntryId, entry.contentEntryId, result.memoryBlock);
+
+    // Recitation detection — check if any surfaced memory was echoed in the response.
+    // Fire-and-forget: never blocks the lorebook update.
+    if (Array.isArray(result.surfacedIds) && result.surfacedIds.length > 0 && content) {
+      detectRecitations(result.surfacedIds, content, characterId, chatId).catch(() => {});
+    }
 
     const charLabel = currentSession?.characterName ?? characterId;
     const saved = (result.created ?? 0) + (result.bookmarksExtracted ?? 0);

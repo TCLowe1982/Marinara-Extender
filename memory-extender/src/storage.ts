@@ -7,15 +7,31 @@ import { parse, stringify } from "yaml";
 export type Scope = "global" | "character" | "chat";
 export type Lane = "open_threads" | "user_topics" | "character_topics";
 export type EntryStatus = "open" | "in_progress" | "done" | "deferred";
+export type MemoryTier = "short" | "long" | "core" | "secondary_core";
+
+// Tier thresholds — score = retrievalCount + (recitationCount × 3)
+export const TIER_SCORE_LONG = 5;
+export const TIER_SCORE_CORE = 25;
+// Demotion: days without retrieval before dropping a tier
+export const TIER_DAYS_LONG_DEMOTES = 30;
+export const TIER_DAYS_SHORT_PRUNES = 14;
+// Cycles before a memory becomes secondary_core (never pruned)
+export const TIER_SECONDARY_CORE_CYCLES = 3;
 
 export interface IndexEntry {
   id: string;
-  path: string;       // relative to scope directory
+  path: string;           // relative to scope directory
   summary: string;
   tokens: number;
   lane: Lane;
   status?: EntryStatus;
   lastAccessed: string;
+  // Memory tier system (mirrored from Entry for fast loader access)
+  tier?: MemoryTier;
+  retrievalCount?: number;
+  recitationCount?: number;
+  cycleCount?: number;
+  lastRetrievedAt?: string; // ISO datetime of last retrieval
 }
 
 export interface ScopeIndex {
@@ -34,6 +50,14 @@ export interface Entry {
   lastAccessed: string;
   content: string;
   tokens: number;
+  // Memory tier system
+  tier?: MemoryTier;
+  retrievalCount?: number;
+  recitationCount?: number;
+  cycleCount?: number;
+  lastRetrievedAt?: string; // ISO datetime of last retrieval
+  // Soft clock context at time of encoding
+  timeContext?: { timeOfDay: string; dayOfWeek: string; inferredFrom?: string };
 }
 
 export interface Bookmark {

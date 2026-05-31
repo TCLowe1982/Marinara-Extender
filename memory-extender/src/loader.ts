@@ -9,6 +9,8 @@ import {
   type Entry,
   type Bookmark,
 } from "./storage.js";
+import { computeScore } from "./promotion.js";
+import { getSoftClock, formatClockContext } from "./soft-clock.js";
 
 // ── Budget config ─────────────────────────────────────────────────────────────
 
@@ -75,14 +77,7 @@ function selectEntries(
 ): { selected: IndexEntry[]; used: number } {
   if (!index) return { selected: [], used: 0 };
 
-  const candidates = [...index.entries]
-    .filter((e) => e.status !== "done")
-    .sort((a, b) => {
-      const laneDiff = (LANE_PRIORITY[a.lane] ?? 99) - (LANE_PRIORITY[b.lane] ?? 99);
-      if (laneDiff !== 0) return laneDiff;
-      // within the same lane, most recently accessed first
-      return b.lastAccessed.localeCompare(a.lastAccessed);
-    });
+  const candidates = [...index.entries].filter((e) => e.status !== "done");
 
   // Eidetic mode: skip budget filtering entirely — load everything.
   if (isEideticMode()) {
@@ -90,16 +85,34 @@ function selectEntries(
     return { selected: candidates, used };
   }
 
-  const selected: IndexEntry[] = [];
-  let used = 0;
+  // Core and secondary_core are always included — they never expire or compete.
+  const permanent = candidates.filter(
+    (e) => e.tier === "core" || e.tier === "secondary_core",
+  );
+  const budgeted = candidates
+    .filter((e) => e.tier !== "core" && e.tier !== "secondary_core")
+    .sort((a, b) => {
+      const laneDiff = (LANE_PRIORITY[a.lane] ?? 99) - (LANE_PRIORITY[b.lane] ?? 99);
+      if (laneDiff !== 0) return laneDiff;
+      // Within the same lane: higher score first, then most recently accessed.
+      const scoreDiff = computeScore(b) - computeScore(a);
+      if (scoreDiff !== 0) return scoreDiff;
+      return b.lastAccessed.localeCompare(a.lastAccessed);
+    });
 
-  for (const candidate of candidates) {
-    if (used + candidate.tokens > budget) continue;
+  const permanentTokens = permanent.reduce((sum, e) => sum + e.tokens, 0);
+  const remainingBudget = Math.max(0, budget - permanentTokens);
+
+  const selected: IndexEntry[] = [...permanent];
+  let budgetUsed = 0;
+
+  for (const candidate of budgeted) {
+    if (budgetUsed + candidate.tokens > remainingBudget) continue;
     selected.push(candidate);
-    used += candidate.tokens;
+    budgetUsed += candidate.tokens;
   }
 
-  return { selected, used };
+  return { selected, used: permanentTokens + budgetUsed };
 }
 
 async function loadSelectedEntries(
@@ -207,6 +220,7 @@ export interface LoadResult {
   indexTokensUsed: number;
   entryTokensUsed: number;
   bookmarkCount: number;
+  surfacedIds: string[];  // IDs of all entries selected this turn (for recitation detection)
 }
 
 const DBG = process.env.ME_DEBUG !== "0"; // set ME_DEBUG=0 in .env to silence
@@ -233,11 +247,12 @@ export async function loadContext(
   if (charSelection.selected.length) dbg(`  char selected: ${charSelection.selected.map(e => e.id).join(", ")}`);
   if (globalSelection.selected.length) dbg(`  global selected: ${globalSelection.selected.map(e => e.id).join(", ")}`);
 
-  const [chatEntries, charEntries, globalEntries, chatBookmarks] = await Promise.all([
+  const [chatEntries, charEntries, globalEntries, chatBookmarks, clockState] = await Promise.all([
     loadSelectedEntries("chat", session.chatId, chatSelection.selected),
     loadSelectedEntries("character", session.characterId, charSelection.selected),
     loadSelectedEntries("global", "global", globalSelection.selected),
     readBookmarks("chat", session.chatId),
+    getSoftClock(session.chatId),
   ]);
   dbg(`entries loaded — chat:${chatEntries.length} char:${charEntries.length} global:${globalEntries.length} bookmarks:${chatBookmarks.length}`);
 
@@ -253,9 +268,12 @@ export async function loadContext(
   ].filter(Boolean);
   dbg(`sections assembled: ${sections.length} non-empty section(s)`);
 
+  const clockLine = formatClockContext(clockState);
   const memoryBlock = sections.length > 0
-    ? `<memory>\n${sections.join("\n\n")}\n</memory>`
-    : "";
+    ? `<memory>${clockLine ? `\n${clockLine}\n` : "\n"}${sections.join("\n\n")}\n</memory>`
+    : clockLine
+      ? `<memory>\n${clockLine}\n</memory>`
+      : "";
 
   // Instructions are always injected so characters need no card modification.
   const contextBlock = memoryBlock
@@ -265,18 +283,34 @@ export async function loadContext(
   dbg(`contextBlock assembled — total length:${contextBlock.length} (memoryBlock:${memoryBlock.length})`);
   if (!memoryBlock) dbg("  ⚠ no memory content — only instructions will be injected");
 
-  // Background: stamp lastAccessed on every entry we surfaced this turn.
+  // Background: stamp lastAccessed + increment retrievalCount on every entry surfaced.
   // Fire-and-forget — don't block the response on file I/O.
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const nowIso = new Date().toISOString();
+  const todayStr = nowIso.slice(0, 10);
   void Promise.all([
     ...chatSelection.selected.map((e) =>
-      upsertIndexEntry("chat", session.chatId, { ...e, lastAccessed: todayStr }),
+      upsertIndexEntry("chat", session.chatId, {
+        ...e,
+        lastAccessed: todayStr,
+        retrievalCount: (e.retrievalCount ?? 0) + 1,
+        lastRetrievedAt: nowIso,
+      }),
     ),
     ...charSelection.selected.map((e) =>
-      upsertIndexEntry("character", session.characterId, { ...e, lastAccessed: todayStr }),
+      upsertIndexEntry("character", session.characterId, {
+        ...e,
+        lastAccessed: todayStr,
+        retrievalCount: (e.retrievalCount ?? 0) + 1,
+        lastRetrievedAt: nowIso,
+      }),
     ),
     ...globalSelection.selected.map((e) =>
-      upsertIndexEntry("global", "global", { ...e, lastAccessed: todayStr }),
+      upsertIndexEntry("global", "global", {
+        ...e,
+        lastAccessed: todayStr,
+        retrievalCount: (e.retrievalCount ?? 0) + 1,
+        lastRetrievedAt: nowIso,
+      }),
     ),
   ]).catch(() => {});
 
@@ -288,10 +322,17 @@ export async function loadContext(
   const entryTokensUsed =
     chatSelection.used + charSelection.used + globalSelection.used;
 
+  const surfacedIds = [
+    ...chatSelection.selected.map((e) => e.id),
+    ...charSelection.selected.map((e) => e.id),
+    ...globalSelection.selected.map((e) => e.id),
+  ];
+
   return {
     contextBlock,
     indexTokensUsed,
     entryTokensUsed,
     bookmarkCount: surfaced.length,
+    surfacedIds,
   };
 }

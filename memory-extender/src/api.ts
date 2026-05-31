@@ -28,6 +28,8 @@ import { nanoid } from "./nanoid.js";
 import { digestMessages, type DigestMessage } from "./digest.js";
 import { processResponse, extractRememberTags } from "./writer.js";
 import { loadContext } from "./loader.js";
+import { runPromotion, recordRecitation } from "./promotion.js";
+import { updateSoftClock, makeTimeContext } from "./soft-clock.js";
 import { runSentimentPipeline } from "./sentiment/pipeline.js";
 import mammoth from "mammoth";
 import { parseStoryToMessages } from "./story-parser.js";
@@ -404,6 +406,10 @@ export function registerApiRoutes(app: FastifyInstance): void {
 
     const identityKey = await resolveIdentity(characterId, characterName);
 
+    // Update soft clock from the incoming message text (fire-and-forget).
+    const clockState = await updateSoftClock(chatId, messageText, turnNumber).catch(() => null);
+    const timeCtx = makeTimeContext(clockState);
+
     // Extract <remember> tags and create permanent entries before bookmark processing.
     const remembers = extractRememberTags(messageText);
     let created = 0;
@@ -443,6 +449,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
         created: now, lastAccessed: now,
         content: rem.content,
         tokens: estimateTokens(`${summary} ${rem.content}`),
+        ...(timeCtx ? { timeContext: timeCtx } : {}),
       };
       const relativePath = await writeEntry(rem.scope, scopeId, entry);
       await upsertIndexEntry(rem.scope, scopeId, {
@@ -456,7 +463,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
     }
 
     const { bookmarksExtracted } = await processResponse(chatId, turnNumber, messageText);
-    const { contextBlock } = await loadContext({ characterId: identityKey, chatId, turnNumber });
+    const { contextBlock, surfacedIds } = await loadContext({ characterId: identityKey, chatId, turnNumber });
 
     const saved = created + bookmarksExtracted;
     if (saved > 0) {
@@ -466,7 +473,38 @@ export function registerApiRoutes(app: FastifyInstance): void {
       console.info(`[ME] memory saved — key:${identityKey} chat:${chatId} — ${parts.join(", ")}`);
     }
 
-    return reply.send({ memoryBlock: contextBlock, created, bookmarksExtracted });
+    // Run promotion pass every 20 turns — fire-and-forget, never blocks response.
+    if (turnNumber > 0 && turnNumber % 20 === 0) {
+      void Promise.all([
+        runPromotion("character", identityKey),
+        runPromotion("chat", chatId),
+      ]).catch((err) => console.warn("[ME] promotion pass failed:", err));
+    }
+
+    return reply.send({ memoryBlock: contextBlock, created, bookmarksExtracted, surfacedIds });
+  });
+
+  // ── POST /api/entries/:id/recite ──────────────────────────────────────────
+  // Called by the extension when it detects a surfaced memory was used in the
+  // AI response (Jaccard similarity check). Increments recitationCount and
+  // triggers immediate promotion if the new score crosses a threshold.
+  // Body: { scope, scopeId }
+
+  app.post<{
+    Params: { id: string };
+    Body: { scope: string; scopeId: string };
+  }>("/api/entries/:id/recite", async (req, reply) => {
+    const { id } = req.params;
+    const { scope, scopeId } = req.body ?? {};
+    if (!scope || !scopeId) {
+      return reply.code(400).send({ error: "scope and scopeId are required" });
+    }
+    const validScopes = ["global", "character", "chat"] as const;
+    if (!validScopes.includes(scope as (typeof validScopes)[number])) {
+      return reply.code(400).send({ error: "invalid scope" });
+    }
+    await recordRecitation(scope as "global" | "character" | "chat", scopeId, id);
+    return reply.send({ ok: true });
   });
 
   // ── POST /api/ingest-commands ─────────────────────────────────────────────

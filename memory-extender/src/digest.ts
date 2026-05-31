@@ -60,26 +60,33 @@ function buildUserPrompt(messages: DigestMessage[], characterName: string): stri
   return `Analyze this chat history and extract memory entries worth keeping:\n\n${history}`;
 }
 
-// ── Sidecar call (Marinara Engine local model) ────────────────────────────────
+// ── Local model call (Ollama or any OpenAI-compatible local server) ──────────
 
-async function callSidecarLlm(systemPrompt: string, userPrompt: string): Promise<string | null> {
-  const engineUrl = (process.env.MARINARA_ENGINE_URL ?? "http://localhost:7860").replace(/\/$/, "");
+async function callLocalLlm(systemPrompt: string, userPrompt: string): Promise<string | null> {
+  const base = (process.env.MARINARA_EXTENDER_LOCAL_URL ?? "").replace(/\/$/, "");
+  if (!base) return null;
+  const model = process.env.MARINARA_EXTENDER_LOCAL_MODEL ?? "phi3:mini";
 
   try {
-    const res = await fetch(`${engineUrl}/api/sidecar/tracker`, {
+    const res = await fetch(`${base}/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ systemPrompt, userPrompt }),
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user",   content: userPrompt },
+        ],
+        temperature: 0.3,
+        stream: false,
+      }),
       signal: AbortSignal.timeout(120_000),
     });
-
-    if (res.status === 503) return null; // sidecar model not running
     if (!res.ok) return null;
-
-    const json = (await res.json()) as { result?: string };
-    return json.result ?? null;
+    const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    return json?.choices?.[0]?.message?.content ?? null;
   } catch {
-    return null; // engine not reachable
+    return null;
   }
 }
 
@@ -124,16 +131,17 @@ async function callExternalLlm(systemPrompt: string, userPrompt: string, model: 
   return json?.choices?.[0]?.message?.content ?? "";
 }
 
-// ── LLM call (sidecar → external fallback) ───────────────────────────────────
+// ── LLM call (local → external fallback) ─────────────────────────────────────
 
 async function callLlm(systemPrompt: string, userPrompt: string, model: string): Promise<string> {
-  const sidecarResult = await callSidecarLlm(systemPrompt, userPrompt);
-  if (sidecarResult !== null) {
-    console.log("[digest] using local Marinara sidecar");
-    return sidecarResult;
+  const local = await callLocalLlm(systemPrompt, userPrompt);
+  if (local !== null) {
+    console.log("[digest] local model ok");
+    return local;
   }
-
-  console.log("[digest] sidecar unavailable, falling back to external API");
+  if (process.env.MARINARA_EXTENDER_LOCAL_URL) {
+    console.log("[digest] local model unavailable, falling back to external API");
+  }
   return callExternalLlm(systemPrompt, userPrompt, model);
 }
 

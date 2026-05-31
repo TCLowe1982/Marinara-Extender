@@ -531,6 +531,8 @@ const panelState = {
   identityLoading: false,
   relinkInput: "",
   relinkStatus: null,      // null | "ok" | string (error message)
+  renameInput: "",
+  renameStatus: null,      // null | "ok" | string (error message)
 };
 
 // ── Settings helpers ──────────────────────────────────────────────────────────
@@ -947,6 +949,32 @@ function renderIdentitySection() {
     body.appendChild(keyRow);
   }
 
+  // Rename form — updates the display name stored in the identity map
+  const renameLbl = el("div", "me-relink-label");
+  renameLbl.textContent = "Display name:";
+  body.appendChild(renameLbl);
+
+  const renameRow = el("div", "me-relink-row");
+  const renameInput = el("input", "me-relink-input");
+  renameInput.type = "text";
+  renameInput.placeholder = "Character name…";
+  renameInput.value = panelState.renameInput || (panelState.session?.characterName ?? "");
+  renameInput.addEventListener("input", e => { panelState.renameInput = e.target.value; panelState.renameStatus = null; });
+  const renameBtn = el("button", "me-btn-primary");
+  renameBtn.textContent = "Save";
+  renameBtn.style.flexShrink = "0";
+  renameBtn.addEventListener("click", () => doRename(panelState.identityKey ?? ""));
+  renameRow.append(renameInput, renameBtn);
+  body.appendChild(renameRow);
+
+  if (panelState.renameStatus === "ok") {
+    const ok = el("div", "me-relink-ok"); ok.textContent = "✓ Name updated";
+    body.appendChild(ok);
+  } else if (panelState.renameStatus) {
+    const err = el("div", "me-relink-err"); err.textContent = panelState.renameStatus;
+    body.appendChild(err);
+  }
+
   // Relink form — points a new card ID at this character's memory bucket
   const relinkLbl = el("div", "me-relink-label");
   relinkLbl.textContent = "Card recreated? Link new ID to this identity:";
@@ -991,6 +1019,30 @@ async function loadIdentityInfo() {
     panelState.identityKey = null;
   }
   panelState.identityLoading = false;
+  renderPanel();
+}
+
+async function doRename(identityKey) {
+  const name = panelState.renameInput.trim();
+  if (!name || !identityKey) {
+    panelState.renameStatus = "Enter a name and ensure identity key is loaded.";
+    renderPanel(); return;
+  }
+  try {
+    const res = await memFetch("/api/identity/name", {
+      method: "PATCH",
+      body: JSON.stringify({ identityKey, name }),
+    });
+    if (res?.ok) {
+      panelState.renameStatus = "ok";
+      panelState.renameInput = "";
+      if (panelState.session) panelState.session.characterName = name;
+    } else {
+      panelState.renameStatus = res?.error ?? "Rename failed.";
+    }
+  } catch (err) {
+    panelState.renameStatus = String(err);
+  }
   renderPanel();
 }
 
@@ -2035,6 +2087,8 @@ marinara.on(window, "marinara:generation-complete", async e => {
     panelState.identityExpanded = false;
     panelState.relinkStatus = null;
     panelState.relinkInput = "";
+    panelState.renameStatus = null;
+    panelState.renameInput = "";
     panelState.ingestRunning = false;
     panelState.ingestResult = null;
     panelState.ingestFileName = null;
@@ -2070,6 +2124,8 @@ marinara.observe('.mari-messages-scroll > .sticky.top-0', async () => {
     panelState.identityExpanded = false;
     panelState.relinkStatus = null;
     panelState.relinkInput = "";
+    panelState.renameStatus = null;
+    panelState.renameInput = "";
     panelState.ingestRunning = false;
     panelState.ingestResult = null;
     panelState.ingestFileName = null;

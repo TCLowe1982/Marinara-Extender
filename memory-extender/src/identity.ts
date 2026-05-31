@@ -115,7 +115,15 @@ export async function resolveIdentity(
 ): Promise<string> {
   const map = await readMapFile();
   const existing = map.entries.find((e) => e.characterId === characterId);
-  if (existing) return existing.identityKey;
+  if (existing) {
+    // Opportunistically fix name if it's still a raw ID and we now have a real name.
+    if (characterName && characterName !== existing.name && existing.name === characterId) {
+      existing.name = characterName;
+      await writeMapFile(map);
+      console.info(`[identity] updated name for ${characterId}: "${characterName}"`);
+    }
+    return existing.identityKey;
+  }
 
   const base = slugify(characterName ?? characterId);
   const taken = new Set(map.entries.map((e) => e.identityKey));
@@ -194,6 +202,21 @@ export async function renameIdentityKey(oldKey: string, newKey: string): Promise
 
   await writeMapFile(map);
   console.info(`[identity] renamed: "${oldKey}" → "${newSlug}"`);
+}
+
+// Update the display name for all entries that share an identity key.
+export async function updateIdentityName(identityKey: string, name: string): Promise<void> {
+  const map = await readMapFile();
+  let found = false;
+  for (const e of map.entries) {
+    if (e.identityKey === identityKey) {
+      e.name = name;
+      found = true;
+    }
+  }
+  if (!found) throw new Error(`Identity key "${identityKey}" not found.`);
+  await writeMapFile(map);
+  console.info(`[identity] name updated for key "${identityKey}": "${name}"`);
 }
 
 // ── Export / Import ───────────────────────────────────────────────────────────

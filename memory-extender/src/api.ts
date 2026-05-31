@@ -37,6 +37,7 @@ import {
   getIdentityMap,
   relinkIdentity,
   renameIdentityKey,
+  updateIdentityName,
   exportIdentity,
   importIdentity,
   type IdentityExportBundle,
@@ -826,6 +827,25 @@ export function registerApiRoutes(app: FastifyInstance): void {
       return reply.send({ ok: true, characterId, identityKey });
     } catch (err) {
       return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ── PATCH /api/identity/name ─────────────────────────────────────────────
+  // Update the display name stored for an identity key.
+  // Body: { identityKey, name }
+
+  app.patch<{
+    Body: { identityKey: string; name: string };
+  }>("/api/identity/name", async (req, reply) => {
+    const { identityKey, name } = req.body ?? {};
+    if (!identityKey?.trim() || !name?.trim()) {
+      return reply.code(400).send({ error: "identityKey and name are required" });
+    }
+    try {
+      await updateIdentityName(identityKey.trim(), name.trim());
+      return reply.send({ ok: true, identityKey, name: name.trim() });
+    } catch (err) {
+      return reply.code(404).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 

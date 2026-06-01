@@ -1868,14 +1868,14 @@ async function findOrCreateEntry(lorebookId, comment, displayName, order) {
     const list = Array.isArray(res) ? res : (res?.entries ?? res?.data ?? []);
     dbg(`findOrCreateEntry(${comment}): lorebook has ${list.length} entries`);
     const matches = list.filter(e => {
-      const ed = e.data ?? e;
+      const ed = parseData(e);
       // Match on comment field — name is cosmetic and may have been renamed by the user.
       return (ed.comment ?? e.comment) === comment;
     });
     dbg(`findOrCreateEntry(${comment}): ${matches.length} match(es) by comment`);
     // Deduplicate — keep the entry with the most content, delete the rest.
     if (matches.length > 1) {
-      matches.sort((a, b) => ((b.data ?? b).content?.length ?? 0) - ((a.data ?? a).content?.length ?? 0));
+      matches.sort((a, b) => (parseData(b).content?.length ?? 0) - (parseData(a).content?.length ?? 0));
       for (const dupe of matches.slice(1)) {
         const did = resolveEntryId(dupe);
         if (did) await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${did}`, { method: "DELETE" }).catch(() => {});

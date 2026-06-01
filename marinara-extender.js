@@ -74,7 +74,8 @@ marinara.addStyle(`
   /* Toggle button — Tailwind classes handle layout/color; only non-Tailwind extras here */
   .me-toggle-btn { font-size: 16px; line-height: 1; cursor: pointer; position: relative; }
   .me-toggle-btn:hover { }
-  .me-toggle-btn.sidecar-down { color: #f87171; }
+  .me-toggle-btn.sidecar-down   { color: #f87171; }
+  .me-toggle-btn.ollama-down    { color: #fb923c; }  /* orange = sidecar up but Ollama down */
 
   /* Notification badge on the toggle button */
   .me-badge {
@@ -483,9 +484,23 @@ async function checkSidecar() {
   const btn = document.getElementById('me-toggle');
   try {
     const r = await fetch(`${MEMORY_EXTENDER}/api/health`, { signal: AbortSignal.timeout(2000) });
-    btn?.classList.toggle('sidecar-down', !r.ok);
+    if (!r.ok) {
+      btn?.classList.add('sidecar-down');
+      btn?.classList.remove('ollama-down');
+      btn?.title && (btn.title = "Memory Extender is unreachable");
+      return;
+    }
+    const data = await r.json().catch(() => ({}));
+    const ollamaDown = data.ollama === "unavailable";
+    btn?.classList.remove('sidecar-down');
+    btn?.classList.toggle('ollama-down', ollamaDown);
+    if (btn) btn.title = ollamaDown
+      ? "Ollama is not running — local model unavailable"
+      : "Memory Extender running";
   } catch {
     btn?.classList.add('sidecar-down');
+    btn?.classList.remove('ollama-down');
+    if (btn) btn.title = "Memory Extender is not running — use start.bat to launch";
   }
 }
 

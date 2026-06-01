@@ -46,7 +46,18 @@ app.options("*", async (_req, reply) => reply.send());
 // ── Health ────────────────────────────────────────────────────────────────────
 
 app.get("/api/health", { logLevel: "silent" }, async (_req, reply) => {
-  return reply.send({ ok: true });
+  // Check Ollama — strip the /v1 suffix from LOCAL_URL to get the base Ollama URL.
+  const localUrl = (process.env.MARINARA_EXTENDER_LOCAL_URL ?? "").replace(/\/v1\/?$/, "");
+  let ollama: "ok" | "unavailable" | "not_configured" = "not_configured";
+  if (localUrl) {
+    try {
+      const r = await fetch(localUrl, { signal: AbortSignal.timeout(2000) });
+      ollama = r.ok ? "ok" : "unavailable";
+    } catch {
+      ollama = "unavailable";
+    }
+  }
+  return reply.send({ ok: true, ollama });
 });
 
 // ── Setup page ────────────────────────────────────────────────────────────────

@@ -1878,7 +1878,12 @@ async function findOrCreateEntry(lorebookId, comment, displayName, order) {
       matches.sort((a, b) => (parseData(b).content?.length ?? 0) - (parseData(a).content?.length ?? 0));
       for (const dupe of matches.slice(1)) {
         const did = resolveEntryId(dupe);
-        if (did) await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${did}`, { method: "DELETE" }).catch(() => {});
+        if (did) {
+          await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${did}`, {
+            method: "PATCH", body: JSON.stringify({ locked: false }),
+          }).catch(() => {});
+          await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${did}`, { method: "DELETE" }).catch(() => {});
+        }
       }
       dbg(`findOrCreateEntry(${comment}): deduplicated to 1`);
     }

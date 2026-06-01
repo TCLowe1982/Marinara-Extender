@@ -1899,22 +1899,25 @@ async function writeMemoryToLorebook(lorebookId, memoryBlock) {
   dbg(`writeMemoryToLorebook: lb=${lorebookId} instr=${instructions.length} content=${content.length}`);
   if (content) dbg(`  content preview: ${content.slice(0, 120).replace(/\n/g, "↵")}…`);
 
-  // Step 1 — delete every existing "Memory System" entry.
+  // Step 1 — delete ALL entries. This lorebook belongs entirely to us.
   try {
     const res = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries`);
     const list = Array.isArray(res) ? res : (res?.entries ?? res?.data ?? []);
+    dbg(`writeMemoryToLorebook: sweeping ${list.length} entries`);
     for (const entry of list) {
-      const d    = parseData(entry);
-      const name = entry.name ?? d.name ?? "";
-      if (!name.includes("Memory System")) continue;
-      const id = String(entry.id ?? d.id ?? "");
-      if (!id || id === "undefined") continue;
-      await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${id}`, {
+      const d  = parseData(entry);
+      // Try every known ID field Marinara might use.
+      const id = String(entry.id ?? d.id ?? d.uid ?? d._id ?? "");
+      dbg(`  entry raw keys: ${Object.keys(entry).join(",")} | id="${id}" name="${entry.name ?? d.name ?? "?"}"`);
+      if (!id || id === "undefined") { dbg("  skipping — no id"); continue; }
+      const unlockRes = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${id}`, {
         method: "PATCH", body: JSON.stringify({ locked: false }),
-      }).catch(() => {});
-      await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${id}`, {
+      }).catch(e => { dbg(`  unlock failed: ${e}`); return null; });
+      dbg(`  unlock → ${unlockRes ? "ok" : "failed"}`);
+      const delRes = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${id}`, {
         method: "DELETE",
-      }).catch(() => {});
+      }).catch(e => { dbg(`  delete failed: ${e}`); return null; });
+      dbg(`  delete → ${delRes !== null ? "ok" : "failed"}`);
     }
   } catch (err) { console.error("[ME] entry sweep failed:", err); }
 

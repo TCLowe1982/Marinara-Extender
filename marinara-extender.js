@@ -1824,8 +1824,26 @@ async function resolveSession() {
 // ── Session + lorebook state ──────────────────────────────────────────────────
 
 let currentSession = null;
-const lorebookCache = {};  // characterId → { lorebookId, entryId }
 const lastMsgId = {};      // chatId → last processed assistant message id
+
+// ── Lorebook ID cache — backed by localStorage so IDs survive page reloads ───
+// In-memory cache is always the primary; localStorage is the fallback so
+// findOrCreateEntry only needs to run once per character, ever.
+
+const LOREBOOK_CACHE_LS_KEY = `${marinara.extensionId}:lorebook-ids:v1`;
+
+function _loadLorebookCache() {
+  try {
+    const raw = localStorage.getItem(LOREBOOK_CACHE_LS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+function _saveLorebookCache(cache) {
+  try { localStorage.setItem(LOREBOOK_CACHE_LS_KEY, JSON.stringify(cache)); } catch {}
+}
+
+const lorebookCache = _loadLorebookCache();  // characterId → { lorebookId, instructionsEntryId, contentEntryId }
 
 async function refreshSession() {
   currentSession = await resolveSession();
@@ -1922,6 +1940,7 @@ async function ensureLorebookEntry(characterId, characterName) {
     return cached;
   }
   delete lorebookCache[characterId];
+  _saveLorebookCache(lorebookCache);
 
   const lorebookName = `Marinara Extender — ${characterName ?? characterId}`;
   let lorebookId = null;
@@ -1974,6 +1993,7 @@ async function ensureLorebookEntry(characterId, characterName) {
 
   const result = { lorebookId, instructionsEntryId, contentEntryId };
   lorebookCache[characterId] = result;
+  _saveLorebookCache(lorebookCache);
   return result;
 }
 

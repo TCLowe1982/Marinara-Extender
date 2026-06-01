@@ -1826,29 +1826,9 @@ async function resolveSession() {
 let currentSession = null;
 const lastMsgId = {};      // chatId → last processed assistant message id
 
-// ── Lorebook ID cache — backed by localStorage so IDs survive page reloads ───
-// In-memory cache is always the primary; localStorage is the fallback so
-// findOrCreateEntry only needs to run once per character, ever.
-
-const LOREBOOK_CACHE_LS_KEY = `${marinara.extensionId}:lorebook-ids:v2`;
-
-function _loadLorebookCache() {
-  try {
-    const raw = localStorage.getItem(LOREBOOK_CACHE_LS_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch { return {}; }
-}
-
-function _saveLorebookCache(cache) {
-  try { localStorage.setItem(LOREBOOK_CACHE_LS_KEY, JSON.stringify(cache)); } catch {}
-}
-
-const lorebookCache = _loadLorebookCache();  // characterId → { lorebookId, instructionsEntryId, contentEntryId }
-
 async function refreshSession() {
   currentSession = await resolveSession();
   if (currentSession) {
-    ensureLorebookEntry(currentSession.characterId, currentSession.characterName).catch(() => {});
     // Sync current memory block into the lorebook on chat load
     syncMemoryBlock(currentSession).catch(() => {});
   }
@@ -1856,174 +1836,101 @@ async function refreshSession() {
 
 // ── Lorebook helpers ──────────────────────────────────────────────────────────
 
-const ME_LOREBOOK_NAME = "Marinara Extender Memory";
-const ME_INSTRUCTIONS_COMMENT = "marinara-extender-instructions";
-const ME_CONTENT_COMMENT      = "marinara-extender-memory-block";
-
-// Split the sidecar's combined memoryBlock into the static instructions portion
-// and the per-turn <memory> content portion.
-// The loader separates the two with "\n\n", so we search for "\n\n<memory>" to
-// avoid hitting the "<memory>" mention inside the instructions prose text itself.
+// Split the combined memoryBlock into the static instructions portion and the
+// per-turn <memory> content portion. Search for "\n\n<memory>" not "<memory>"
+// to avoid the prose mention of the tag inside the instructions text itself.
 function splitMemoryBlock(memoryBlock) {
   const idx = memoryBlock.indexOf('\n\n<memory>');
   if (idx === -1) return { instructions: memoryBlock.trim(), content: '' };
   return {
     instructions: memoryBlock.slice(0, idx).trim(),
-    content: memoryBlock.slice(idx + 2).trim(),  // skip the leading \n\n
+    content: memoryBlock.slice(idx + 2).trim(),
   };
 }
 
-function resolveEntryId(e) {
-  const d = e.data ?? e;
-  const raw = e.id ?? d.id ?? d.uid ?? d._id;
-  return raw != null && String(raw) !== "undefined" ? String(raw) : null;
-}
+// Find or create the lorebook container for this character. Returns lorebookId.
+// Simple in-memory cache is fine — the lorebook itself never changes.
+const _lorebookIdCache = {};
 
-async function findOrCreateEntry(lorebookId, comment, displayName, order) {
-  let entryId = null;
-  try {
-    const res = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries`);
-    const list = Array.isArray(res) ? res : (res?.entries ?? res?.data ?? []);
-    dbg(`findOrCreateEntry(${comment}): lorebook has ${list.length} entries`);
-    const matches = list.filter(e => {
-      const ed = parseData(e);
-      const entryComment = ed.comment ?? e.comment;
-      const entryName    = ed.name    ?? e.name;
-      return entryComment === comment || entryName === displayName;
-    });
-    dbg(`findOrCreateEntry(${comment}): ${matches.length} match(es) by comment or name`);
-    // Deduplicate — keep the entry with the most content, delete the rest.
-    if (matches.length > 1) {
-      matches.sort((a, b) => {
-        const ac = parseData(a).content ?? a.content ?? "";
-        const bc = parseData(b).content ?? b.content ?? "";
-        return String(bc).length - String(ac).length;
-      });
-      for (const dupe of matches.slice(1)) {
-        const did = resolveEntryId(dupe);
-        if (did) {
-          await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${did}`, {
-            method: "PATCH", body: JSON.stringify({ locked: false }),
-          }).catch(() => {});
-          await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${did}`, { method: "DELETE" }).catch(() => {});
-        }
-      }
-      dbg(`findOrCreateEntry(${comment}): deduplicated to 1`);
-    }
-    if (matches.length > 0) entryId = resolveEntryId(matches[0]);
-  } catch (err) { console.error(`[ME] entry lookup (${comment}) failed:`, err); }
-
-  if (!entryId) {
-    dbg(`findOrCreateEntry(${comment}): not found — creating`);
-    try {
-      const res = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries`, {
-        method: "POST",
-        body: JSON.stringify({
-          name: displayName, content: "", keys: [], comment, order,
-          constant: true, enabled: true, locked: true,
-          role: "system", noVector: true,
-          sticky: 0, cooldown: 0, delay: 0, ephemeral: 0,
-        }),
-      });
-      entryId = resolveEntryId(res.data ?? res);
-      dbg(`findOrCreateEntry(${comment}): created entryId=${entryId}`);
-    } catch (err) {
-      console.error(`[ME] entry create (${comment}) failed:`, err);
-    }
-  } else {
-    dbg(`findOrCreateEntry(${comment}): found entryId=${entryId}`);
-  }
-  return entryId;
-}
-
-async function ensureLorebookEntry(characterId, characterName) {
-  const cached = lorebookCache[characterId];
-  if (cached && cached.lorebookId          && cached.lorebookId          !== "undefined"
-             && cached.instructionsEntryId && cached.instructionsEntryId !== "undefined"
-             && cached.contentEntryId      && cached.contentEntryId      !== "undefined") {
-    dbg(`ensureLorebookEntry: cache hit — lb=${cached.lorebookId} instr=${cached.instructionsEntryId} content=${cached.contentEntryId}`);
-    return cached;
-  }
-  delete lorebookCache[characterId];
-  _saveLorebookCache(lorebookCache);
+async function ensureLorebook(characterId, characterName) {
+  if (_lorebookIdCache[characterId]) return _lorebookIdCache[characterId];
 
   const lorebookName = `Marinara Extender — ${characterName ?? characterId}`;
   let lorebookId = null;
 
-  // Find existing lorebook for this character (prefix match handles old generic name too)
   try {
     const res = await marinara.apiFetch("/lorebooks");
     const list = Array.isArray(res) ? res : (res?.lorebooks ?? res?.data ?? []);
-    dbg(`ensureLorebookEntry: ${list.length} lorebooks in system`);
     for (const lb of list) {
-      const d = lb.data ?? lb;
-      const name = d.name ?? lb.name ?? "";
-      const charId = String(d.characterId ?? lb.characterId ?? "");
-      dbg(`  lorebook "${name}" characterId="${charId}"`);
+      const d = parseData(lb);
+      const name   = lb.name   ?? d.name   ?? "";
+      const charId = String(lb.characterId ?? d.characterId ?? "");
       if (name.startsWith("Marinara Extender") && charId === String(characterId)) {
         lorebookId = String(lb.id ?? d.id);
-        dbg(`ensureLorebookEntry: found existing lorebookId=${lorebookId}`);
         break;
       }
     }
   } catch { /* will create below */ }
 
   if (!lorebookId) {
-    dbg(`ensureLorebookEntry: lorebook not found — creating "${lorebookName}"`);
     try {
       const res = await marinara.apiFetch("/lorebooks", {
         method: "POST",
         body: JSON.stringify({ name: lorebookName, characterId, enabled: true }),
       });
-      const d = res.data ?? res;
-      lorebookId = String(d.id ?? res.id);
-      dbg(`ensureLorebookEntry: created lorebookId=${lorebookId}`);
+      const d = parseData(res);
+      lorebookId = String(res.id ?? d.id);
     } catch (err) {
       console.error("[ME] lorebook create failed:", err);
       return null;
     }
   }
 
-  // Instructions entry — always enabled, teaches the AI the bookmark/remember syntax.
-  // Content entry     — enabled only when actual memory content exists.
-  const [instructionsEntryId, contentEntryId] = await Promise.all([
-    findOrCreateEntry(lorebookId, ME_INSTRUCTIONS_COMMENT, "Memory System — Instructions", 0),
-    findOrCreateEntry(lorebookId, ME_CONTENT_COMMENT,      "Memory System — Active Context", 1),
-  ]);
-
-  if (!instructionsEntryId || !contentEntryId) {
-    console.error("[ME] could not resolve entry IDs — see logs above");
-    return null;
-  }
-
-  const result = { lorebookId, instructionsEntryId, contentEntryId };
-  lorebookCache[characterId] = result;
-  _saveLorebookCache(lorebookCache);
-  return result;
+  _lorebookIdCache[characterId] = lorebookId;
+  return lorebookId;
 }
 
-async function updateLorebook(lorebookId, instructionsEntryId, contentEntryId, memoryBlock) {
+// Nuke every "Memory System" entry in the lorebook, then create exactly 2 fresh ones.
+// No caching, no ID tracking, no dedup logic. Absolute correctness every cycle.
+const ENTRY_BASE = { keys: [], constant: true, locked: true, role: "system", noVector: true, sticky: 0, cooldown: 0, delay: 0, ephemeral: 0 };
+
+async function writeMemoryToLorebook(lorebookId, memoryBlock) {
   const { instructions, content } = splitMemoryBlock(memoryBlock);
-  dbg(`updateLorebook: lb=${lorebookId}`);
-  dbg(`  instructions entry=${instructionsEntryId} length=${instructions.length} enabled=true`);
-  dbg(`  content      entry=${contentEntryId}      length=${content.length}       enabled=${content !== ''}`);
+  dbg(`writeMemoryToLorebook: lb=${lorebookId} instr=${instructions.length} content=${content.length}`);
   if (content) dbg(`  content preview: ${content.slice(0, 120).replace(/\n/g, "↵")}…`);
 
-  const ENTRY_DEFAULTS = { constant: true, locked: true, role: "system", noVector: true, sticky: 0, cooldown: 0, delay: 0, ephemeral: 0 };
+  // Step 1 — delete every existing "Memory System" entry.
+  try {
+    const res = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries`);
+    const list = Array.isArray(res) ? res : (res?.entries ?? res?.data ?? []);
+    for (const entry of list) {
+      const d    = parseData(entry);
+      const name = entry.name ?? d.name ?? "";
+      if (!name.includes("Memory System")) continue;
+      const id = String(entry.id ?? d.id ?? "");
+      if (!id || id === "undefined") continue;
+      await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${id}`, {
+        method: "PATCH", body: JSON.stringify({ locked: false }),
+      }).catch(() => {});
+      await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${id}`, {
+        method: "DELETE",
+      }).catch(() => {});
+    }
+  } catch (err) { console.error("[ME] entry sweep failed:", err); }
 
-  const [instrRes, contentRes] = await Promise.all([
-    marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${instructionsEntryId}`, {
-      method: "PATCH",
-      body: JSON.stringify({ ...ENTRY_DEFAULTS, content: instructions, enabled: true }),
-    }).catch(err => { console.error("[ME] instructions entry update failed:", err); return null; }),
-    marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${contentEntryId}`, {
-      method: "PATCH",
-      body: JSON.stringify({ ...ENTRY_DEFAULTS, content, enabled: content !== '' }),
-    }).catch(err => { console.error("[ME] content entry update failed:", err); return null; }),
+  // Step 2 — create exactly 2 fresh entries.
+  await Promise.all([
+    marinara.apiFetch(`/lorebooks/${lorebookId}/entries`, {
+      method: "POST",
+      body: JSON.stringify({ ...ENTRY_BASE, name: "Memory System — Instructions", content: instructions, order: 0, enabled: true }),
+    }).catch(err => console.error("[ME] instructions create failed:", err)),
+    marinara.apiFetch(`/lorebooks/${lorebookId}/entries`, {
+      method: "POST",
+      body: JSON.stringify({ ...ENTRY_BASE, name: "Memory System — Active Context", content, order: 1, enabled: content !== "" }),
+    }).catch(err => console.error("[ME] content create failed:", err)),
   ]);
 
-  dbg(`  instructions PATCH → ${instrRes ? "ok" : "FAILED"}`);
-  dbg(`  content      PATCH → ${contentRes ? "ok" : "FAILED"}`);
+  dbg(`writeMemoryToLorebook: done`);
 }
 
 // Strip memory commands from the visible chat DOM.
@@ -2072,10 +1979,10 @@ async function syncMemoryBlock(session) {
     );
     dbg(`syncMemoryBlock: sidecar response memoryBlock length=${res?.memoryBlock?.length ?? "null"}`);
     if (!res?.memoryBlock) { dbg("syncMemoryBlock: empty memoryBlock — skipping lorebook write"); return; }
-    const entry = await ensureLorebookEntry(session.characterId, session.characterName);
-    dbg(`syncMemoryBlock: entry=${JSON.stringify(entry)}`);
-    if (!entry) { dbg("syncMemoryBlock: ensureLorebookEntry returned null — aborting"); return; }
-    await updateLorebook(entry.lorebookId, entry.instructionsEntryId, entry.contentEntryId, res.memoryBlock);
+    const lorebookId = await ensureLorebook(session.characterId, session.characterName);
+    dbg(`syncMemoryBlock: lorebookId=${lorebookId}`);
+    if (!lorebookId) { dbg("syncMemoryBlock: no lorebook — aborting"); return; }
+    await writeMemoryToLorebook(lorebookId, res.memoryBlock);
     console.info(`[ME] memory loaded for ${session.characterName ?? session.characterId}`);
   } catch (err) { dbg("syncMemoryBlock: caught error (sidecar down?)", err); }
 }
@@ -2112,9 +2019,9 @@ async function checkForNewMessage() {
     dbg(`checkForNewMessage: process-turn response memoryBlock length=${result?.memoryBlock?.length ?? "null"} created=${result?.created} bookmarks=${result?.bookmarksExtracted}`);
     if (!result?.memoryBlock) { dbg("checkForNewMessage: no memoryBlock in response — aborting"); return; }
 
-    const entry = await ensureLorebookEntry(characterId, currentSession?.characterName);
-    if (!entry) return;
-    await updateLorebook(entry.lorebookId, entry.instructionsEntryId, entry.contentEntryId, result.memoryBlock);
+    const lorebookId = await ensureLorebook(characterId, currentSession?.characterName);
+    if (!lorebookId) return;
+    await writeMemoryToLorebook(lorebookId, result.memoryBlock);
 
     // Recitation detection — check if any surfaced memory was echoed in the response.
     // Fire-and-forget: never blocks the lorebook update.

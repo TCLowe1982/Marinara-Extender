@@ -31,6 +31,11 @@ import { loadContext } from "./loader.js";
 import { runPromotion, recordRecitation } from "./promotion.js";
 import { updateSoftClock, makeTimeContext } from "./soft-clock.js";
 import { runSentimentPipeline } from "./sentiment/pipeline.js";
+import { classifyChunks } from "./sentiment/classifier.js";
+import { analyzeChunk } from "./sentiment/analyzer.js";
+import { encodeBeat } from "./sentiment/encoder.js";
+import { classifyAmbient } from "./ambient.js";
+import type { Chunk } from "./sentiment/types.js";
 import mammoth from "mammoth";
 import { parseStoryToMessages } from "./story-parser.js";
 import { readBeatIndex, readAllBeats, clearBeats } from "./sentiment/encoder.js";
@@ -397,9 +402,9 @@ export function registerApiRoutes(app: FastifyInstance): void {
   // Body: { characterId, chatId, turnNumber, messageText }
 
   app.post<{
-    Body: { characterId: string; characterName?: string; chatId: string; turnNumber?: number; messageText?: string };
+    Body: { characterId: string; characterName?: string; chatId: string; turnNumber?: number; messageText?: string; userMessageText?: string };
   }>("/api/process-turn", async (req, reply) => {
-    const { characterId, characterName, chatId, turnNumber = 0, messageText = "" } = req.body ?? {};
+    const { characterId, characterName, chatId, turnNumber = 0, messageText = "", userMessageText = "" } = req.body ?? {};
     if (!characterId || !chatId) {
       return reply.code(400).send({ error: "characterId and chatId are required" });
     }
@@ -479,6 +484,101 @@ export function registerApiRoutes(app: FastifyInstance): void {
         runPromotion("character", identityKey),
         runPromotion("chat", chatId),
       ]).catch((err) => console.warn("[ME] promotion pass failed:", err));
+    }
+
+    // ── Tier 2: sentiment classification — fire-and-forget ────────────────────
+    // Classifies the AI message and user message for emotional peaks.
+    // Only fires the LLM analyzer when the fast keyword classifier passes threshold.
+    if (messageText || userMessageText) {
+      void (async () => {
+        try {
+          const chunks: Chunk[] = [];
+          const charName = characterName ?? identityKey;
+          if (userMessageText) chunks.push({ speaker: "user",    text: userMessageText, turnStart: turnNumber - 1, turnEnd: turnNumber - 1 });
+          if (messageText)     chunks.push({ speaker: charName,  text: messageText,     turnStart: turnNumber,     turnEnd: turnNumber });
+
+          const classified = classifyChunks(chunks, "chat");
+          const passing = classified.filter(r => r.passesThreshold);
+          if (passing.length === 0) return;
+
+          console.info(`[ME:tier2] ${passing.length} chunk(s) passed sentiment threshold`);
+
+          for (let i = 0; i < passing.length; i++) {
+            const result = passing[i]!;
+            const analysis = await analyzeChunk(result, {
+              before: passing[i - 1],
+              after:  passing[i + 1],
+            });
+            if (!analysis) continue;
+
+            const beat = await encodeBeat(identityKey, result, analysis, "chat");
+
+            // Companion ledger entry so the character can recall this moment.
+            const summary = truncateSummary(
+              `[${beat.emotion}] ${analysis.motivation}`,
+            );
+            const content = [
+              `Emotion: ${beat.emotion}${beat.subpattern ? ` (${beat.subpattern})` : ""}`,
+              `Motivation: ${analysis.motivation}`,
+              `Relational dynamics: ${analysis.relationalDynamics}`,
+              `Outcome: ${analysis.outcome}`,
+              ...(analysis.subtext ? [`Subtext: ${analysis.subtext}`] : []),
+            ].join("\n");
+
+            const entryId  = `ctopic-${nanoid(8)}`;
+            const now      = today();
+            const newEntry: Entry = {
+              id: entryId, lane: "character_topics", summary,
+              status: "open", created: now, lastAccessed: now,
+              content, tokens: estimateTokens(`${summary} ${content}`),
+              ...(timeCtx ? { timeContext: timeCtx } : {}),
+            };
+            const relPath = await writeEntry("character", identityKey, newEntry);
+            await upsertIndexEntry("character", identityKey, {
+              id: entryId, path: relPath, summary,
+              tokens: newEntry.tokens, lane: "character_topics",
+              status: "open", lastAccessed: now,
+            });
+            console.info(`[ME:tier2] saved beat ${beat.id} + ledger entry for ${beat.emotion} (salience ${beat.salience.toFixed(2)})`);
+          }
+        } catch (err) {
+          console.warn("[ME:tier2] sentiment pass failed:", err);
+        }
+      })();
+    }
+
+    // ── Tier 3: ambient detail classifier — fire-and-forget ───────────────────
+    // Extracts stable facts (preferences, history, identity) from throwaway lines.
+    if (messageText || userMessageText) {
+      void (async () => {
+        try {
+          const facts = await classifyAmbient({ userText: userMessageText, characterText: messageText });
+          for (const fact of facts) {
+            const summary = truncateSummary(fact.fact);
+            const entryId = `${fact.lane === "user_topics" ? "utopic" : "ctopic"}-${nanoid(8)}`;
+            const now     = today();
+            const scope   = "character" as const;
+            const newEntry: Entry = {
+              id: entryId, lane: fact.lane, summary,
+              status: "open", created: now, lastAccessed: now,
+              content: fact.text,
+              tokens: estimateTokens(`${summary} ${fact.text}`),
+              ...(timeCtx ? { timeContext: timeCtx } : {}),
+            };
+            const relPath = await writeEntry(scope, identityKey, newEntry);
+            await upsertIndexEntry(scope, identityKey, {
+              id: entryId, path: relPath, summary,
+              tokens: newEntry.tokens, lane: fact.lane,
+              status: "open", lastAccessed: now,
+            });
+          }
+          if (facts.length > 0) {
+            console.info(`[ME:tier3] saved ${facts.length} ambient fact(s) for ${identityKey}`);
+          }
+        } catch (err) {
+          console.warn("[ME:tier3] ambient pass failed:", err);
+        }
+      })();
     }
 
     return reply.send({ memoryBlock: contextBlock, created, bookmarksExtracted, surfacedIds });

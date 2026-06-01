@@ -11,8 +11,9 @@
 // ╚══════════════════════════════════════════════════════════════════════════╝
 
 const MEMORY_EXTENDER = "http://127.0.0.1:3001";
-const ME_DEBUG = true;   // set false to silence pipeline tracing
-const dbg = (...a) => ME_DEBUG && console.debug("[ME:dbg]", ...a);
+const ME_DEBUG_KEY = `${marinara.extensionId}:debug`;
+const isDebug = () => localStorage.getItem(ME_DEBUG_KEY) === "1";
+const dbg = (...a) => isDebug() && console.debug("[ME:dbg]", ...a);
 const REGEX_INSTALLED_KEY = `${marinara.extensionId}:regex-installed:v5`;
 const REGEX_SCRIPT_NAME = "Marinara Extender: Strip memory tags";
 
@@ -631,6 +632,25 @@ function renderSettingsSection() {
 
   row.append(lbl, pill);
   body.appendChild(row);
+
+  // Debug logging toggle
+  const debugRow = el("div", "me-settings-row");
+  const debugLbl = el("div", "me-settings-lbl");
+  debugLbl.textContent = "Debug logging";
+  const debugSmall = el("small");
+  const debugOn = isDebug();
+  debugSmall.textContent = debugOn ? "Verbose pipeline logs to browser console" : "Off — errors only";
+  debugLbl.appendChild(debugSmall);
+  const debugPill = el("button", "me-toggle-pill");
+  if (debugOn) debugPill.classList.add("on");
+  debugPill.addEventListener("click", () => {
+    const next = !isDebug();
+    localStorage.setItem(ME_DEBUG_KEY, next ? "1" : "0");
+    renderPanel();
+  });
+  debugRow.append(debugLbl, debugPill);
+  body.appendChild(debugRow);
+
   wrap.appendChild(body);
   return wrap;
 }
@@ -1897,9 +1917,19 @@ async function ensureLorebook(characterId, characterName) {
 
 // Nuke every "Memory System" entry in the lorebook, then create exactly 2 fresh ones.
 // No caching, no ID tracking, no dedup logic. Absolute correctness every cycle.
-const ENTRY_BASE = { keys: [], constant: true, locked: true, role: "system", noVector: true, sticky: 0, cooldown: 0, delay: 0, ephemeral: 0 };
+const ENTRY_BASE = { keys: [], constant: true, locked: false, role: "system", noVector: true, sticky: 0, cooldown: 0, delay: 0, ephemeral: 0 };
+
+// Mutex: only one lorebook write at a time. Concurrent calls wait for the current one to finish.
+let _lorebookWriteChain = Promise.resolve();
 
 async function writeMemoryToLorebook(lorebookId, memoryBlock) {
+  // Serialize all lorebook writes so concurrent calls don't each see an empty lorebook.
+  const result = _lorebookWriteChain.then(() => _doWriteMemoryToLorebook(lorebookId, memoryBlock));
+  _lorebookWriteChain = result.catch(() => {});
+  return result;
+}
+
+async function _doWriteMemoryToLorebook(lorebookId, memoryBlock) {
   const { instructions, content } = splitMemoryBlock(memoryBlock);
   dbg(`writeMemoryToLorebook: lb=${lorebookId} instr=${instructions.length} content=${content.length}`);
   if (content) dbg(`  content preview: ${content.slice(0, 120).replace(/\n/g, "↵")}…`);
@@ -1908,21 +1938,22 @@ async function writeMemoryToLorebook(lorebookId, memoryBlock) {
   try {
     const res = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries`);
     const list = Array.isArray(res) ? res : (res?.entries ?? res?.data ?? []);
-    dbg(`writeMemoryToLorebook: sweeping ${list.length} entries`);
+    dbg(`[ME:sweep] lorebook=${lorebookId} found ${list.length} entries`);
+    if (list.length > 0) dbg(`[ME:sweep] first entry raw:`, JSON.stringify(list[0]).slice(0, 400));
     for (const entry of list) {
       const d  = parseData(entry);
       // Try every known ID field Marinara might use.
       const id = String(entry.id ?? d.id ?? d.uid ?? d._id ?? "");
-      dbg(`  entry raw keys: ${Object.keys(entry).join(",")} | id="${id}" name="${entry.name ?? d.name ?? "?"}"`);
-      if (!id || id === "undefined") { dbg("  skipping — no id"); continue; }
-      const unlockRes = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${id}`, {
+      dbg(`[ME:sweep]  entry id="${id}" name="${entry.name ?? d.name ?? "?"}"`);
+      if (!id || id === "undefined") { dbg("[ME:sweep]  SKIP — no usable id"); continue; }
+      const unlockBody = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${id}`, {
         method: "PATCH", body: JSON.stringify({ locked: false }),
-      }).catch(e => { dbg(`  unlock failed: ${e}`); return null; });
-      dbg(`  unlock → ${unlockRes ? "ok" : "failed"}`);
-      const delRes = await marinara.apiFetch(`/lorebooks/${lorebookId}/entries/${id}`, {
-        method: "DELETE",
-      }).catch(e => { dbg(`  delete failed: ${e}`); return null; });
-      dbg(`  delete → ${delRes !== null ? "ok" : "failed"}`);
+      }).catch(e => ({ _err: String(e) }));
+      dbg(`[ME:sweep]  unlock ${id}:`, JSON.stringify(unlockBody).slice(0, 100));
+      const delBody = await fetch(`/api/lorebooks/${lorebookId}/entries/${id}`, { method: "DELETE" })
+        .then(r => r.status === 204 || r.headers.get("content-length") === "0" ? {} : r.json())
+        .catch(e => ({ _err: String(e) }));
+      dbg(`[ME:sweep]  delete ${id}:`, JSON.stringify(delBody).slice(0, 100));
     }
   } catch (err) { console.error("[ME] entry sweep failed:", err); }
 
@@ -2018,11 +2049,23 @@ async function checkForNewMessage() {
     lastMsgId[chatId] = msgId;
 
     if (!content) { dbg("checkForNewMessage: last message has no content"); return; }
-    dbg(`checkForNewMessage: new message msgId=${msgId} contentLength=${content.length} — calling process-turn`);
+
+    // Find the last user message immediately before this AI response.
+    const lastIdx = msgs.findLastIndex(m => {
+      const id = String(m.id ?? parseData(m).id ?? "");
+      return id === msgId;
+    });
+    const lastUserMsg = lastIdx > 0 ? [...msgs].slice(0, lastIdx).reverse().find(m => {
+      const role = m.role ?? parseData(m).role;
+      return role === "user";
+    }) : null;
+    const userContent = lastUserMsg ? String(lastUserMsg.content ?? parseData(lastUserMsg).content ?? "") : "";
+
+    dbg(`checkForNewMessage: new message msgId=${msgId} contentLength=${content.length} userContentLength=${userContent.length} — calling process-turn`);
 
     const result = await memFetch("/api/process-turn", {
       method: "POST",
-      body: JSON.stringify({ characterId, chatId, turnNumber: msgs.length, messageText: content }),
+      body: JSON.stringify({ characterId, chatId, turnNumber: msgs.length, messageText: content, userMessageText: userContent }),
     });
     dbg(`checkForNewMessage: process-turn response memoryBlock length=${result?.memoryBlock?.length ?? "null"} created=${result?.created} bookmarks=${result?.bookmarksExtracted}`);
     if (!result?.memoryBlock) { dbg("checkForNewMessage: no memoryBlock in response — aborting"); return; }

@@ -269,8 +269,16 @@ marinara.addStyle(`
   .me-import-chevron { font-size: 10px; color: #6b7280; margin-left: auto; transition: transform 0.15s; }
   .me-import-chevron.open { transform: rotate(90deg); }
   .me-import-body { padding-bottom: 6px; }
+  .me-import-search {
+    display: block; width: calc(100% - 20px); margin: 6px 10px 4px;
+    background: #1a1816; border: 1px solid #3d3a36; border-radius: 4px;
+    color: #e8e5e0; font-size: 11px; padding: 4px 8px; font-family: inherit;
+    box-sizing: border-box;
+  }
+  .me-import-search:focus { outline: none; border-color: #60a5fa; }
+  .me-import-search::placeholder { color: #6b7280; }
   .me-import-all-btn {
-    display: block; width: calc(100% - 20px); margin: 6px 10px 0;
+    display: block; width: calc(100% - 20px); margin: 4px 10px 0;
     background: #252320; border: 1px solid #3d3a36;
     border-radius: 4px; color: #e8e5e0; font-size: 11px;
     cursor: pointer; padding: 5px 8px; font-family: inherit; text-align: center;
@@ -278,9 +286,12 @@ marinara.addStyle(`
   .me-import-all-btn:hover:not(:disabled) { border-color: #f97316; color: #f97316; }
   .me-import-all-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .me-import-warning { margin: 4px 10px 0; font-size: 10px; color: #f59e0b; text-align: center; }
+  .me-import-list { max-height: 240px; overflow-y: auto; margin-top: 4px; }
   .me-chat-row { display: flex; align-items: center; gap: 6px; padding: 3px 10px; }
   .me-chat-row:hover { background: #1e1c19; }
-  .me-chat-name { flex: 1; min-width: 0; font-size: 11px; color: #c9c5bf; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .me-chat-info { flex: 1; min-width: 0; }
+  .me-chat-name { display: block; font-size: 11px; color: #c9c5bf; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .me-chat-folder { display: block; font-size: 10px; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .me-chat-import-btn {
     flex-shrink: 0; background: none; border: 1px solid #3d3a36;
     border-radius: 3px; color: #9ca3af; font-size: 10px;
@@ -288,8 +299,15 @@ marinara.addStyle(`
   }
   .me-chat-import-btn:hover:not(:disabled) { border-color: #60a5fa; color: #60a5fa; }
   .me-chat-import-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .me-chat-hide-btn {
+    flex-shrink: 0; background: none; border: none; color: #4b5563;
+    font-size: 12px; cursor: pointer; padding: 0 2px; line-height: 1;
+  }
+  .me-chat-hide-btn:hover { color: #f87171; }
   .me-import-ok  { flex-shrink: 0; font-size: 10px; color: #34d399; }
   .me-import-err { flex-shrink: 0; font-size: 10px; color: #f87171; }
+  .me-import-hidden-row { padding: 2px 10px; font-size: 10px; color: #4b5563; cursor: pointer; }
+  .me-import-hidden-row:hover { color: #9ca3af; }
 
   /* Story ingest section */
   @keyframes me-spin { to { transform: rotate(360deg); } }
@@ -526,6 +544,7 @@ const panelState = {
   importAllActive: false,
   importAllProgress: null, // { current, total }
   importResults: {},       // { [chatId]: { count } | { error } }
+  importFilter: "",        // live search string
   // Story ingest section
   ingestExpanded: false,
   ingestPovChar: "",
@@ -1437,22 +1456,58 @@ function renderImportSection() {
     body.appendChild(msg); wrap.appendChild(body); return wrap;
   }
 
-  const chats = panelState.importChats ?? [];
+  const allChats = panelState.importChats ?? [];
 
-  if (chats.length === 0) {
+  // Load hidden chat IDs from localStorage
+  let hiddenIds;
+  try { hiddenIds = new Set(JSON.parse(localStorage.getItem(HIDDEN_IMPORTS_KEY) ?? "[]")); }
+  catch { hiddenIds = new Set(); }
+
+  const hideChat = (id) => {
+    hiddenIds.add(id);
+    localStorage.setItem(HIDDEN_IMPORTS_KEY, JSON.stringify([...hiddenIds]));
+    renderPanel();
+  };
+  const showAllHidden = () => {
+    localStorage.removeItem(HIDDEN_IMPORTS_KEY);
+    renderPanel();
+  };
+
+  // Apply search filter + hidden filter
+  const q = (panelState.importFilter ?? "").toLowerCase().trim();
+  const visible = allChats.filter(c => !hiddenIds.has(c.id));
+  const chats   = q
+    ? visible.filter(c => c.name.toLowerCase().includes(q) || c.folderName.toLowerCase().includes(q))
+    : visible;
+  const hiddenCount = allChats.length - visible.length;
+
+  if (allChats.length === 0) {
     const msg = el("div", "me-section-empty");
     msg.textContent = "No other chats found for this character.";
     body.appendChild(msg); wrap.appendChild(body); return wrap;
   }
 
+  // Search box
+  const search = el("input", "me-import-search");
+  search.type = "text";
+  search.placeholder = "Filter by name or folder…";
+  search.value = panelState.importFilter ?? "";
+  search.addEventListener("input", e => {
+    panelState.importFilter = e.target.value;
+    renderPanel();
+  });
+  body.appendChild(search);
+
   const anyBusy = panelState.importAllActive || panelState.importingSet.size > 0;
 
-  // Import all button + warning
+  // Import all / import filtered button
   const allBtn = el("button", "me-import-all-btn");
-  allBtn.disabled = anyBusy;
+  allBtn.disabled = anyBusy || chats.length === 0;
   if (panelState.importAllActive && panelState.importAllProgress) {
     const { current, total } = panelState.importAllProgress;
     allBtn.textContent = `Digesting… (${current}/${total})`;
+  } else if (q) {
+    allBtn.textContent = `Import filtered (${chats.length})`;
   } else {
     allBtn.textContent = `Import all (${chats.length} chat${chats.length === 1 ? "" : "s"})`;
   }
@@ -1463,12 +1518,28 @@ function renderImportSection() {
   warning.textContent = "⚠ This may take some time";
   body.appendChild(warning);
 
-  // Per-chat rows
+  // Scrollable list
+  const listEl = el("div", "me-import-list");
+
+  if (chats.length === 0) {
+    const empty = el("div", "me-section-empty"); empty.style.padding = "6px 10px";
+    empty.textContent = q ? "No chats match that filter." : "All chats hidden.";
+    listEl.appendChild(empty);
+  }
+
   for (const chat of chats) {
     const row = el("div", "me-chat-row");
+
+    const info = el("div", "me-chat-info");
     const nameEl = el("span", "me-chat-name");
     nameEl.textContent = chat.name; nameEl.title = chat.name;
-    row.appendChild(nameEl);
+    info.appendChild(nameEl);
+    if (chat.folderName) {
+      const folderEl = el("span", "me-chat-folder");
+      folderEl.textContent = `📁 ${chat.folderName}`;
+      info.appendChild(folderEl);
+    }
+    row.appendChild(info);
 
     const result = panelState.importResults[chat.id];
     const isImporting = panelState.importingSet.has(chat.id);
@@ -1492,7 +1563,24 @@ function renderImportSection() {
       row.appendChild(importBtn);
     }
 
-    body.appendChild(row);
+    // Hide button — removes from list, stored in localStorage
+    const hideBtn = el("button", "me-chat-hide-btn");
+    hideBtn.textContent = "×"; hideBtn.title = "Hide from this list";
+    hideBtn.addEventListener("click", () => hideChat(chat.id));
+    row.appendChild(hideBtn);
+
+    listEl.appendChild(row);
+  }
+
+  body.appendChild(listEl);
+
+  // Show hidden count with restore link
+  if (hiddenCount > 0) {
+    const restoreRow = el("div", "me-import-hidden-row");
+    restoreRow.textContent = `${hiddenCount} hidden — click to restore`;
+    restoreRow.title = "Restore all hidden chats";
+    restoreRow.addEventListener("click", showAllHidden);
+    body.appendChild(restoreRow);
   }
 
   wrap.appendChild(body);
@@ -1509,8 +1597,18 @@ async function loadImportChats() {
 
   try {
     const { characterId, chatId } = panelState.session;
-    const res = await marinara.apiFetch("/chats");
-    const list = Array.isArray(res) ? res : (res?.chats ?? res?.data ?? []);
+    const [chatsRes, foldersRes] = await Promise.all([
+      marinara.apiFetch("/chats"),
+      marinara.apiFetch("/chat-folders").catch(() => []),
+    ]);
+    const list    = Array.isArray(chatsRes)   ? chatsRes   : (chatsRes?.chats   ?? chatsRes?.data   ?? []);
+    const folders = Array.isArray(foldersRes) ? foldersRes : (foldersRes?.folders ?? foldersRes?.data ?? []);
+
+    // Build folderId → name lookup
+    const folderMap = new Map(folders.map(f => {
+      const d = parseData(f);
+      return [String(f.id ?? d.id), String(f.name ?? d.name ?? "")];
+    }));
 
     panelState.importChats = list
       .filter(c => {
@@ -1519,10 +1617,18 @@ async function loadImportChats() {
       })
       .map(c => {
         const d = parseData(c);
+        const id = String(c.id ?? d.id);
+        const folderId = String(c.folderId ?? d.folderId ?? "");
         return {
-          id:   String(c.id ?? d.id),
-          name: String(c.name ?? c.title ?? d.name ?? d.title ?? `Chat ${shorten(String(c.id ?? ""), 8)}`),
+          id,
+          name:       String(c.name ?? c.title ?? d.name ?? d.title ?? `Chat ${shorten(id, 8)}`),
+          folderName: folderMap.get(folderId) ?? "",
         };
+      })
+      .sort((a, b) => {
+        // Sort: folder name first, then chat name
+        const f = a.folderName.localeCompare(b.folderName);
+        return f !== 0 ? f : a.name.localeCompare(b.name);
       });
   } catch {
     panelState.importChatsError = "Failed to load chat list.";
@@ -1861,6 +1967,7 @@ async function resolveSession() {
 let currentSession = null;
 const lastMsgId = {};      // chatId → last processed assistant message id
 const SNAPSHOT_KEY = `${marinara.extensionId}:snapshot-time`;
+const HIDDEN_IMPORTS_KEY = `${marinara.extensionId}:hidden-imports`;
 const SNAPSHOT_INTERVAL_MS = 30 * 60 * 1000;  // 30 minutes
 
 function getSnapshotTime(chatId) {

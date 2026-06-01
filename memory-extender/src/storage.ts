@@ -111,12 +111,32 @@ async function exists(filePath: string): Promise<boolean> {
 async function readYaml<T>(filePath: string): Promise<T | null> {
   if (!(await exists(filePath))) return null;
   const raw = await readFile(filePath, "utf8");
-  return parse(raw) as T;
+  try {
+    return parse(raw) as T;
+  } catch (err) {
+    console.error(`[ME:storage] corrupt YAML at ${filePath} — treating as empty:`, err instanceof Error ? err.message : err);
+    return null;
+  }
 }
 
 async function writeYaml(filePath: string, data: unknown): Promise<void> {
   await ensureDir(filePath);
   await writeFile(filePath, stringify(data), "utf8");
+}
+
+// ── Write serialization ───────────────────────────────────────────────────────
+// Concurrent upsertIndexEntry calls for the same file cause read-modify-write
+// races that corrupt YAML. Serialize all writes per file path.
+
+const _writeLocks = new Map<string, Promise<void>>();
+
+function serializedWrite(filePath: string, fn: () => Promise<void>): Promise<void> {
+  const prev = _writeLocks.get(filePath) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  _writeLocks.set(filePath, next);
+  // Prune resolved locks to avoid unbounded growth.
+  next.then(() => { if (_writeLocks.get(filePath) === next) _writeLocks.delete(filePath); });
+  return next;
 }
 
 // ── Index operations ─────────────────────────────────────────────────────────
@@ -125,6 +145,9 @@ export async function readIndex(scope: Scope, scopeId: string): Promise<ScopeInd
   return readYaml<ScopeIndex>(indexPath(scope, scopeId));
 }
 
+// writeIndex is intentionally NOT serialized — callers that need serialization
+// (upsertIndexEntry, removeIndexEntry) use serializedWrite themselves and call
+// writeYaml directly inside the lock to avoid deadlock.
 export async function writeIndex(index: ScopeIndex): Promise<void> {
   await writeYaml(indexPath(index.scope, index.scopeId), index);
 }
@@ -138,12 +161,15 @@ export async function upsertIndexEntry(
   scopeId: string,
   entry: IndexEntry,
 ): Promise<void> {
-  const index = (await readIndex(scope, scopeId)) ?? emptyIndex(scope, scopeId);
-  const i = index.entries.findIndex((e) => e.id === entry.id);
-  if (i >= 0) index.entries[i] = entry;
-  else index.entries.push(entry);
-  index.lastUpdated = new Date().toISOString();
-  await writeIndex(index);
+  const p = indexPath(scope, scopeId);
+  return serializedWrite(p, async () => {
+    const index = (await readIndex(scope, scopeId)) ?? emptyIndex(scope, scopeId);
+    const i = index.entries.findIndex((e) => e.id === entry.id);
+    if (i >= 0) index.entries[i] = entry;
+    else index.entries.push(entry);
+    index.lastUpdated = new Date().toISOString();
+    await writeYaml(p, index);
+  });
 }
 
 export async function removeIndexEntry(
@@ -151,11 +177,14 @@ export async function removeIndexEntry(
   scopeId: string,
   entryId: string,
 ): Promise<void> {
-  const index = await readIndex(scope, scopeId);
-  if (!index) return;
-  index.entries = index.entries.filter((e) => e.id !== entryId);
-  index.lastUpdated = new Date().toISOString();
-  await writeIndex(index);
+  const p = indexPath(scope, scopeId);
+  return serializedWrite(p, async () => {
+    const index = await readIndex(scope, scopeId);
+    if (!index) return;
+    index.entries = index.entries.filter((e) => e.id !== entryId);
+    index.lastUpdated = new Date().toISOString();
+    await writeYaml(p, index);
+  });
 }
 
 // ── Entry operations ──────────────────────────────────────────────────────────

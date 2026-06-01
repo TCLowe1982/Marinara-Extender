@@ -1869,18 +1869,27 @@ async function ensureLorebook(characterId, characterName) {
   } catch { /* will create below */ }
 
   if (!lorebookId) {
+    dbg(`ensureLorebook: not found — creating "${lorebookName}" for characterId=${characterId}`);
     try {
       const res = await marinara.apiFetch("/lorebooks", {
         method: "POST",
         body: JSON.stringify({ name: lorebookName, characterId, enabled: true }),
       });
+      dbg(`ensureLorebook: POST response keys=${Object.keys(res ?? {}).join(",")} raw=${JSON.stringify(res).slice(0, 200)}`);
       const d = parseData(res);
-      lorebookId = String(res.id ?? d.id);
-      console.info(`[ME] lorebook created for ${characterName ?? characterId}`);
+      const rawId = res.id ?? d.id ?? res.data?.id;
+      lorebookId = rawId != null ? String(rawId) : null;
+      if (!lorebookId || lorebookId === "undefined") {
+        console.error("[ME] lorebook create returned no usable ID — response:", JSON.stringify(res).slice(0, 300));
+        return null;
+      }
+      console.info(`[ME] lorebook created for ${characterName ?? characterId} — id=${lorebookId}`);
     } catch (err) {
       console.error("[ME] lorebook create failed:", err);
       return null;
     }
+  } else {
+    dbg(`ensureLorebook: found existing lorebookId=${lorebookId}`);
   }
 
   return lorebookId;

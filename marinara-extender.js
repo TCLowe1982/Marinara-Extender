@@ -1845,6 +1845,20 @@ async function resolveSession() {
 
 let currentSession = null;
 const lastMsgId = {};      // chatId → last processed assistant message id
+const SNAPSHOT_KEY = `${marinara.extensionId}:snapshot-time`;
+const SNAPSHOT_INTERVAL_MS = 30 * 60 * 1000;  // 30 minutes
+
+function getSnapshotTime(chatId) {
+  try { return JSON.parse(localStorage.getItem(SNAPSHOT_KEY) ?? "{}")[chatId] ?? 0; }
+  catch { return 0; }
+}
+function setSnapshotTime(chatId, ts) {
+  try {
+    const map = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) ?? "{}");
+    map[chatId] = ts;
+    localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(map));
+  } catch { /* storage full or unavailable */ }
+}
 
 async function refreshSession() {
   currentSession = await resolveSession();
@@ -2062,6 +2076,26 @@ async function checkForNewMessage() {
     const userContent = lastUserMsg ? String(lastUserMsg.content ?? parseData(lastUserMsg).content ?? "") : "";
 
     dbg(`checkForNewMessage: new message msgId=${msgId} contentLength=${content.length} userContentLength=${userContent.length} — calling process-turn`);
+
+    // Tier 1: snapshot every 30 minutes of active chat.
+    const now = Date.now();
+    const lastSnap = getSnapshotTime(chatId);
+    if (lastSnap === 0) {
+      // First time seeing this chat — seed the timer without snapshotting.
+      setSnapshotTime(chatId, now);
+    } else if (now - lastSnap >= SNAPSHOT_INTERVAL_MS) {
+      setSnapshotTime(chatId, now);
+      const snapMsgs = msgs.slice(-40).map(m => {
+        const d = parseData(m);
+        return { role: m.role ?? d.role ?? "user", content: String(m.content ?? d.content ?? "") };
+      }).filter(m => m.content);
+      dbg(`checkForNewMessage: firing 30-min snapshot — ${snapMsgs.length} messages`);
+      memFetch("/api/snapshot", {
+        method: "POST",
+        body: JSON.stringify({ characterId, characterName: currentSession?.characterName, messages: snapMsgs }),
+      }).then(r => console.info(`[ME:snapshot] done — created=${r?.created ?? 0}`))
+        .catch(err => dbg("snapshot failed:", err));
+    }
 
     const result = await memFetch("/api/process-turn", {
       method: "POST",

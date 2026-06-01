@@ -193,6 +193,61 @@ async function createEntry(
   return entry;
 }
 
+// ── Snapshot prompt (session summary — different framing from full import) ────
+
+function buildSnapshotSystemPrompt(characterName: string): string {
+  return `You are capturing a memory snapshot from an ongoing session between a user and "${characterName}". This is NOT a full archive — focus only on what was actively happening in these recent messages. Return raw JSON only — no explanation, no markdown fences.
+
+Format: {"entries":[{"lane":"...","summary":"...","content":"...","status":"..."}]}
+
+Lanes:
+- open_threads: Work in progress, tasks being worked on right now, things promised or left unresolved.
+- user_topics: Facts or preferences the user revealed — things ${characterName} should remember about who this person is.
+- character_topics: Emotional moments, things discussed, lore established during this session.
+
+Each entry: lane, summary (≤80 chars), content (1-3 sentences), status (open_threads only: open|in_progress|done|deferred).
+Rules: 2-6 entries. Only capture what's genuinely worth keeping from this window. Skip greetings, filler, and anything already routine.`;
+}
+
+function buildSnapshotUserPrompt(messages: DigestMessage[], characterName: string): string {
+  const history = messages
+    .map((m) => `${m.role === "user" ? "User" : characterName}: ${m.content}`)
+    .join("\n\n");
+  return `Capture a memory snapshot of this session window:\n\n${history}`;
+}
+
+export async function snapshotSession(
+  messages: DigestMessage[],
+  characterId: string,
+  characterName: string,
+): Promise<DigestResult> {
+  const model = process.env.MARINARA_EXTENDER_DIGEST_MODEL ?? "gpt-4o-mini";
+  const raw = await callLlm(
+    buildSnapshotSystemPrompt(characterName),
+    buildSnapshotUserPrompt(messages, characterName),
+    model,
+  );
+
+  let extracted: ExtractedEntry[];
+  try {
+    const cleaned = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "").trim();
+    const parsed = JSON.parse(cleaned) as { entries?: unknown[] };
+    extracted = (Array.isArray(parsed.entries) ? parsed.entries : []) as ExtractedEntry[];
+  } catch {
+    throw new Error(`Could not parse snapshot LLM response as JSON: ${raw.slice(0, 300)}`);
+  }
+
+  const created: Entry[] = [];
+  for (const e of extracted) {
+    if (!VALID_LANES.includes(e.lane)) continue;
+    if (!e.summary?.trim()) continue;
+    created.push(await createEntry(characterId, e));
+  }
+
+  console.info(`[ME:snapshot] saved ${created.length} entries for ${characterId}`);
+  return { created: created.length, entries: created };
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export async function digestMessages(

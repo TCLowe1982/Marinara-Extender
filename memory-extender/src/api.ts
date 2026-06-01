@@ -25,7 +25,7 @@ import {
   type Bookmark,
 } from "./storage.js";
 import { nanoid } from "./nanoid.js";
-import { digestMessages, type DigestMessage } from "./digest.js";
+import { digestMessages, snapshotSession, type DigestMessage } from "./digest.js";
 import { processResponse, extractRememberTags } from "./writer.js";
 import { loadContext } from "./loader.js";
 import { runPromotion, recordRecitation } from "./promotion.js";
@@ -582,6 +582,28 @@ export function registerApiRoutes(app: FastifyInstance): void {
     }
 
     return reply.send({ memoryBlock: contextBlock, created, bookmarksExtracted, surfacedIds });
+  });
+
+  // ── POST /api/snapshot ───────────────────────────────────────────────────
+  // Tier 1: called by the extension every 30 minutes of active chat.
+  // Summarises the last N messages into character-scope memory entries.
+  // Body: { characterId, characterName?, messages: DigestMessage[] }
+
+  app.post<{
+    Body: { characterId: string; characterName?: string; messages: DigestMessage[] };
+  }>("/api/snapshot", async (req, reply) => {
+    const { characterId, characterName, messages } = req.body ?? {};
+    if (!characterId || !Array.isArray(messages) || messages.length === 0) {
+      return reply.code(400).send({ error: "characterId and messages[] are required" });
+    }
+    const identityKey = await resolveIdentity(characterId, characterName);
+    try {
+      const result = await snapshotSession(messages.slice(-40), identityKey, characterName ?? identityKey);
+      return reply.send({ created: result.created });
+    } catch (err) {
+      console.error("[ME:snapshot] failed:", err);
+      return reply.code(500).send({ error: "snapshot failed" });
+    }
   });
 
   // ── POST /api/entries/:id/recite ──────────────────────────────────────────

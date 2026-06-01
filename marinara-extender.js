@@ -1830,7 +1830,7 @@ const lastMsgId = {};      // chatId → last processed assistant message id
 // In-memory cache is always the primary; localStorage is the fallback so
 // findOrCreateEntry only needs to run once per character, ever.
 
-const LOREBOOK_CACHE_LS_KEY = `${marinara.extensionId}:lorebook-ids:v1`;
+const LOREBOOK_CACHE_LS_KEY = `${marinara.extensionId}:lorebook-ids:v2`;
 
 function _loadLorebookCache() {
   try {
@@ -1887,13 +1887,18 @@ async function findOrCreateEntry(lorebookId, comment, displayName, order) {
     dbg(`findOrCreateEntry(${comment}): lorebook has ${list.length} entries`);
     const matches = list.filter(e => {
       const ed = parseData(e);
-      // Match on comment field — name is cosmetic and may have been renamed by the user.
-      return (ed.comment ?? e.comment) === comment;
+      const entryComment = ed.comment ?? e.comment;
+      const entryName    = ed.name    ?? e.name;
+      return entryComment === comment || entryName === displayName;
     });
-    dbg(`findOrCreateEntry(${comment}): ${matches.length} match(es) by comment`);
+    dbg(`findOrCreateEntry(${comment}): ${matches.length} match(es) by comment or name`);
     // Deduplicate — keep the entry with the most content, delete the rest.
     if (matches.length > 1) {
-      matches.sort((a, b) => (parseData(b).content?.length ?? 0) - (parseData(a).content?.length ?? 0));
+      matches.sort((a, b) => {
+        const ac = parseData(a).content ?? a.content ?? "";
+        const bc = parseData(b).content ?? b.content ?? "";
+        return String(bc).length - String(ac).length;
+      });
       for (const dupe of matches.slice(1)) {
         const did = resolveEntryId(dupe);
         if (did) {

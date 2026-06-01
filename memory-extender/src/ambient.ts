@@ -104,6 +104,35 @@ export interface AmbientInput {
   characterText: string;
 }
 
+async function callExternal(prompt: string): Promise<string | null> {
+  const { getCachedAuth } = await import("./auth-cache.js");
+  const auth = getCachedAuth();
+  if (!auth) return null;
+  const upstream = (process.env.MARINARA_EXTENDER_DIGEST_UPSTREAM ?? "https://api.openai.com").replace(/\/$/, "");
+  const model = process.env.MARINARA_EXTENDER_DIGEST_MODEL ?? "gpt-4o-mini";
+  try {
+    const res = await fetch(`${upstream}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: auth },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: prompt }],
+        temperature: 0.1,
+        max_tokens: 800,
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    return json?.choices?.[0]?.message?.content ?? null;
+  } catch { return null; }
+}
+
+function looksLikeJson(s: string): boolean {
+  const t = s.trim();
+  return t.startsWith("[") || t.startsWith("{");
+}
+
 export async function classifyAmbient(input: AmbientInput): Promise<AmbientFact[]> {
   const userCandidates = extractCandidates(input.userText);
   const charCandidates = extractCandidates(input.characterText);
@@ -115,7 +144,14 @@ export async function classifyAmbient(input: AmbientInput): Promise<AmbientFact[
   for (const s of charCandidates) lines.push(`[character] ${s}`);
 
   const prompt = `Sentences to evaluate:\n${lines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
-  const raw = await callLocal(prompt);
+
+  let raw = await callLocal(prompt);
+  if (raw !== null && !looksLikeJson(raw)) {
+    console.warn("[ME:ambient] local model returned prose — falling back to external API");
+    raw = null;
+  }
+  if (raw === null) raw = await callExternal(prompt);
+
   const facts = parseFactsJson(raw);
 
   if (facts.length > 0) {

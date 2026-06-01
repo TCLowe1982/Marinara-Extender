@@ -140,14 +140,21 @@ async function callExternalLlm(systemPrompt: string, userPrompt: string, model: 
 
 // ── LLM call (local → external fallback) ─────────────────────────────────────
 
+function looksLikeJson(s: string): boolean {
+  const t = s.trim();
+  return t.startsWith("{") || t.startsWith("[") || t.includes('"entries"');
+}
+
 async function callLlm(systemPrompt: string, userPrompt: string, model: string): Promise<string> {
   const local = await callLocalLlm(systemPrompt, userPrompt);
   if (local !== null) {
-    console.log("[digest] local model ok");
-    return local;
-  }
-  if (process.env.MARINARA_EXTENDER_LOCAL_URL) {
-    console.log("[digest] local model unavailable, falling back to external API");
+    if (looksLikeJson(local)) {
+      console.log("[digest] local model ok");
+      return local;
+    }
+    console.warn("[digest] local model returned prose instead of JSON — falling back to external API");
+  } else if (process.env.MARINARA_EXTENDER_LOCAL_URL) {
+    console.log("[digest] local model unavailable — falling back to external API");
   }
   return callExternalLlm(systemPrompt, userPrompt, model);
 }

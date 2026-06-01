@@ -1849,12 +1849,8 @@ function splitMemoryBlock(memoryBlock) {
 }
 
 // Find or create the lorebook container for this character. Returns lorebookId.
-// Simple in-memory cache is fine — the lorebook itself never changes.
-const _lorebookIdCache = {};
-
+// No caching — always does a fresh lookup so deletions are handled correctly.
 async function ensureLorebook(characterId, characterName) {
-  if (_lorebookIdCache[characterId]) return _lorebookIdCache[characterId];
-
   const lorebookName = `Marinara Extender — ${characterName ?? characterId}`;
   let lorebookId = null;
 
@@ -1880,13 +1876,13 @@ async function ensureLorebook(characterId, characterName) {
       });
       const d = parseData(res);
       lorebookId = String(res.id ?? d.id);
+      console.info(`[ME] lorebook created for ${characterName ?? characterId}`);
     } catch (err) {
       console.error("[ME] lorebook create failed:", err);
       return null;
     }
   }
 
-  _lorebookIdCache[characterId] = lorebookId;
   return lorebookId;
 }
 

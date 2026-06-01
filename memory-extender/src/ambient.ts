@@ -9,7 +9,9 @@ import type { Lane } from "./storage.js";
 
 // ── Candidate extraction ──────────────────────────────────────────────────────
 
-const FIRST_PERSON_RE = /\b(I|my|me|we|our|I'm|I've|I'd|I'll)\b/i;
+const FIRST_PERSON_RE  = /\b(I|my|me|we|our|I'm|I've|I'd|I'll)\b/i;
+// Proper noun as sentence subject: "Sarah said", "Dr. Johnson is", "Mom called"
+const NAMED_SUBJECT_RE = /^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+(is|was|said|told|called|mentioned|asked|works|lives|has|had|goes|studies|knows|thinks|feels|told|gave|came|left|helped|showed|found)/;
 
 export function extractCandidates(text: string): string[] {
   return text
@@ -19,7 +21,7 @@ export function extractCandidates(text: string): string[] {
       s.length > 10 &&
       s.length <= 120 &&
       !s.endsWith("?") &&
-      FIRST_PERSON_RE.test(s),
+      (FIRST_PERSON_RE.test(s) || NAMED_SUBJECT_RE.test(s)),
     );
 }
 

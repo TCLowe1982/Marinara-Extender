@@ -39,17 +39,24 @@ export interface DigestResult {
 // ── Extraction prompt ─────────────────────────────────────────────────────────
 
 function buildSystemPrompt(characterName: string): string {
-  return `You are a memory archivist extracting insights from a chat log involving "${characterName}". Return raw JSON only — no explanation, no markdown fences.
+  return `You are a memory archivist. Extract insights from the chat log and respond ONLY with valid JSON matching the schema below. No commentary, no analysis, no markdown, no prose — JSON only.
 
-Format: {"entries":[{"lane":"...","summary":"...","content":"...","status":"..."}]}
+SCHEMA:
+{"entries":[{"lane":"<lane>","summary":"<summary>","content":"<content>","status":"<status>"}]}
 
-Lanes:
-- open_threads: Ongoing tasks, unresolved issues, promises, or follow-ups.
-- user_topics: Subjects the user mentioned repeatedly or cares about.
-- character_topics: Things ${characterName} would want to remember — emotional moments, lore, things to bring up.
+FIELD RULES:
+- lane: one of "open_threads" | "user_topics" | "character_topics"
+  - open_threads: ongoing tasks, unresolved issues, promises, follow-ups
+  - user_topics: subjects the user mentioned repeatedly or clearly cares about
+  - character_topics: things ${characterName} would want to remember — emotional moments, lore, callbacks
+- summary: ≤80 chars, plain text
+- content: 1-3 sentences
+- status: only for open_threads — "open" | "in_progress" | "done" | "deferred". Omit for other lanes.
 
-Each entry: lane, summary (≤80 chars), content (1-3 sentences), status (open_threads only: open|in_progress|done|deferred).
-Rules: Be selective. 3-8 entries typical. Fewer is better. Skip greetings and ephemeral small talk.`;
+EXAMPLE OUTPUT:
+{"entries":[{"lane":"user_topics","summary":"TC is writing a research paper on attachment theory","content":"TC mentioned working on a paper about attachment theory. He is in the editing phase and finds it emotionally difficult."},{"lane":"open_threads","summary":"Follow up on paper submission deadline","content":"TC hasn't mentioned when the paper is due. Worth asking next session.","status":"open"}]}
+
+RULES: Be selective. 3-8 entries typical. Fewer is better. Skip greetings and ephemeral small talk. Output ONLY the JSON object — nothing before or after it.`;
 }
 
 function buildUserPrompt(messages: DigestMessage[], characterName: string): string {
@@ -145,6 +152,31 @@ async function callLlm(systemPrompt: string, userPrompt: string, model: string):
   return callExternalLlm(systemPrompt, userPrompt, model);
 }
 
+// ── JSON extraction (resilient against prose-wrapped responses) ───────────────
+
+function parseEntriesJson(raw: string, label: string): ExtractedEntry[] {
+  const attempts: string[] = [
+    // 1. Strip markdown fences and parse whole response
+    raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim(),
+    // 2. Find first { … } block that contains "entries"
+    (() => { const m = raw.match(/\{[\s\S]*?"entries"[\s\S]*\}/); return m?.[0] ?? ""; })(),
+    // 3. Find outermost { … } block
+    (() => { const s = raw.indexOf("{"); const e = raw.lastIndexOf("}"); return s !== -1 && e > s ? raw.slice(s, e + 1) : ""; })(),
+  ];
+
+  for (const attempt of attempts) {
+    if (!attempt) continue;
+    try {
+      const parsed = JSON.parse(attempt) as { entries?: unknown[] };
+      const entries = Array.isArray(parsed.entries) ? parsed.entries : [];
+      if (entries.length > 0 || attempt === attempts[0]) return entries as ExtractedEntry[];
+    } catch { /* try next */ }
+  }
+
+  console.warn(`[digest:${label}] could not parse LLM response as JSON — skipping. Preview: ${raw.slice(0, 120)}`);
+  return [];
+}
+
 // ── Entry creation ────────────────────────────────────────────────────────────
 
 const VALID_LANES: Lane[] = ["open_threads", "user_topics", "character_topics"];
@@ -196,17 +228,24 @@ async function createEntry(
 // ── Snapshot prompt (session summary — different framing from full import) ────
 
 function buildSnapshotSystemPrompt(characterName: string): string {
-  return `You are capturing a memory snapshot from an ongoing session between a user and "${characterName}". This is NOT a full archive — focus only on what was actively happening in these recent messages. Return raw JSON only — no explanation, no markdown fences.
+  return `You are capturing a session memory snapshot. Focus ONLY on what was actively happening in these recent messages — not a full archive. Respond ONLY with valid JSON matching the schema below. No commentary, no analysis, no markdown, no prose — JSON only.
 
-Format: {"entries":[{"lane":"...","summary":"...","content":"...","status":"..."}]}
+SCHEMA:
+{"entries":[{"lane":"<lane>","summary":"<summary>","content":"<content>","status":"<status>"}]}
 
-Lanes:
-- open_threads: Work in progress, tasks being worked on right now, things promised or left unresolved.
-- user_topics: Facts or preferences the user revealed — things ${characterName} should remember about who this person is.
-- character_topics: Emotional moments, things discussed, lore established during this session.
+FIELD RULES:
+- lane: one of "open_threads" | "user_topics" | "character_topics"
+  - open_threads: work in progress right now, things promised or left unresolved
+  - user_topics: facts or preferences the user revealed this session
+  - character_topics: emotional moments, lore, things ${characterName} should carry forward
+- summary: ≤80 chars, plain text
+- content: 1-3 sentences
+- status: only for open_threads — "open" | "in_progress" | "done" | "deferred". Omit for other lanes.
 
-Each entry: lane, summary (≤80 chars), content (1-3 sentences), status (open_threads only: open|in_progress|done|deferred).
-Rules: 2-6 entries. Only capture what's genuinely worth keeping from this window. Skip greetings, filler, and anything already routine.`;
+EXAMPLE OUTPUT:
+{"entries":[{"lane":"character_topics","summary":"Shared a quiet moment after the conference talk","content":"TC and ${characterName} stepped outside after the panel. The conversation shifted from professional to personal — he admitted he was nervous about the reception."},{"lane":"open_threads","summary":"TC mentioned wanting to revisit the ethics section","content":"He flagged the ethics section as needing another pass but they moved on. Worth returning to.","status":"open"}]}
+
+RULES: 2-6 entries. Only what genuinely matters from this window. Skip filler, greetings, routine exchanges. Output ONLY the JSON object — nothing before or after it.`;
 }
 
 function buildSnapshotUserPrompt(messages: DigestMessage[], characterName: string): string {
@@ -228,14 +267,7 @@ export async function snapshotSession(
     model,
   );
 
-  let extracted: ExtractedEntry[];
-  try {
-    const cleaned = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "").trim();
-    const parsed = JSON.parse(cleaned) as { entries?: unknown[] };
-    extracted = (Array.isArray(parsed.entries) ? parsed.entries : []) as ExtractedEntry[];
-  } catch {
-    throw new Error(`Could not parse snapshot LLM response as JSON: ${raw.slice(0, 300)}`);
-  }
+  const extracted = parseEntriesJson(raw, "snapshot");
 
   const created: Entry[] = [];
   for (const e of extracted) {
@@ -263,14 +295,7 @@ export async function digestMessages(
     usedModel,
   );
 
-  let extracted: ExtractedEntry[];
-  try {
-    const cleaned = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "").trim();
-    const parsed = JSON.parse(cleaned) as { entries?: unknown[] };
-    extracted = (Array.isArray(parsed.entries) ? parsed.entries : []) as ExtractedEntry[];
-  } catch {
-    throw new Error(`Could not parse LLM response as JSON: ${raw.slice(0, 300)}`);
-  }
+  const extracted = parseEntriesJson(raw, "digest");
 
   const created: Entry[] = [];
 

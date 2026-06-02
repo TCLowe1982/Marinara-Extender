@@ -17,16 +17,50 @@ import type { DigestMessage } from "./digest.js";
 // ── Format detection ──────────────────────────────────────────────────────────
 // If the text already has recognisable dialogue attribution, skip the LLM call.
 
-// Matches "Name: text", "**Name:** text", "*Name:* text" — RP and chat export formats.
-const ATTRIBUTION_LINE_RE = /^(?:\*{1,2})?[A-Z][A-Za-z0-9 _'-]{0,40}(?:\*{1,2})?:\s+\S/m;
+// Matches "Name: text", "**Name:** text", "*Name:* text" — RP and chat export
+// formats. Capturing group 1 is the speaker label (lazy, so it stops at the
+// first colon rather than swallowing a whole prose sentence with a mid-colon).
+const ATTRIBUTION_LINE_RE = /^(?:\*{1,2})?([A-Z][A-Za-z0-9 _'-]{0,40}?)(?:\*{1,2})?:\s+\S/;
 const MIN_ATTRIBUTED_LINES = 3;
+const MIN_ATTRIBUTED_FRACTION = 0.4;
+
+// Prefixes that look like attribution but are document headers/metadata or the
+// start of a prose sentence — never real dialogue speakers.
+const NON_SPEAKER_PREFIXES = new Set([
+  "date", "time", "note", "ps", "subject", "from", "to", "re", "cc", "bcc",
+  "chat", "chapter", "part", "author", "title", "setting", "location", "summary",
+  "warning", "content warning", "cw", "tags", "prologue", "epilogue", "the",
+]);
 
 function countAttributedLines(text: string): number {
-  return text.split("\n").filter(l => ATTRIBUTION_LINE_RE.test(l.trim())).length;
+  return text.split("\n").filter((l) => ATTRIBUTION_LINE_RE.test(l.trim())).length;
 }
 
-function isPreAttributed(text: string): boolean {
-  return countAttributedLines(text) >= MIN_ATTRIBUTED_LINES;
+// True only when the text reads like a real dialogue log: a few speakers who
+// RECUR and who account for a substantial share of the lines. Prose with stray
+// colons ("Date:", "The one that meant the most:") yields many one-off labels
+// covering few lines — that must go to the LLM attribution path, not skip it.
+export function isPreAttributed(text: string): boolean {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return false;
+
+  const counts = new Map<string, number>();
+  let attributed = 0;
+  for (const line of lines) {
+    const m = ATTRIBUTION_LINE_RE.exec(line);
+    if (!m) continue;
+    const label = m[1]!.trim();
+    if (label.length < 2 || NON_SPEAKER_PREFIXES.has(label.toLowerCase())) continue;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+    attributed++;
+  }
+
+  // Lines belonging to speakers who appear at least twice (dialogue alternates
+  // and repeats; incidental prose colons do not).
+  let recurringLines = 0;
+  for (const n of counts.values()) if (n >= 2) recurringLines += n;
+
+  return recurringLines >= MIN_ATTRIBUTED_LINES && attributed / lines.length >= MIN_ATTRIBUTED_FRACTION;
 }
 
 // ── Pre-attributed normalisation ──────────────────────────────────────────────

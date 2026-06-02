@@ -216,12 +216,21 @@ function formatBookmarks(bookmarks: Bookmark[]): string {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+// One entry that was surfaced into context this turn. Self-contained so the
+// extension can run recitation detection without any extra fetch or panel state.
+export interface SurfacedEntry {
+  id: string;
+  summary: string;
+  scope: Scope;
+  scopeId: string;
+}
+
 export interface LoadResult {
   contextBlock: string;   // assembled string to prepend to the system prompt
   indexTokensUsed: number;
   entryTokensUsed: number;
   bookmarkCount: number;
-  surfacedIds: string[];  // IDs of all entries selected this turn (for recitation detection)
+  surfaced: SurfacedEntry[]; // all entries selected this turn (for recitation detection)
 }
 
 const DBG = process.env.ME_DEBUG !== "0"; // set ME_DEBUG=0 in .env to silence
@@ -323,10 +332,10 @@ export async function loadContext(
   const entryTokensUsed =
     chatSelection.used + charSelection.used + globalSelection.used;
 
-  const surfacedIds = [
-    ...chatSelection.selected.map((e) => e.id),
-    ...charSelection.selected.map((e) => e.id),
-    ...globalSelection.selected.map((e) => e.id),
+  const surfacedEntries: SurfacedEntry[] = [
+    ...chatSelection.selected.map((e) => ({ id: e.id, summary: e.summary, scope: "chat" as Scope, scopeId: session.chatId })),
+    ...charSelection.selected.map((e) => ({ id: e.id, summary: e.summary, scope: "character" as Scope, scopeId: session.characterId })),
+    ...globalSelection.selected.map((e) => ({ id: e.id, summary: e.summary, scope: "global" as Scope, scopeId: "global" })),
   ];
 
   return {
@@ -334,6 +343,6 @@ export async function loadContext(
     indexTokensUsed,
     entryTokensUsed,
     bookmarkCount: surfaced.length,
-    surfacedIds,
+    surfaced: surfacedEntries,
   };
 }

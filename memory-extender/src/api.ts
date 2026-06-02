@@ -484,7 +484,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
     }
 
     const { bookmarksExtracted } = await processResponse(chatId, turnNumber, messageText);
-    const { contextBlock, surfacedIds } = await loadContext({ characterId: identityKey, chatId, turnNumber });
+    const { contextBlock, surfaced } = await loadContext({ characterId: identityKey, chatId, turnNumber });
 
     const saved = created + bookmarksExtracted;
     if (saved > 0) {
@@ -605,7 +605,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
       })();
     }
 
-    return reply.send({ memoryBlock: contextBlock, created, bookmarksExtracted, surfacedIds });
+    return reply.send({ memoryBlock: contextBlock, created, bookmarksExtracted, surfaced });
   });
 
   // ── POST /api/cleanup ────────────────────────────────────────────────────

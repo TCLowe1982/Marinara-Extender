@@ -1761,42 +1761,42 @@ async function importAllChats(chats) {
 
 // ── Recitation detection ──────────────────────────────────────────────────────
 
-function jaccardWords(a, b) {
-  const words = s => new Set(s.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean));
-  const wa = words(a), wb = words(b);
-  let intersection = 0;
-  for (const w of wa) if (wb.has(w)) intersection++;
-  const union = new Set([...wa, ...wb]).size;
-  return union === 0 ? 0 : intersection / union;
+const RECITATION_STOPWORDS = new Set(
+  ("a an and are as at be been but by for from had has have he her his i if in into is it its " +
+   "me my no not of on or our she that the their them then they this to up was we were what when " +
+   "which who will with would you your").split(" ")
+);
+
+// Asymmetric containment: what fraction of the SUMMARY's meaningful words appear
+// in the response. Symmetric Jaccard fails here — a short summary vs. a long
+// response has a huge union, driving the score to ~0 even on a clear match.
+// Stopwords are dropped so coincidental "the"/"a"/"in" overlap can't trip it.
+function summaryOverlap(summary, responseText) {
+  const tokenize = s => s.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean);
+  const summaryWords = new Set(
+    tokenize(summary).filter(w => w.length > 2 && !RECITATION_STOPWORDS.has(w))
+  );
+  if (summaryWords.size === 0) return 0;
+  const textWords = new Set(tokenize(responseText));
+  let hit = 0;
+  for (const w of summaryWords) if (textWords.has(w)) hit++;
+  return hit / summaryWords.size;
 }
 
-async function detectRecitations(surfacedIds, responseText, characterId, chatId) {
-  if (!surfacedIds?.length || !responseText) return;
+async function detectRecitations(surfaced, responseText) {
+  if (!surfaced?.length || !responseText) return;
 
-  // Fetch the summary text for each surfaced entry so we can compare.
-  // We use the panel's loaded entries if available; otherwise skip (don't add
-  // an extra API call on every turn just for recitation scoring).
-  const chatEntries   = panelState.chatEntries   ?? [];
-  const charBookmarks = panelState.bookmarks      ?? [];
-
-  // Build a quick summary map from whatever we have cached in panel state.
-  const summaryMap = new Map();
-  for (const e of chatEntries) summaryMap.set(e.id, { summary: e.summary, scope: "chat",      scopeId: chatId });
-
-  // For character-scope entries we'd need a separate fetch — skip for now and
-  // rely on the chat entries cache. This means recitation only fires for chat-
-  // scoped memories. Character-scoped recitation will be wired when the panel
-  // loads character entries separately.
-
+  // Each surfaced entry is self-contained (id + summary + scope + scopeId), so no
+  // panel state or extra fetch is needed and every scope is covered. Compare each
+  // surfaced summary against the response; a clear overlap means the model used it.
   const RECITATION_THRESHOLD = 0.3;
-  for (const id of surfacedIds) {
-    const meta = summaryMap.get(id);
-    if (!meta) continue;
-    if (jaccardWords(meta.summary, responseText) >= RECITATION_THRESHOLD) {
-      dbg(`recitation detected for entry ${id}: "${meta.summary.slice(0, 50)}"`);
-      await memFetch(`/api/entries/${id}/recite`, {
+  for (const e of surfaced) {
+    if (!e?.id || !e.summary) continue;
+    if (summaryOverlap(e.summary, responseText) >= RECITATION_THRESHOLD) {
+      dbg(`recitation detected for entry ${e.id} (${e.scope}): "${e.summary.slice(0, 50)}"`);
+      await memFetch(`/api/entries/${e.id}/recite`, {
         method: "POST",
-        body: JSON.stringify({ scope: meta.scope, scopeId: meta.scopeId }),
+        body: JSON.stringify({ scope: e.scope, scopeId: e.scopeId }),
       }).catch(() => {});
     }
   }
@@ -2024,6 +2024,9 @@ async function resolveSession() {
 
 let currentSession = null;
 const lastMsgId = {};      // chatId → last processed assistant message id
+const lastSurfaced = {};   // chatId → entries surfaced into context on the PREVIOUS turn
+                           // (recitation compares the current response against the memory
+                           //  that was actually live when that response was generated)
 const SNAPSHOT_KEY = `${marinara.extensionId}:snapshot-time`;
 const HIDDEN_IMPORTS_KEY = `${marinara.extensionId}:hidden-imports`;
 const SNAPSHOT_INTERVAL_MS = 30 * 60 * 1000;  // 30 minutes
@@ -2288,11 +2291,16 @@ async function checkForNewMessage() {
     if (!lorebookId) return;
     await writeMemoryToLorebook(lorebookId, result.memoryBlock);
 
-    // Recitation detection — check if any surfaced memory was echoed in the response.
+    // Recitation detection — did this response actually use a memory that was live
+    // when it was generated? Compare against the PREVIOUS turn's surfaced set, not
+    // this turn's: the memory block we just built is for the NEXT response, and an
+    // entry created from this very response would otherwise self-match and inflate.
     // Fire-and-forget: never blocks the lorebook update.
-    if (Array.isArray(result.surfacedIds) && result.surfacedIds.length > 0 && content) {
-      detectRecitations(result.surfacedIds, content, characterId, chatId).catch(() => {});
+    const priorSurfaced = lastSurfaced[chatId];
+    if (Array.isArray(priorSurfaced) && priorSurfaced.length > 0 && content) {
+      detectRecitations(priorSurfaced, content).catch(() => {});
     }
+    if (Array.isArray(result.surfaced)) lastSurfaced[chatId] = result.surfaced;
 
     const charLabel = currentSession?.characterName ?? characterId;
     const saved = (result.created ?? 0) + (result.bookmarksExtracted ?? 0);

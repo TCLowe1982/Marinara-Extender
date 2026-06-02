@@ -172,6 +172,25 @@ export async function upsertIndexEntry(
   });
 }
 
+// Serialized read-modify-write of a whole index. Use for updates that touch an
+// existing entry in place (e.g. bumping recitationCount) so they share the same
+// per-file lock as upsertIndexEntry and can't clobber concurrent writes. The
+// mutator may return false to skip the write entirely (e.g. entry not found).
+export async function mutateIndex(
+  scope: Scope,
+  scopeId: string,
+  mutate: (index: ScopeIndex) => boolean | void,
+): Promise<void> {
+  const p = indexPath(scope, scopeId);
+  return serializedWrite(p, async () => {
+    const index = await readIndex(scope, scopeId);
+    if (!index) return;
+    if (mutate(index) === false) return;
+    index.lastUpdated = new Date().toISOString();
+    await writeYaml(p, index);
+  });
+}
+
 export async function removeIndexEntry(
   scope: Scope,
   scopeId: string,

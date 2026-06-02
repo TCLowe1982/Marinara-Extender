@@ -9,6 +9,7 @@
 import {
   readIndex,
   writeIndex,
+  mutateIndex,
   deleteEntryFile,
   listScopeIds,
   type Scope,
@@ -210,22 +211,20 @@ export async function recordRecitation(
   scopeId: string,
   entryId: string,
 ): Promise<void> {
-  const index = await readIndex(scope, scopeId);
-  if (!index) return;
+  // Serialized read-modify-write so this can't clobber the retrieval-count
+  // stamping that process-turn fires for the same (sticky) entries.
+  await mutateIndex(scope, scopeId, (index) => {
+    const entry = index.entries.find((e) => e.id === entryId);
+    if (!entry) return false;
 
-  const entry = index.entries.find((e) => e.id === entryId);
-  if (!entry) return;
+    entry.recitationCount = (entry.recitationCount ?? 0) + 1;
 
-  entry.recitationCount = (entry.recitationCount ?? 0) + 1;
-
-  // Check if recitation tips the entry into the next tier immediately.
-  const { tier, cycleCount } = nextTier(entry);
-  if (tier !== (entry.tier ?? "short")) {
-    console.info(`[promotion] recitation triggered: ${entry.id} → ${tier}`);
-    entry.tier = tier;
-    entry.cycleCount = cycleCount;
-  }
-
-  index.lastUpdated = new Date().toISOString();
-  await writeIndex(index);
+    // Check if recitation tips the entry into the next tier immediately.
+    const { tier, cycleCount } = nextTier(entry);
+    if (tier !== (entry.tier ?? "short")) {
+      console.info(`[promotion] recitation triggered: ${entry.id} → ${tier}`);
+      entry.tier = tier;
+      entry.cycleCount = cycleCount;
+    }
+  });
 }

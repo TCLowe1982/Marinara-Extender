@@ -1361,6 +1361,7 @@ async function doStoryIngest() {
       chunksAnalyzed: res.chunksAnalyzed,
       chunksFiltered: res.chunksFiltered,
       chunksFailed:   res.chunksFailed,
+      skipped:        res.skipped,
       parseMethod:    res.parseMethod,
       speakers:       res.speakers ?? [],
     };
@@ -1574,17 +1575,18 @@ function renderStoryIngestSection() {
   if (panelState.ingestResult) {
     const resultEl = el("div", "me-ingest-result");
     if (panelState.ingestResult.cancelled) {
-      resultEl.textContent = "Import cancelled.";
+      resultEl.textContent = "Import cancelled — re-run the same file to resume where it left off.";
     } else if (panelState.ingestResult.error) {
       resultEl.className = "me-ingest-result me-ingest-err";
       resultEl.textContent = `✗ ${panelState.ingestResult.error}`;
     } else {
       resultEl.className = "me-ingest-result me-ingest-ok";
-      const { beats, chunksTotal, chunksFiltered, chunksFailed, parseMethod, speakers } = panelState.ingestResult;
+      const { beats, chunksTotal, chunksFiltered, chunksFailed, skipped, parseMethod, speakers } = panelState.ingestResult;
       const beatCount = beats?.length ?? 0;
       const methodLabel = { "pre-attributed": "pre-attributed", "local-llm": "local model", "external-llm": "external API", "paragraph": "paragraph split" }[parseMethod] ?? parseMethod ?? "";
       const lines = [`✓ ${beatCount} beat${beatCount === 1 ? "" : "s"} from ${chunksTotal} chunks`];
       if (methodLabel) lines.push(`via ${methodLabel}`);
+      if (skipped > 0) lines.push(`${skipped} resumed`);
       if (chunksFiltered > 0) lines.push(`${chunksFiltered} filtered`);
       if (chunksFailed  > 0) lines.push(`${chunksFailed} failed`);
       resultEl.textContent = lines.join(" · ");

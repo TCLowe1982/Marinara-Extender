@@ -38,6 +38,7 @@ import { encodeBeat } from "./sentiment/encoder.js";
 import { classifyAmbient } from "./ambient.js";
 import { createEntryIfUnique, isDuplicate } from "./dedup.js";
 import { Progress, progressEnabled } from "./progress.js";
+import { computeJobKey, loadJob, saveJob, deleteJob, clearJobs } from "./story-jobs.js";
 import type { Chunk } from "./sentiment/types.js";
 import mammoth from "mammoth";
 import { parseStoryToMessages } from "./story-parser.js";
@@ -944,13 +945,35 @@ export function registerApiRoutes(app: FastifyInstance): void {
 
     try {
       const progressReport = new Progress(label, progress ?? progressEnabled());
-      progressReport.stage(`importing "${label}" — attributing text${useExternal ? " (external)" : ""}...`);
+
+      // Resumable import job: cache attributed windows so a re-run of the same
+      // text+options skips attribution it already finished. Analysis resumes off
+      // beats already on disk (handled in the pipeline).
+      const jobKey = computeJobKey(text, { povCharacter, characters, useExternal });
+      const job = (await loadJob(identityKey, jobKey)) ?? {
+        jobKey, title: label, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        attributedWindows: [],
+      };
+      const cachedCount = (job.attributedWindows ?? []).filter(Boolean).length;
+      progressReport.stage(
+        cachedCount > 0
+          ? `resuming "${label}" — ${cachedCount} attributed window(s) cached`
+          : `importing "${label}" — attributing text${useExternal ? " (external)" : ""}...`,
+      );
+
       const { messages, method } = await parseStoryToMessages(text, {
         characters,
         useExternal,
         signal: ac.signal,
         onWindow: (current, total) => progressReport.tick(current, total, "window"),
+        cachedWindows: job.attributedWindows,
+        onWindowDone: async (index, msgs) => {
+          (job.attributedWindows ??= [])[index] = msgs;
+          await saveJob(identityKey, job);
+        },
       });
+      job.method = method;
+      await saveJob(identityKey, job);
       progressReport.stage(`attribution complete (${method})`);
 
       const result = await runSentimentPipeline(messages, identityKey, characterName, {
@@ -961,8 +984,12 @@ export function registerApiRoutes(app: FastifyInstance): void {
         progress,
         signal: ac.signal,
       });
+
+      // Import finished — drop the cached attribution job (beats are the record now).
+      await deleteJob(identityKey, jobKey);
       console.info(
-        `[ME] story ingest — key:${identityKey} — method:${method} — ${result.beats.length} beats, ${result.chunksFiltered} filtered`,
+        `[ME] story ingest — key:${identityKey} — method:${method} — ${result.beats.length} new beats` +
+        `${result.skipped ? `, ${result.skipped} resumed` : ""}, ${result.chunksFiltered} filtered`,
       );
       return reply.send({ ...result, parseMethod: method });
     } catch (err) {
@@ -987,7 +1014,8 @@ export function registerApiRoutes(app: FastifyInstance): void {
     if (!characterId) return reply.code(400).send({ error: "characterId is required" });
     const identityKey = await resolveIdentity(characterId);
     const deleted = await clearBeats(identityKey);
-    console.info(`[ME] beats cleared — key:${identityKey} — ${deleted} beats removed`);
+    const jobs = await clearJobs(identityKey); // also drop cached import progress
+    console.info(`[ME] beats cleared — key:${identityKey} — ${deleted} beats removed, ${jobs} import job(s) cleared`);
     return reply.send({ ok: true, deleted });
   });
 

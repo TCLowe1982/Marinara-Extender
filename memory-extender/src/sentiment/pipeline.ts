@@ -5,8 +5,8 @@ import type { DigestMessage } from "../digest.js";
 import type { EmotionalBeat, ClassificationResult } from "./types.js";
 import { chunkMessages } from "./chunker.js";
 import { classifyChunks } from "./classifier.js";
-import { analyzeChunks } from "./analyzer.js";
-import { encodeBeats } from "./encoder.js";
+import { analyzeChunk } from "./analyzer.js";
+import { encodeBeat, beatIdForChunk, readBeatIndex } from "./encoder.js";
 import { Progress, progressEnabled } from "../progress.js";
 
 export interface PipelineOptions {
@@ -33,6 +33,7 @@ export interface PipelineResult {
   chunksAnalyzed: number;
   chunksFailed: number;
   chunksFiltered: number;
+  skipped: number;      // chunks skipped because their beat already existed (resume)
   speakers: string[];   // unique speaker labels found in the text
 }
 
@@ -87,48 +88,87 @@ export async function runSentimentPipeline(
   console.info(`[ME:pipeline] speakers found: ${speakers.join(", ")}`);
   console.info(`[ME:pipeline] matching against: "${characterName}" — ${filtered.length}/${passing.length} chunks kept`);
 
-  report.stage(`parsing complete, analyzing sentiment — ${filtered.length} of ${chunks.length} chunks`);
-
-  // Stage 2: deep analyze (only passing + allowed chunks). Pass the full ordered
-  // classification list as context so each beat sees its TRUE neighbors, not the
-  // nearest other passing beat. Report per-chunk progress and errors to the console.
-  const analyzed = await analyzeChunks(filtered, classifications, (current, total, reason) => {
-    if (reason) report.error(current, reason);
-    report.tick(current, total);
-  }, options.signal);
-
-  // If cancelled mid-analysis, stop before writing any beats so a restart
-  // starts clean.
-  if (options.signal?.aborted) {
-    report.done("cancelled");
-    throw new Error("cancelled");
-  }
+  // Resume support: beats already on disk (from a prior interrupted run) are
+  // skipped. Beat ids are deterministic per chunk, so a re-run of the same
+  // import continues where it stopped instead of re-analyzing everything.
+  const existingBeatIds = new Set((await readBeatIndex(characterId))?.entries.map((e) => e.id) ?? []);
 
   // Narrative position boost: the final 20% of a story carries climax and
-  // resolution weight. Boost stored salience so these beats surface first
-  // during retrieval without changing which chunks passed the threshold.
+  // resolution weight. Computed up front so it can be applied per chunk.
   const totalTurns = chunks.length > 0 ? chunks[chunks.length - 1].turnEnd + 1 : 0;
   const boostThresholdTurn = Math.floor(totalTurns * 0.8);
-  const boosted = analyzed.map(({ result, analysis }) =>
-    result.chunk.turnStart >= boostThresholdTurn
-      ? { result, analysis: { ...analysis, salience: Math.min(1.0, analysis.salience * NARRATIVE_POSITION_BOOST) } }
-      : { result, analysis },
+
+  const alreadyHave = filtered.filter((c) => existingBeatIds.has(beatIdForChunk(c.chunk))).length;
+  report.stage(
+    `parsing complete, analyzing sentiment — ${filtered.length} of ${chunks.length} chunks` +
+    (alreadyHave ? ` (resuming — ${alreadyHave} already done)` : ""),
   );
 
-  // Stage 3: encode to disk
-  const beats = await encodeBeats(characterId, boosted, sourceType);
+  // Stage 2+3: analyze and encode each beat incrementally, so progress is
+  // persisted as it happens (a cancel/crash keeps every completed beat).
+  const beats: EmotionalBeat[] = [];
+  let skipped = 0;
+  let failed = 0;
+  const total = filtered.length;
+  for (let i = 0; i < filtered.length; i++) {
+    if (options.signal?.aborted) {
+      report.done(`cancelled — ${beats.length} new beats saved, resumable`);
+      throw new Error("cancelled");
+    }
+    const result = filtered[i]!;
+    const current = i + 1;
+
+    // Skip if this chunk's beat already exists (resume).
+    if (existingBeatIds.has(beatIdForChunk(result.chunk))) {
+      skipped++;
+      report.tick(current, total);
+      continue;
+    }
+
+    // Analyze with the full classification list as context (true neighbors).
+    const idx = classifications.indexOf(result);
+    let analysis;
+    try {
+      analysis = await analyzeChunk(result, idx === -1 ? undefined : {
+        before: classifications[idx - 1],
+        after:  classifications[idx + 1],
+      });
+    } catch (err) {
+      failed++;
+      report.error(current, err instanceof Error ? err.message : String(err));
+      report.tick(current, total);
+      continue;
+    }
+    if (!analysis) {
+      failed++;
+      report.error(current, "model returned no parseable analysis");
+      report.tick(current, total);
+      continue;
+    }
+
+    if (result.chunk.turnStart >= boostThresholdTurn) {
+      analysis = { ...analysis, salience: Math.min(1.0, analysis.salience * NARRATIVE_POSITION_BOOST) };
+    }
+
+    const beat = await encodeBeat(characterId, result, analysis, sourceType);
+    beats.push(beat);
+    report.tick(current, total);
+  }
 
   report.done(
-    `done — ${beats.length} beats from ${chunks.length} chunks ` +
-    `(${filtered.length - boosted.length} failed, ${passing.length - filtered.length} off-speaker)`,
+    `done — ${beats.length} new beats from ${chunks.length} chunks` +
+    (skipped ? `, ${skipped} resumed` : "") +
+    (failed ? `, ${failed} failed` : "") +
+    `, ${passing.length - filtered.length} off-speaker`,
   );
 
   return {
     beats,
     chunksTotal:    chunks.length,
-    chunksAnalyzed: boosted.length,
-    chunksFailed:   filtered.length - boosted.length,
+    chunksAnalyzed: beats.length,
+    chunksFailed:   failed,
     chunksFiltered: passing.length - filtered.length,
+    skipped,
     speakers,
   };
 }

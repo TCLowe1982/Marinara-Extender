@@ -233,6 +233,12 @@ export interface ParseStoryOptions {
   // Called as each window begins attribution (1-based). Lets the caller render
   // progress for the otherwise-silent multi-window attribution phase.
   onWindow?: (current: number, total: number) => void;
+  // Cached attributed output per window from a prior run (index i present =>
+  // window i is already attributed and is reused instead of re-calling the LLM).
+  cachedWindows?: DigestMessage[][];
+  // Called after a window is freshly attributed, so the caller can persist it
+  // for resume. Awaited so the checkpoint is durable before the next window.
+  onWindowDone?: (index: number, messages: DigestMessage[]) => void | Promise<void>;
 }
 
 export type ParseMethod = "pre-attributed" | "local-llm" | "external-llm" | "paragraph";
@@ -246,7 +252,7 @@ export async function parseStoryToMessages(
   text: string,
   options: ParseStoryOptions = {},
 ): Promise<ParseStoryResult> {
-  const { characters = [], forceFallback = false, useExternal = false, signal, onWindow } = options;
+  const { characters = [], forceFallback = false, useExternal = false, signal, onWindow, cachedWindows, onWindowDone } = options;
 
   // Fast path: text is already attributed (RP log, chat export).
   if (!forceFallback && isPreAttributed(text)) {
@@ -274,17 +280,28 @@ export async function parseStoryToMessages(
   for (let i = 0; i < windows.length; i++) {
     if (signal?.aborted) throw new Error("cancelled");
     onWindow?.(i + 1, windows.length);
+
+    // Reuse a previously-attributed window (resume) instead of re-calling the LLM.
+    const cached = cachedWindows?.[i];
+    if (cached && cached.length) {
+      messages.push(...cached);
+      continue;
+    }
+
     const result = await attributeWindow(windows[i]!, characters, useExternal);
     messages.push(...result.messages);
     methodsUsed.add(result.method);
+    if (onWindowDone) await onWindowDone(i, result.messages);
   }
 
-  // Report the lowest-fidelity method any window needed.
+  // Report the lowest-fidelity method any window needed (cached windows excluded).
   const method: ParseMethod = methodsUsed.has("paragraph")
     ? "paragraph"
     : methodsUsed.has("external-llm")
       ? "external-llm"
-      : "local-llm";
+      : methodsUsed.has("local-llm")
+        ? "local-llm"
+        : (useExternal ? "external-llm" : "local-llm"); // all windows cached
   console.info(`[story-parser] attribution complete — method:${method}, ${messages.length} segment(s)`);
   return { messages, method };
 }

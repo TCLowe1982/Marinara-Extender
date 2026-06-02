@@ -9,12 +9,22 @@
 
 import { readFile, writeFile, mkdir, access, rm } from "fs/promises";
 import { join, dirname } from "path";
+import { createHash } from "crypto";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
-import { nanoid } from "../nanoid.js";
 import { getDataDir } from "../storage.js";
 import type { Emotion } from "./types.js";
-import type { EmotionalBeat, ClassificationResult, BeatAnalysis } from "./types.js";
+import type { EmotionalBeat, ClassificationResult, BeatAnalysis, Chunk } from "./types.js";
 import type { AnalyzedBeat } from "./analyzer.js";
+
+// Deterministic beat id derived from the source chunk. Re-encoding the same
+// chunk yields the same id (idempotent overwrite), and it lets the pipeline skip
+// chunks whose beat already exists on disk — the basis for resumable imports.
+export function beatIdForChunk(chunk: Pick<Chunk, "speaker" | "text" | "turnStart" | "turnEnd">): string {
+  const h = createHash("sha1")
+    .update(`${chunk.turnStart}:${chunk.turnEnd}:${chunk.speaker}\n${chunk.text}`)
+    .digest("hex");
+  return `beat-${h.slice(0, 12)}`;
+}
 
 // ── Path helpers ───────────────────────────────────────────────────────────
 
@@ -157,7 +167,7 @@ export async function encodeBeat(
   sourceType: "chat" | "story",
 ): Promise<EmotionalBeat> {
   const beat: EmotionalBeat = {
-    id:                nanoid(10),
+    id:                beatIdForChunk(result.chunk),
     speaker:           result.chunk.speaker,
     emotion:           result.primaryEmotion!,
     subpattern:        analysis.subpattern,

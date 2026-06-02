@@ -28,7 +28,7 @@ import { nanoid } from "./nanoid.js";
 import { digestMessages, snapshotSession, type DigestMessage } from "./digest.js";
 import { processResponse, extractRememberTags } from "./writer.js";
 import { loadContext } from "./loader.js";
-import { runPromotion, recordRecitation } from "./promotion.js";
+import { runPromotion, runPromotionAll, recordRecitation } from "./promotion.js";
 import { updateSoftClock, makeTimeContext } from "./soft-clock.js";
 import { runSentimentPipeline } from "./sentiment/pipeline.js";
 import { classifyChunks } from "./sentiment/classifier.js";
@@ -582,6 +582,19 @@ export function registerApiRoutes(app: FastifyInstance): void {
     }
 
     return reply.send({ memoryBlock: contextBlock, created, bookmarksExtracted, surfacedIds });
+  });
+
+  // ── POST /api/promote-all ────────────────────────────────────────────────
+  // Backfills tier fields across every scope. Safe to run multiple times.
+  // Returns { scopes, promoted, pruned }.
+
+  app.post("/api/promote-all", async (_req, reply) => {
+    try {
+      const result = await runPromotionAll();
+      return reply.send(result);
+    } catch (err) {
+      return reply.code(500).send({ error: err instanceof Error ? err.message : "backfill failed" });
+    }
   });
 
   // ── POST /api/snapshot ───────────────────────────────────────────────────

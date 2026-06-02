@@ -667,6 +667,30 @@ function renderSettingsSection() {
   row.append(lbl, pill);
   body.appendChild(row);
 
+  // Backfill memory tiers
+  const backfillRow = el("div", "me-settings-row");
+  const backfillLbl = el("div", "me-settings-lbl");
+  backfillLbl.textContent = "Backfill memory tiers";
+  const backfillSmall = el("small");
+  backfillSmall.textContent = "Tag pre-existing memories with their earned tier";
+  backfillLbl.appendChild(backfillSmall);
+  const backfillBtn = el("button", "me-btn");
+  backfillBtn.textContent = "Run now";
+  backfillBtn.style.fontSize = "10px";
+  backfillBtn.style.padding = "2px 8px";
+  backfillBtn.addEventListener("click", async () => {
+    backfillBtn.disabled = true;
+    backfillBtn.textContent = "Running…";
+    try {
+      const res = await memFetch("/api/promote-all", { method: "POST" });
+      backfillBtn.textContent = `Done — ${res?.promoted ?? 0} promoted, ${res?.pruned ?? 0} pruned`;
+    } catch {
+      backfillBtn.textContent = "Failed";
+    }
+  });
+  backfillRow.append(backfillLbl, backfillBtn);
+  body.appendChild(backfillRow);
+
   // Debug logging toggle
   const debugRow = el("div", "me-settings-row");
   const debugLbl = el("div", "me-settings-lbl");

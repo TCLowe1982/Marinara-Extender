@@ -667,6 +667,30 @@ function renderSettingsSection() {
   row.append(lbl, pill);
   body.appendChild(row);
 
+  // Clean up memory pool
+  const cleanupRow = el("div", "me-settings-row");
+  const cleanupLbl = el("div", "me-settings-lbl");
+  cleanupLbl.textContent = "Clean up memory pool";
+  const cleanupSmall = el("small");
+  cleanupSmall.textContent = "Prune ghosts, deduplicate, mark transients done";
+  cleanupLbl.appendChild(cleanupSmall);
+  const cleanupBtn = el("button", "me-btn");
+  cleanupBtn.textContent = "Run cleanup";
+  cleanupBtn.style.fontSize = "10px";
+  cleanupBtn.style.padding = "2px 8px";
+  cleanupBtn.addEventListener("click", async () => {
+    cleanupBtn.disabled = true;
+    cleanupBtn.textContent = "Cleaning…";
+    try {
+      const res = await memFetch("/api/cleanup", { method: "POST", body: JSON.stringify({}) });
+      cleanupBtn.textContent = `Done — ${res?.pruned ?? 0} pruned, ${res?.deduped ?? 0} deduped, ${res?.transients ?? 0} transients`;
+    } catch {
+      cleanupBtn.textContent = "Failed";
+    }
+  });
+  cleanupRow.append(cleanupLbl, cleanupBtn);
+  body.appendChild(cleanupRow);
+
   // Backfill memory tiers
   const backfillRow = el("div", "me-settings-row");
   const backfillLbl = el("div", "me-settings-lbl");

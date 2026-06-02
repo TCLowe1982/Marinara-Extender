@@ -31,7 +31,14 @@ await loadDotEnv();
 
 const PORT = parseInt(process.env.MARINARA_EXTENDER_PORT ?? "3001", 10);
 
-const app = Fastify({ logger: true });
+// Suppress Fastify's JSON request/response logs — our own console.info calls
+// carry all the meaningful context. Set ME_HTTP_LOG=1 to re-enable if you
+// need to debug raw HTTP traffic.
+const app = Fastify({
+  logger: process.env.ME_HTTP_LOG === "1"
+    ? { transport: { target: "pino-pretty", options: { colorize: true, translateTime: "HH:MM:ss", ignore: "pid,hostname" } } }
+    : { level: "warn" },
+});
 
 // ── CORS (for extension fetch() calls to /api/*) ──────────────────────────────
 
@@ -41,7 +48,7 @@ app.addHook("onSend", async (_req, reply) => {
   void reply.header("Access-Control-Allow-Headers", "Content-Type,Authorization");
 });
 
-app.options("*", async (_req, reply) => reply.send());
+app.options("*", { logLevel: "silent" }, async (_req, reply) => reply.send());
 
 // ── Health ────────────────────────────────────────────────────────────────────
 
@@ -74,7 +81,7 @@ registerApiRoutes(app);
 
 app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
   if (err) {
-    app.log.error(err);
+    console.error(err);
     process.exit(1);
   }
   const apiKey = process.env.MARINARA_EXTENDER_API_KEY;

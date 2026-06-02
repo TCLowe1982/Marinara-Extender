@@ -75,17 +75,32 @@ export async function readBeatIndex(characterId: string): Promise<BeatIndex | nu
   return readYaml<BeatIndex>(beatIndexPath(characterId));
 }
 
+// Serialize beat-index writes per character so concurrent encodeBeat calls
+// (e.g. live Tier 2 while a story ingest runs) can't clobber each other's
+// read-modify-write and corrupt the index.
+const _beatIndexLocks = new Map<string, Promise<void>>();
+
+function serializeBeatWrite(characterId: string, fn: () => Promise<void>): Promise<void> {
+  const prev = _beatIndexLocks.get(characterId) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  _beatIndexLocks.set(characterId, next);
+  next.then(() => { if (_beatIndexLocks.get(characterId) === next) _beatIndexLocks.delete(characterId); });
+  return next;
+}
+
 async function upsertBeatIndex(characterId: string, entry: BeatIndexEntry): Promise<void> {
-  const index = (await readBeatIndex(characterId)) ?? {
-    characterId,
-    lastUpdated: new Date().toISOString(),
-    entries: [],
-  };
-  const i = index.entries.findIndex((e) => e.id === entry.id);
-  if (i >= 0) index.entries[i] = entry;
-  else index.entries.push(entry);
-  index.lastUpdated = new Date().toISOString();
-  await writeYaml(beatIndexPath(characterId), index);
+  return serializeBeatWrite(characterId, async () => {
+    const index = (await readBeatIndex(characterId)) ?? {
+      characterId,
+      lastUpdated: new Date().toISOString(),
+      entries: [],
+    };
+    const i = index.entries.findIndex((e) => e.id === entry.id);
+    if (i >= 0) index.entries[i] = entry;
+    else index.entries.push(entry);
+    index.lastUpdated = new Date().toISOString();
+    await writeYaml(beatIndexPath(characterId), index);
+  });
 }
 
 // ── Beat read ──────────────────────────────────────────────────────────────

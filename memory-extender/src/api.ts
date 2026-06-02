@@ -33,7 +33,7 @@ import { runCleanup } from "./cleanup.js";
 import { updateSoftClock, makeTimeContext } from "./soft-clock.js";
 import { runSentimentPipeline } from "./sentiment/pipeline.js";
 import { classifyChunks } from "./sentiment/classifier.js";
-import { analyzeChunk } from "./sentiment/analyzer.js";
+import { analyzeChunks } from "./sentiment/analyzer.js";
 import { encodeBeat } from "./sentiment/encoder.js";
 import { classifyAmbient } from "./ambient.js";
 import { createEntryIfUnique, isDuplicate } from "./dedup.js";
@@ -495,24 +495,23 @@ export function registerApiRoutes(app: FastifyInstance): void {
 
           console.info(`[ME:tier2] ${passing.length} chunk(s) passed sentiment threshold`);
 
-          for (let i = 0; i < passing.length; i++) {
-            const result = passing[i]!;
-            const analysis = await analyzeChunk(result, {
-              before: passing[i - 1],
-              after:  passing[i + 1],
-            });
-            if (!analysis) continue;
-
+          // Analyze with the full classified list as context so each beat sees
+          // its true neighbor (e.g. the user line before the character's reply).
+          for (const { result, analysis } of await analyzeChunks(passing, classified)) {
             const beat = await encodeBeat(identityKey, result, analysis, "chat");
+
+            // Prefer the LLM's nuanced primary emotion for the human-facing tag;
+            // fall back to the classifier's keyword lane when the model omits it.
+            const primaryEmotion = analysis.emotions?.[0]?.emotion?.trim() || beat.emotion;
 
             // Companion ledger entry so the character can recall this moment.
             const summary = truncateSummary(
-              `[${beat.emotion}] ${analysis.motivation}`,
+              `[${primaryEmotion}] ${analysis.motivation}`,
             );
             if (!summary.trim()) continue; // skip empty summaries
 
             const rawContent = [
-              `Emotion: ${beat.emotion}${beat.subpattern ? ` (${beat.subpattern})` : ""}`,
+              `Emotion: ${primaryEmotion}${beat.subpattern ? ` (${beat.subpattern})` : ""}`,
               `Motivation: ${analysis.motivation}`,
               `Relational dynamics: ${analysis.relationalDynamics}`,
               `Outcome: ${analysis.outcome}`,

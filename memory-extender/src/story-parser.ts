@@ -137,6 +137,46 @@ function paragraphSplit(text: string): DigestMessage[] {
     .map((p) => ({ role: "assistant" as const, content: `Narrator: ${p}` }));
 }
 
+// ── Input windowing ───────────────────────────────────────────────────────────
+// A single attribution call caps output at ~8k tokens, and the attributed text
+// is roughly as long as the input — so a long story would lose its tail. Split
+// at paragraph boundaries into windows small enough that each window's output
+// fits comfortably under the cap, then attribute each independently.
+
+const MAX_ATTRIBUTION_WINDOW_CHARS = 12_000;
+
+function splitIntoWindows(text: string, maxChars: number): string[] {
+  const paragraphs = text.split(/\n{2,}/);
+  const windows: string[] = [];
+  let buffer = "";
+  for (const para of paragraphs) {
+    if (buffer && buffer.length + para.length + 2 > maxChars) {
+      windows.push(buffer);
+      buffer = para;
+    } else {
+      buffer = buffer ? `${buffer}\n\n${para}` : para;
+    }
+  }
+  if (buffer.trim()) windows.push(buffer);
+  return windows.length > 0 ? windows : [text];
+}
+
+// Attribute one window: local model → external API → paragraph-split fallback.
+async function attributeWindow(
+  text: string,
+  characters: string[],
+): Promise<{ messages: DigestMessage[]; method: ParseMethod }> {
+  const local = await callLocal(text, characters);
+  if (local && isValidAttribution(local)) {
+    return { messages: [{ role: "assistant", content: local }], method: "local-llm" };
+  }
+  const external = await callExternal(text, characters);
+  if (external && isValidAttribution(external)) {
+    return { messages: [{ role: "assistant", content: external }], method: "external-llm" };
+  }
+  return { messages: paragraphSplit(text), method: "paragraph" };
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export interface ParseStoryOptions {
@@ -166,32 +206,31 @@ export async function parseStoryToMessages(
     };
   }
 
-  if (!forceFallback) {
-    // Try local model first.
-    const local = await callLocal(text, characters);
-    if (local && isValidAttribution(local)) {
-      console.info("[story-parser] local model attribution ok");
-      return { messages: [{ role: "assistant", content: local }], method: "local-llm" };
-    }
-    if (local) {
-      console.warn("[story-parser] local model returned prose instead of attribution — trying external API");
-    } else {
-      console.info("[story-parser] local model unavailable — trying external API");
-    }
-
-    // Fall back to external API.
-    const external = await callExternal(text, characters);
-    if (external && isValidAttribution(external)) {
-      console.info("[story-parser] external API attribution ok");
-      return { messages: [{ role: "assistant", content: external }], method: "external-llm" };
-    }
-    if (external) {
-      console.warn("[story-parser] external API also returned prose — falling back to paragraph split");
-    } else {
-      console.warn("[story-parser] external API unavailable — falling back to paragraph split");
-    }
+  if (forceFallback) {
+    console.warn("[story-parser] forced paragraph-split fallback");
+    return { messages: paragraphSplit(text), method: "paragraph" };
   }
 
-  console.warn("[story-parser] paragraph-split fallback — speaker attribution unavailable");
-  return { messages: paragraphSplit(text), method: "paragraph" };
+  // Window large inputs so attribution output isn't truncated by the token cap.
+  const windows = splitIntoWindows(text, MAX_ATTRIBUTION_WINDOW_CHARS);
+  if (windows.length > 1) {
+    console.info(`[story-parser] long input — attributing in ${windows.length} windows`);
+  }
+
+  const messages: DigestMessage[] = [];
+  const methodsUsed = new Set<ParseMethod>();
+  for (const window of windows) {
+    const result = await attributeWindow(window, characters);
+    messages.push(...result.messages);
+    methodsUsed.add(result.method);
+  }
+
+  // Report the lowest-fidelity method any window needed.
+  const method: ParseMethod = methodsUsed.has("paragraph")
+    ? "paragraph"
+    : methodsUsed.has("external-llm")
+      ? "external-llm"
+      : "local-llm";
+  console.info(`[story-parser] attribution complete — method:${method}, ${messages.length} segment(s)`);
+  return { messages, method };
 }

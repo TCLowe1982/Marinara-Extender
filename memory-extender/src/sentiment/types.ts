@@ -28,7 +28,7 @@ export type DysregulationPattern =
 // ── Stage 0: Chunking ─────────────────────────────────────────────────────────
 
 export interface DialogueTurn {
-  speaker: string;     // "user" | character name | "narrator"
+  speaker: string;     // "user" | character name | "Narrator"
   text: string;
   turnIndex: number;   // position in the original message list
 }

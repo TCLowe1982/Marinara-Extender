@@ -78,8 +78,10 @@ export async function runSentimentPipeline(
   console.info(`[ME:pipeline] speakers found: ${speakers.join(", ")}`);
   console.info(`[ME:pipeline] matching against: "${characterName}" — ${filtered.length}/${passing.length} chunks kept`);
 
-  // Stage 2: deep analyze (only passing + allowed chunks)
-  const analyzed = await analyzeChunks(filtered);
+  // Stage 2: deep analyze (only passing + allowed chunks). Pass the full ordered
+  // classification list as context so each beat sees its TRUE neighbors, not the
+  // nearest other passing beat.
+  const analyzed = await analyzeChunks(filtered, classifications);
 
   // Narrative position boost: the final 20% of a story carries climax and
   // resolution weight. Boost stored salience so these beats surface first

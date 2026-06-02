@@ -2,11 +2,14 @@
 // No caching — edits to either file take effect on the next pipeline call.
 
 import { readFileSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import { parse as parseYaml } from "yaml";
 import type { Emotion } from "./types.js";
 
-const CONFIG_DIR = join(new URL(".", import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1"), "..", "..", "config");
+// fileURLToPath handles Windows drive letters and percent-encoded path segments
+// (e.g. spaces) correctly — manual import.meta.url.pathname munging did not.
+const CONFIG_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "config");
 
 // ── Config shape ──────────────────────────────────────────────────────────────
 

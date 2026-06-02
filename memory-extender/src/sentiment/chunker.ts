@@ -52,7 +52,9 @@ export function parseTurns(messages: DigestMessage[], characterName: string): Di
         buffer.push(line.slice(prefixMatch[0].length).trim());
       } else if (NARRATION_RE.test(line)) {
         flush();
-        turns.push({ speaker: "narrator", text: line, turnIndex: index++ });
+        // "Narrator" (capital) is the single canonical label across the chunker
+        // and story parser, so the pipeline's povCharacter relabel matches both.
+        turns.push({ speaker: "Narrator", text: line, turnIndex: index++ });
       } else {
         buffer.push(line);
       }

@@ -85,6 +85,7 @@ async function callLocal(systemPrompt: string, userPrompt: string): Promise<stri
         ],
         temperature: 0.2,
         stream: false,
+        response_format: { type: "json_object" }, // force JSON; avoid prose fallback
       }),
       signal: AbortSignal.timeout(60_000),
     });
@@ -407,23 +408,24 @@ export interface AnalyzedBeat {
   analysis: BeatAnalysis;
 }
 
+// `targets` are the chunks to analyze (passing + speaker-filtered). `allChunks`
+// is the full ordered classification list used purely for context — so the
+// "preceding/following" blocks shown to the model are the TRUE adjacent chunks
+// in the conversation, not the nearest other high-salience beat (which could be
+// many turns away). Defaults to `targets` if not supplied.
 export async function analyzeChunks(
-  results: ClassificationResult[],
+  targets: ClassificationResult[],
+  allChunks?: ClassificationResult[],
 ): Promise<AnalyzedBeat[]> {
-  const passing = results.filter((r) => r.passesThreshold && r.primaryEmotion);
+  const context = allChunks ?? targets;
+  const passing = targets.filter((r) => r.passesThreshold && r.primaryEmotion);
   const output: AnalyzedBeat[] = [];
 
-  for (let i = 0; i < passing.length; i++) {
-    const result = passing[i]!;
-    const context: AnalysisContext = {
-      before: passing[i - 1],
-      after:  passing[i + 1],
-    };
-    // Only pass context when there actually is a neighbor — avoids confusing
-    // the model with an empty context block.
-    const analysis = await analyzeChunk(result, {
-      before: context.before,
-      after:  context.after,
+  for (const result of passing) {
+    const idx = context.indexOf(result);
+    const analysis = await analyzeChunk(result, idx === -1 ? undefined : {
+      before: context[idx - 1],
+      after:  context[idx + 1],
     });
     if (analysis) output.push({ result, analysis });
   }

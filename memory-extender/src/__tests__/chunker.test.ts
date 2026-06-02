@@ -48,7 +48,7 @@ describe("parseTurns", () => {
     ];
     const turns = parseTurns(msgs, "Lara");
     expect(turns).toHaveLength(1);
-    expect(turns[0]?.speaker).toBe("narrator");
+    expect(turns[0]?.speaker).toBe("Narrator");
     expect(turns[0]?.text).toBe("*she sighs deeply*");
   });
 
@@ -61,9 +61,9 @@ describe("parseTurns", () => {
     ];
     const turns = parseTurns(msgs, "Lara");
     expect(turns).toHaveLength(3);
-    expect(turns[0]?.speaker).toBe("narrator");
+    expect(turns[0]?.speaker).toBe("Narrator");
     expect(turns[1]?.speaker).toBe("Lara");
-    expect(turns[2]?.speaker).toBe("narrator");
+    expect(turns[2]?.speaker).toBe("Narrator");
   });
 
   it("skips empty content", () => {

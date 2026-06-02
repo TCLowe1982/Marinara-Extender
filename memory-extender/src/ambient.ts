@@ -50,8 +50,9 @@ Examples:
 - "I'm working on the ledger logic today" → chat scope, user_topics
 - "She always deflects with humor when nervous" → character scope, character_topics
 
-Return a JSON array. Each entry: {"text":"<original sentence>","fact":"<concise fact>","lane":"user_topics|character_topics","scope":"character|chat"}.
-Return [] if nothing qualifies. Raw JSON only — no explanation, no markdown.`;
+Return a JSON object of this exact shape:
+{"facts":[{"text":"<original sentence>","fact":"<concise fact>","lane":"user_topics|character_topics","scope":"character|chat"}]}
+Return {"facts":[]} if nothing qualifies. Raw JSON only — no explanation, no markdown.`;
 
 async function callLocal(prompt: string): Promise<string | null> {
   const base = (process.env.MARINARA_EXTENDER_LOCAL_URL ?? "").replace(/\/$/, "");
@@ -70,6 +71,9 @@ async function callLocal(prompt: string): Promise<string | null> {
         ],
         temperature: 0.1,
         stream: false,
+        // Force valid JSON so small local models can't return prose and trigger
+        // the external-API fallback every turn.
+        response_format: { type: "json_object" },
       }),
       signal: AbortSignal.timeout(30_000),
     });
@@ -88,8 +92,10 @@ function parseFactsJson(raw: string | null): AmbientFact[] {
     if (!attempt) continue;
     try {
       const parsed = JSON.parse(attempt);
-      if (!Array.isArray(parsed)) continue;
-      return parsed
+      // Accept both the {facts:[...]} object shape and a bare [...] array.
+      const arr = Array.isArray(parsed) ? parsed : (parsed?.facts ?? null);
+      if (!Array.isArray(arr)) continue;
+      return arr
         .filter(
           (f): f is AmbientFact =>
             typeof f?.text === "string" &&

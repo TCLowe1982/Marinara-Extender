@@ -83,6 +83,7 @@ async function callLocalLlm(systemPrompt: string, userPrompt: string): Promise<s
         ],
         temperature: 0.3,
         stream: false,
+        response_format: { type: "json_object" }, // force JSON; avoid prose fallback
       }),
       signal: AbortSignal.timeout(120_000),
     });

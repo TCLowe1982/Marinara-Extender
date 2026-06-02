@@ -6,7 +6,8 @@ import type { EmotionalBeat, ClassificationResult } from "./types.js";
 import { chunkMessages } from "./chunker.js";
 import { classifyChunks } from "./classifier.js";
 import { analyzeChunk } from "./analyzer.js";
-import { encodeBeat, beatIdForChunk, readBeatIndex } from "./encoder.js";
+import { encodeBeat, beatIdForChunk, readBeatIndex, companionEntryFromBeat } from "./encoder.js";
+import { createEntryIfUnique } from "../dedup.js";
 import { Progress, progressEnabled } from "../progress.js";
 
 export interface PipelineOptions {
@@ -152,6 +153,13 @@ export async function runSentimentPipeline(
 
     const beat = await encodeBeat(characterId, result, analysis, sourceType);
     beats.push(beat);
+
+    // Also write a retrievable ledger entry. The loader builds the injected
+    // <memory> block from the entry index, NOT the beats store — so without this
+    // companion entry the character could never recall an imported beat.
+    const { summary, content } = companionEntryFromBeat(beat);
+    if (summary) await createEntryIfUnique("character", characterId, { lane: "character_topics", summary, content });
+
     report.tick(current, total);
   }
 

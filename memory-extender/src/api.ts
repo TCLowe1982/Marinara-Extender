@@ -42,7 +42,7 @@ import { computeJobKey, loadJob, saveJob, deleteJob, clearJobs } from "./story-j
 import type { Chunk } from "./sentiment/types.js";
 import mammoth from "mammoth";
 import { parseStoryToMessages } from "./story-parser.js";
-import { readBeatIndex, readAllBeats, clearBeats } from "./sentiment/encoder.js";
+import { readBeatIndex, readAllBeats, clearBeats, companionEntryFromBeat } from "./sentiment/encoder.js";
 import {
   resolveIdentity,
   getIdentityMap,
@@ -1062,6 +1062,33 @@ export function registerApiRoutes(app: FastifyInstance): void {
     const jobs = await clearJobs(identityKey); // also drop cached import progress
     console.info(`[ME] beats cleared — key:${identityKey} — ${deleted} beats removed, ${jobs} import job(s) cleared`);
     return reply.send({ ok: true, deleted });
+  });
+
+  // ── POST /api/beats-to-entries ────────────────────────────────────────────
+  // Backfill: create retrievable character_topics ledger entries from a
+  // character's stored beats. Needed for beats imported before the pipeline
+  // wrote companion entries (the loader reads entries, not beats). Deduped and
+  // idempotent — safe to run repeatedly.
+  // Body: { characterId, characterName? }
+
+  app.post<{
+    Body: { characterId?: string; characterName?: string; identityKey?: string };
+  }>("/api/beats-to-entries", async (req, reply) => {
+    const { characterId, characterName, identityKey: directKey } = req.body ?? {};
+    if (!characterId && !directKey) return reply.code(400).send({ error: "characterId or identityKey is required" });
+    // identityKey targets an existing store directly (backfill/admin); characterId
+    // is the normal path from the extension.
+    const identityKey = directKey ?? await resolveIdentity(characterId!, characterName);
+    const beats = await readAllBeats(identityKey);
+    let created = 0;
+    for (const beat of beats) {
+      const { summary, content } = companionEntryFromBeat(beat);
+      if (!summary) continue;
+      const entry = await createEntryIfUnique("character", identityKey, { lane: "character_topics", summary, content });
+      if (entry) created++;
+    }
+    console.info(`[ME] beats->entries — key:${identityKey} — ${created} entries created from ${beats.length} beats`);
+    return reply.send({ ok: true, beats: beats.length, created });
   });
 
   // ── GET /api/identity ─────────────────────────────────────────────────────

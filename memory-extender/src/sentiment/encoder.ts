@@ -26,6 +26,22 @@ export function beatIdForChunk(chunk: Pick<Chunk, "speaker" | "text" | "turnStar
   return `beat-${h.slice(0, 12)}`;
 }
 
+// Build the retrievable ledger entry (summary + content) for a beat. The loader
+// reads ledger entries, not the beats store, so every beat that should be
+// recallable needs one of these. Shared by the import pipeline and the backfill.
+export function companionEntryFromBeat(beat: EmotionalBeat): { summary: string; content: string } {
+  const primary = beat.emotions?.[0]?.emotion?.trim() || beat.emotion;
+  const summary = `[${primary}] ${beat.motivation}`.replace(/\s+/g, " ").trim().slice(0, 140);
+  const content = [
+    `Emotion: ${primary}${beat.subpattern ? ` (${beat.subpattern})` : ""}`,
+    `Motivation: ${beat.motivation}`,
+    `Relational dynamics: ${beat.relationalDynamics}`,
+    `Outcome: ${beat.outcome}`,
+    ...(beat.subtext ? [`Subtext: ${beat.subtext}`] : []),
+  ].join("\n").slice(0, 700);
+  return { summary, content };
+}
+
 // ── Path helpers ───────────────────────────────────────────────────────────
 
 function beatsDir(characterId: string): string {

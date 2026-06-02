@@ -682,7 +682,7 @@ function renderSettingsSection() {
     backfillBtn.disabled = true;
     backfillBtn.textContent = "Running…";
     try {
-      const res = await memFetch("/api/promote-all", { method: "POST" });
+      const res = await memFetch("/api/promote-all", { method: "POST", body: JSON.stringify({}) });
       backfillBtn.textContent = `Done — ${res?.promoted ?? 0} promoted, ${res?.pruned ?? 0} pruned`;
     } catch {
       backfillBtn.textContent = "Failed";

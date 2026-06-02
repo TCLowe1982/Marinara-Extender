@@ -5,9 +5,11 @@
 $ErrorActionPreference = "SilentlyContinue"
 $scriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sidecarDir = Join-Path $scriptDir "memory-extender"
-$OLLAMA_URL  = "http://127.0.0.1:11434"
-$SIDECAR_URL = "http://127.0.0.1:3001"
-$TIMEOUT_SEC = 90
+$OLLAMA_URL   = "http://127.0.0.1:11434"
+$SIDECAR_URL  = "http://127.0.0.1:3001"
+$SIDECAR_PORT = 3001
+$TIMEOUT_SEC  = 90
+$script:SidecarProc = $null
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -19,6 +21,48 @@ function Test-Ollama {
 function Test-Sidecar {
     try { ((Invoke-WebRequest -Uri "$SIDECAR_URL/api/health" -TimeoutSec 6 -UseBasicParsing).StatusCode) -lt 300 }
     catch { $false }
+}
+
+function Start-Sidecar {
+    $script:SidecarProc = Start-Process "cmd.exe" `
+        -ArgumentList "/c npm.cmd run dev" `
+        -WorkingDirectory $sidecarDir `
+        -WindowStyle Normal -PassThru
+}
+
+function Stop-Sidecar {
+    # Kill the process tree we launched (cmd -> npm -> node), if we have it.
+    if ($script:SidecarProc -and -not $script:SidecarProc.HasExited) {
+        & cmd /c "taskkill /F /T /PID $($script:SidecarProc.Id) >nul 2>&1"
+    }
+    # Also kill whatever still holds the port (covers a server we didn't launch).
+    try {
+        Get-NetTCPConnection -LocalPort $SIDECAR_PORT -State Listen -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty OwningProcess -Unique |
+            ForEach-Object { & cmd /c "taskkill /F /T /PID $_ >nul 2>&1" }
+    } catch {}
+    $script:SidecarProc = $null
+}
+
+function Restart-Sidecar {
+    Write-Host "  [..] Stopping Memory Extender..." -ForegroundColor Yellow
+    Stop-Sidecar
+    Start-Sleep -Milliseconds 800
+    Write-Host "  [..] Starting Memory Extender..." -ForegroundColor Yellow
+    Start-Sidecar
+    Write-Host -NoNewline "  [..] Waiting for it to come back "
+    $waited = 0
+    while (-not (Test-Sidecar) -and $waited -lt 30) {
+        Start-Sleep -Seconds 1
+        $waited++
+        Write-Host -NoNewline "."
+    }
+    Write-Host ""
+    if (Test-Sidecar) {
+        Write-Host "  [OK] Memory Extender restarted and healthy." -ForegroundColor Green
+    } else {
+        Write-Host "  [!!] Did not come back within 30s. Check the npm window for errors." -ForegroundColor Red
+    }
 }
 
 function Get-Bar($current, $total, $width = 34) {
@@ -91,10 +135,7 @@ if (Test-Sidecar) {
     Write-Host "  [OK] Memory Extender is already running" -ForegroundColor Green
 } else {
     Write-Host "  [..] Starting Memory Extender..." -ForegroundColor Yellow
-    Start-Process "cmd.exe" `
-        -ArgumentList "/c npm.cmd run dev" `
-        -WorkingDirectory $sidecarDir `
-        -WindowStyle Normal
+    Start-Sidecar
 }
 
 Write-Host ""
@@ -160,5 +201,21 @@ while ($true) {
     Start-Sleep -Milliseconds 300
 }
 
-Write-Host "  Press any key to close..." -ForegroundColor DarkGray
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+# ── Command console ─────────────────────────────────────────────────────────
+
+Write-Host "  Commands:  [R] Restart Memory Extender server     [Q] Quit (services keep running)" -ForegroundColor Cyan
+Write-Host ""
+
+while ($true) {
+    Write-Host -NoNewline "  extender> " -ForegroundColor Cyan
+    $key = [Console]::ReadKey($true)
+    $cmd = $key.KeyChar.ToString().ToLower()
+    Write-Host $cmd
+    if ($cmd -eq 'q') {
+        break
+    } elseif ($cmd -eq 'r') {
+        Restart-Sidecar
+    } else {
+        Write-Host "  Unknown command. Press R to restart the server, or Q to quit." -ForegroundColor DarkGray
+    }
+}

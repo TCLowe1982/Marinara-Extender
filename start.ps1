@@ -5,8 +5,8 @@
 $ErrorActionPreference = "SilentlyContinue"
 $scriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sidecarDir = Join-Path $scriptDir "memory-extender"
-$OLLAMA_URL  = "http://localhost:11434"
-$SIDECAR_URL = "http://localhost:3001"
+$OLLAMA_URL  = "http://127.0.0.1:11434"
+$SIDECAR_URL = "http://127.0.0.1:3001"
 $TIMEOUT_SEC = 90
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -82,7 +82,7 @@ if (Test-Ollama) {
         "ollama"
     ) | Where-Object { Test-Path $_ -ErrorAction SilentlyContinue } | Select-Object -First 1
     if (-not $ollamaExe) { $ollamaExe = "ollama" }
-    Start-Process $ollamaExe -ArgumentList "serve" -WindowStyle Minimized
+    Start-Process $ollamaExe -WindowStyle Minimized
 }
 
 # ── Start Memory Extender ─────────────────────────────────────────────────────

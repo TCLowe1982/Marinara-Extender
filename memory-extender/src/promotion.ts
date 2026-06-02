@@ -154,9 +154,6 @@ export async function runPromotionAll(): Promise<{ scopes: number; promoted: num
     const index = await readIndex(scope, id);
     if (!index || index.entries.length === 0) continue;
     console.info(`[promotion:backfill] ${scope}:${id} — ${index.entries.length} entries`);
-    for (const e of index.entries) {
-      console.info(`  ${e.id} tier=${e.tier ?? "none"} retrievalCount=${e.retrievalCount ?? "none"} score=${computeScore(e)}`);
-    }
 
     const toRemove: IndexEntry[] = [];
     let changed = false;

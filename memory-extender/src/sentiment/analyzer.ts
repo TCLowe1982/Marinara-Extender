@@ -130,13 +130,9 @@ async function callExternal(systemPrompt: string, userPrompt: string): Promise<s
 
 async function callLlm(systemPrompt: string, userPrompt: string): Promise<string> {
   const local = await callLocal(systemPrompt, userPrompt);
-  if (local !== null) {
-    console.debug("[analyzer] local model ok");
-    return local;
-  }
-  if (process.env.MARINARA_EXTENDER_LOCAL_URL) {
-    console.warn("[analyzer] local model unavailable — falling back to external API");
-  }
+  if (local !== null) return local;
+  // No per-chunk warn here — it would break the progress bar; the pipeline's
+  // progress reporter surfaces per-chunk status instead.
   return callExternal(systemPrompt, userPrompt);
 }
 
@@ -413,21 +409,37 @@ export interface AnalyzedBeat {
 // "preceding/following" blocks shown to the model are the TRUE adjacent chunks
 // in the conversation, not the nearest other high-salience beat (which could be
 // many turns away). Defaults to `targets` if not supplied.
+// `onItem` (optional) is called after each chunk is processed — current is the
+// 1-based index, total the count being analyzed, and reason is set only when the
+// chunk failed (used by the story-import progress reporter).
 export async function analyzeChunks(
   targets: ClassificationResult[],
   allChunks?: ClassificationResult[],
+  onItem?: (current: number, total: number, reason?: string) => void,
 ): Promise<AnalyzedBeat[]> {
   const context = allChunks ?? targets;
   const passing = targets.filter((r) => r.passesThreshold && r.primaryEmotion);
+  const total = passing.length;
   const output: AnalyzedBeat[] = [];
 
+  let i = 0;
   for (const result of passing) {
+    i++;
     const idx = context.indexOf(result);
-    const analysis = await analyzeChunk(result, idx === -1 ? undefined : {
-      before: context[idx - 1],
-      after:  context[idx + 1],
-    });
-    if (analysis) output.push({ result, analysis });
+    try {
+      const analysis = await analyzeChunk(result, idx === -1 ? undefined : {
+        before: context[idx - 1],
+        after:  context[idx + 1],
+      });
+      if (analysis) {
+        output.push({ result, analysis });
+        onItem?.(i, total);
+      } else {
+        onItem?.(i, total, "model returned no parseable analysis");
+      }
+    } catch (err) {
+      onItem?.(i, total, err instanceof Error ? err.message : String(err));
+    }
   }
 
   return output;

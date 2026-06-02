@@ -7,6 +7,7 @@ import { chunkMessages } from "./chunker.js";
 import { classifyChunks } from "./classifier.js";
 import { analyzeChunks } from "./analyzer.js";
 import { encodeBeats } from "./encoder.js";
+import { Progress, progressEnabled } from "../progress.js";
 
 export interface PipelineOptions {
   sourceType?: "chat" | "story";
@@ -17,6 +18,11 @@ export interface PipelineOptions {
   // before filtering. Use for first-person prose where the narrator IS a
   // named character (e.g. povCharacter: "Mark").
   povCharacter?: string;
+  // Label for console progress output (e.g. the story title). Defaults to the
+  // character name.
+  progressLabel?: string;
+  // Override the MARINARA_EXTENDER_PROGRESS env toggle for this run.
+  progress?: boolean;
 }
 
 export interface PipelineResult {
@@ -36,7 +42,8 @@ export async function runSentimentPipeline(
   characterName: string,
   options: PipelineOptions = {},
 ): Promise<PipelineResult> {
-  const { sourceType = "chat", characters, povCharacter } = options;
+  const { sourceType = "chat", characters, povCharacter, progressLabel } = options;
+  const report = new Progress(progressLabel ?? characterName, options.progress ?? progressEnabled());
 
   // Stage 0: chunk
   let chunks = await chunkMessages(messages, characterName);
@@ -78,10 +85,15 @@ export async function runSentimentPipeline(
   console.info(`[ME:pipeline] speakers found: ${speakers.join(", ")}`);
   console.info(`[ME:pipeline] matching against: "${characterName}" — ${filtered.length}/${passing.length} chunks kept`);
 
+  report.stage(`parsing complete, analyzing sentiment — ${filtered.length} of ${chunks.length} chunks`);
+
   // Stage 2: deep analyze (only passing + allowed chunks). Pass the full ordered
   // classification list as context so each beat sees its TRUE neighbors, not the
-  // nearest other passing beat.
-  const analyzed = await analyzeChunks(filtered, classifications);
+  // nearest other passing beat. Report per-chunk progress and errors to the console.
+  const analyzed = await analyzeChunks(filtered, classifications, (current, total, reason) => {
+    if (reason) report.error(current, reason);
+    report.tick(current, total);
+  });
 
   // Narrative position boost: the final 20% of a story carries climax and
   // resolution weight. Boost stored salience so these beats surface first
@@ -96,6 +108,11 @@ export async function runSentimentPipeline(
 
   // Stage 3: encode to disk
   const beats = await encodeBeats(characterId, boosted, sourceType);
+
+  report.done(
+    `done — ${beats.length} beats from ${chunks.length} chunks ` +
+    `(${filtered.length - boosted.length} failed, ${passing.length - filtered.length} off-speaker)`,
+  );
 
   return {
     beats,

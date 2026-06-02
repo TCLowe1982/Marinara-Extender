@@ -95,4 +95,5 @@ app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
   const localModel = process.env.MARINARA_EXTENDER_LOCAL_MODEL ?? "phi3:mini";
   console.log(`Local model:  ${localUrl ? `${localModel} @ ${localUrl}` : "not configured"}`);
   console.log(`Eidetic mode: ${isEideticMode() ? "ON — all entries injected (no budget limit)" : "off"}`);
+  console.log(`Progress:     ${process.env.MARINARA_EXTENDER_PROGRESS !== "0" ? "on (story-import console bar)" : "off"}`);
 });

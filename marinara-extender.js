@@ -1256,6 +1256,8 @@ async function doStoryIngest() {
     };
     const pov = panelState.ingestPovChar.trim();
     if (pov) body.povCharacter = pov;
+    // Label the sidecar-console progress output with the file name.
+    if (panelState.ingestFileName) body.title = panelState.ingestFileName;
 
     const res = await memFetch("/api/ingest-story", { method: "POST", body: JSON.stringify(body) });
     if (res?.error) throw new Error(res.error);

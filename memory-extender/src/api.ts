@@ -37,6 +37,7 @@ import { analyzeChunks } from "./sentiment/analyzer.js";
 import { encodeBeat } from "./sentiment/encoder.js";
 import { classifyAmbient } from "./ambient.js";
 import { createEntryIfUnique, isDuplicate } from "./dedup.js";
+import { Progress, progressEnabled } from "./progress.js";
 import type { Chunk } from "./sentiment/types.js";
 import mammoth from "mammoth";
 import { parseStoryToMessages } from "./story-parser.js";
@@ -832,7 +833,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
     const identityKey = await resolveIdentity(characterId, characterName);
 
     try {
-      const result = await runSentimentPipeline(messages, identityKey, characterName, { sourceType });
+      const result = await runSentimentPipeline(messages, identityKey, characterName, { sourceType, progressLabel: `${characterName} (chat history)` });
       console.info(
         `[ME] sentiment pipeline — key:${identityKey} — ${result.beats.length} beats from ${result.chunksTotal} chunks`,
       );
@@ -910,6 +911,8 @@ export function registerApiRoutes(app: FastifyInstance): void {
       characters?: string[];
       povCharacter?: string;
       sourceType?: "chat" | "story";
+      title?: string;     // label for console progress (e.g. the file name)
+      progress?: boolean; // override the MARINARA_EXTENDER_PROGRESS toggle
     };
   }>("/api/ingest-story", async (req, reply) => {
     const {
@@ -919,6 +922,8 @@ export function registerApiRoutes(app: FastifyInstance): void {
       characters = [],
       povCharacter,
       sourceType = "story",
+      title,
+      progress,
     } = req.body ?? {};
 
     if (!characterId || !characterName) {
@@ -929,13 +934,20 @@ export function registerApiRoutes(app: FastifyInstance): void {
     }
 
     const identityKey = await resolveIdentity(characterId, characterName);
+    const label = title?.trim() || characterName;
 
     try {
+      const progressReport = new Progress(label, progress ?? progressEnabled());
+      progressReport.stage(`importing "${label}" — attributing text...`);
       const { messages, method } = await parseStoryToMessages(text, { characters });
+      progressReport.stage(`attribution: ${method}`);
+
       const result = await runSentimentPipeline(messages, identityKey, characterName, {
         sourceType,
         characters: characters.length ? characters : undefined,
         povCharacter,
+        progressLabel: label,
+        progress,
       });
       console.info(
         `[ME] story ingest — key:${identityKey} — method:${method} — ${result.beats.length} beats, ${result.chunksFiltered} filtered`,

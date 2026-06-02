@@ -1218,6 +1218,7 @@ async function doStoryIngest() {
       chunksFiltered: res.chunksFiltered,
       chunksFailed:   res.chunksFailed,
       parseMethod:    res.parseMethod,
+      speakers:       res.speakers ?? [],
     };
     notifyIngestDone(characterName, res.beats?.length ?? 0);
   } catch (err) {
@@ -1379,14 +1380,20 @@ function renderStoryIngestSection() {
       resultEl.textContent = `✗ ${panelState.ingestResult.error}`;
     } else {
       resultEl.className = "me-ingest-result me-ingest-ok";
-      const { beats, chunksTotal, chunksFiltered, chunksFailed, parseMethod } = panelState.ingestResult;
+      const { beats, chunksTotal, chunksFiltered, chunksFailed, parseMethod, speakers } = panelState.ingestResult;
       const beatCount = beats?.length ?? 0;
       const methodLabel = { "pre-attributed": "pre-attributed", "local-llm": "local model", "external-llm": "external API", "paragraph": "paragraph split" }[parseMethod] ?? parseMethod ?? "";
       const lines = [`✓ ${beatCount} beat${beatCount === 1 ? "" : "s"} from ${chunksTotal} chunks`];
       if (methodLabel) lines.push(`via ${methodLabel}`);
-      if (chunksFiltered > 0) lines.push(`${chunksFiltered} speakers filtered`);
+      if (chunksFiltered > 0) lines.push(`${chunksFiltered} filtered`);
       if (chunksFailed  > 0) lines.push(`${chunksFailed} failed`);
       resultEl.textContent = lines.join(" · ");
+      if (speakers?.length) {
+        const speakerEl = el("div");
+        speakerEl.style.cssText = "margin-top:4px; font-size:10px; color:#6b7280;";
+        speakerEl.textContent = "Speakers: " + speakers.join(", ");
+        resultEl.appendChild(speakerEl);
+      }
     }
     body.appendChild(resultEl);
   }

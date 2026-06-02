@@ -25,6 +25,7 @@ export interface PipelineResult {
   chunksAnalyzed: number;
   chunksFailed: number;
   chunksFiltered: number;
+  speakers: string[];   // unique speaker labels found in the text
 }
 
 const NARRATIVE_POSITION_BOOST = 1.3;
@@ -51,17 +52,25 @@ export async function runSentimentPipeline(
   const classifications = classifyChunks(chunks, sourceType);
   const passing = classifications.filter((c) => c.passesThreshold);
 
-  // Speaker filter: each run saves beats only for ONE character so beats land in
-  // the right character directory. In story mode the default is characterName —
-  // run the ingest once per character from that character's chat to populate each.
-  // Pass an explicit characters list to override (e.g. for alias matching).
+  // Collect unique speakers for diagnostics.
+  const speakers = [...new Set(chunks.map((c) => c.speaker))].sort();
+
+  // Speaker filter: keep only chunks for the target character.
+  // Uses partial/contains matching so "Mari" matches "Dr. Mari Zielinska",
+  // "Professor Mari", etc. Pass an explicit characters list to pin exact names.
+  function speakerMatches(speaker: string, needle: string): boolean {
+    const s = speaker.trim().toLowerCase();
+    const n = needle.trim().toLowerCase();
+    return s === n || s.includes(n) || n.includes(s);
+  }
+
   let filtered: ClassificationResult[];
   if (characters?.length) {
-    const needles = characters.map((n) => n.trim().toLowerCase());
-    filtered = passing.filter((c) => needles.includes(c.chunk.speaker.trim().toLowerCase()));
+    filtered = passing.filter((c) =>
+      characters.some((name) => speakerMatches(c.chunk.speaker, name)),
+    );
   } else if (sourceType === "story") {
-    const nameLower = characterName.trim().toLowerCase();
-    filtered = passing.filter((c) => c.chunk.speaker.trim().toLowerCase() === nameLower);
+    filtered = passing.filter((c) => speakerMatches(c.chunk.speaker, characterName));
   } else {
     filtered = passing;
   }
@@ -89,5 +98,6 @@ export async function runSentimentPipeline(
     chunksAnalyzed: boosted.length,
     chunksFailed:   filtered.length - boosted.length,
     chunksFiltered: passing.length - filtered.length,
+    speakers,
   };
 }

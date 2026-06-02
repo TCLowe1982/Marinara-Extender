@@ -1,95 +1,130 @@
-// Story-to-Memory Parser (Phase 4)
+// Story-to-Memory Parser
 //
-// Converts raw prose fiction into DigestMessage[] for the sentiment pipeline.
+// Converts raw prose or RP text into DigestMessage[] for the sentiment pipeline.
 //
-// Primary (LLM attribution): sends the prose to the sidecar with a reformatting
-//   prompt; the model adds "Name: " prefixes so the existing chunker can do
-//   accurate per-speaker emotional analysis.
+// Input formats handled:
+//   1. Pre-attributed text — already has "Name: " or "**Name:**" lines (RP logs,
+//      chat exports). Normalised and passed directly to the chunker.
+//   2. Plain prose — sent to the LLM (local → external) for speaker attribution.
+//      The model adds "Name: " prefixes so the chunker can do per-speaker analysis.
+//   3. Fallback — paragraph split with "Narrator: " prefix when all LLM calls fail.
 //
-// Fallback (paragraph split): each paragraph becomes a "Narrator: " message.
-//   Speaker attribution is lost but emotional classification still works — the
-//   beats are just attributed to the narrator rather than individual characters.
-//
-// The attributed output is passed as a single DigestMessage. The chunker's
-// line-by-line parser detects "Name: " prefixes within it and splits correctly.
+// Priority: local Ollama → external API → paragraph split.
 
 import { getCachedAuth } from "./auth-cache.js";
 import type { DigestMessage } from "./digest.js";
+
+// ── Format detection ──────────────────────────────────────────────────────────
+// If the text already has recognisable dialogue attribution, skip the LLM call.
+
+// Matches "Name: text", "**Name:** text", "*Name:* text" — RP and chat export formats.
+const ATTRIBUTION_LINE_RE = /^(?:\*{1,2})?[A-Z][A-Za-z0-9 _'-]{0,40}(?:\*{1,2})?:\s+\S/m;
+const MIN_ATTRIBUTED_LINES = 3;
+
+function countAttributedLines(text: string): number {
+  return text.split("\n").filter(l => ATTRIBUTION_LINE_RE.test(l.trim())).length;
+}
+
+function isPreAttributed(text: string): boolean {
+  return countAttributedLines(text) >= MIN_ATTRIBUTED_LINES;
+}
+
+// ── Pre-attributed normalisation ──────────────────────────────────────────────
+// Strips markdown bold/italic around the speaker label and normalises to "Name: ".
+
+function normaliseAttributed(text: string): string {
+  return text
+    .split("\n")
+    .map(line => line.replace(/^\*{1,2}([A-Za-z0-9 _'-]+)\*{1,2}:/, "$1:"))
+    .join("\n");
+}
+
+// ── Attribution validation ────────────────────────────────────────────────────
+// After an LLM call, check that the output actually contains attributed lines.
+// If the model returned prose instead, the call failed.
+
+function isValidAttribution(text: string): boolean {
+  return countAttributedLines(text) >= MIN_ATTRIBUTED_LINES;
+}
 
 // ── Attribution prompt ────────────────────────────────────────────────────────
 
 function buildAttributionPrompt(characters: string[]): string {
   const charHint = characters.length > 0
-    ? `Known characters in this passage: ${characters.join(", ")}.`
+    ? `Known characters: ${characters.join(", ")}.`
     : "Identify character names from the text itself.";
 
-  return `You are a dialogue attribution assistant. Reformat the provided story passage so that every segment of dialogue and narration is prefixed with the speaker's name and a colon.
+  return `You are a dialogue attribution assistant. Reformat the story passage so every segment is prefixed with the speaker name and a colon.
 
 Rules:
-- Dialogue: attribute to the character who is speaking, inferred from context ("she said", "he replied", paragraph order, prior speaker, etc.)
-- Narration, action, and description: prefix with "Narrator:"
+- Dialogue: attribute to the speaking character (infer from context, "she said", paragraph order, etc.)
+- Narration, action, description: prefix with "Narrator:"
 - Preserve the original wording exactly — do not paraphrase, summarize, or add anything
-- Put each attributed segment on its own line; split dialogue from surrounding narration when they appear in the same sentence
-- If a character is unnamed in the passage, use a consistent label like "Character_A"
+- One attributed segment per line; split dialogue from narration when mixed in the same sentence
+- Unnamed characters: use a consistent label like "Character_A"
 ${charHint}
 
-Output only the reformatted passage. No commentary, no explanation, no markdown.`;
+Output ONLY the reformatted passage. No commentary, no explanation, no markdown fences.`;
 }
 
 // ── LLM calls ─────────────────────────────────────────────────────────────────
 
-async function callSidecar(text: string, characters: string[]): Promise<string | null> {
-  const engineUrl = (process.env.MARINARA_ENGINE_URL ?? "http://localhost:7860").replace(/\/$/, "");
+async function callLocal(text: string, characters: string[]): Promise<string | null> {
+  const base = (process.env.MARINARA_EXTENDER_LOCAL_URL ?? "").replace(/\/$/, "");
+  if (!base) return null;
+  const model = process.env.MARINARA_EXTENDER_LOCAL_MODEL ?? "phi3:mini";
+
   try {
-    const res = await fetch(`${engineUrl}/api/sidecar/tracker`, {
+    const res = await fetch(`${base}/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        systemPrompt: buildAttributionPrompt(characters),
-        userPrompt: text,
+        model,
+        messages: [
+          { role: "system", content: buildAttributionPrompt(characters) },
+          { role: "user",   content: text },
+        ],
+        temperature: 0.1,
+        stream: false,
       }),
       signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) return null;
-    const json = (await res.json()) as { result?: string };
-    return json.result?.trim() || null;
+    const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    return json?.choices?.[0]?.message?.content?.trim() ?? null;
   } catch {
     return null;
   }
 }
 
-async function callExternal(text: string, characters: string[]): Promise<string> {
+async function callExternal(text: string, characters: string[]): Promise<string | null> {
   const auth = getCachedAuth();
-  if (!auth) {
-    throw new Error(
-      "Story parser: sidecar unavailable and no API key set. Enable a local model or set MARINARA_EXTENDER_API_KEY.",
-    );
-  }
+  if (!auth) return null;
 
   const upstream = (process.env.MARINARA_EXTENDER_DIGEST_UPSTREAM ?? "https://api.openai.com")
     .replace(/\/$/, "");
   const model = process.env.MARINARA_EXTENDER_DIGEST_MODEL ?? "gpt-4o-mini";
 
-  const res = await fetch(`${upstream}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: auth },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: buildAttributionPrompt(characters) },
-        { role: "user",   content: text },
-      ],
-      temperature: 0.1,
-      // Attribution output is similar length to input; give generous headroom.
-      max_tokens: Math.min(8192, Math.ceil(text.length / 2.5)),
-    }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Story parser: external API failed (${res.status}): ${await res.text()}`);
+  try {
+    const res = await fetch(`${upstream}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: auth },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: buildAttributionPrompt(characters) },
+          { role: "user",   content: text },
+        ],
+        temperature: 0.1,
+        max_tokens: Math.min(8192, Math.ceil(text.length / 2.5)),
+      }),
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    return json?.choices?.[0]?.message?.content?.trim() ?? null;
+  } catch {
+    return null;
   }
-  const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  return json?.choices?.[0]?.message?.content?.trim() ?? "";
 }
 
 // ── Fallback: paragraph split ─────────────────────────────────────────────────
@@ -105,16 +140,15 @@ function paragraphSplit(text: string): DigestMessage[] {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export interface ParseStoryOptions {
-  // Known character names to help the LLM with attribution.
-  // The more complete, the better — include both sides of a conversation.
   characters?: string[];
-  // Skip the LLM pre-pass and go straight to paragraph split (for testing).
   forceFallback?: boolean;
 }
 
+export type ParseMethod = "pre-attributed" | "local-llm" | "external-llm" | "paragraph";
+
 export interface ParseStoryResult {
   messages: DigestMessage[];
-  method: "llm" | "paragraph";
+  method: ParseMethod;
 }
 
 export async function parseStoryToMessages(
@@ -123,31 +157,41 @@ export async function parseStoryToMessages(
 ): Promise<ParseStoryResult> {
   const { characters = [], forceFallback = false } = options;
 
-  if (!forceFallback) {
-    // Try sidecar first; if unavailable, try external API.
-    let attributed = await callSidecar(text, characters);
+  // Fast path: text is already attributed (RP log, chat export).
+  if (!forceFallback && isPreAttributed(text)) {
+    console.info("[story-parser] pre-attributed format detected — skipping LLM call");
+    return {
+      messages: [{ role: "assistant", content: normaliseAttributed(text) }],
+      method: "pre-attributed",
+    };
+  }
 
-    if (!attributed) {
-      try {
-        attributed = await callExternal(text, characters);
-      } catch (err) {
-        console.warn(
-          "[story-parser] LLM attribution failed, falling back to paragraph split:",
-          err instanceof Error ? err.message : err,
-        );
-      }
+  if (!forceFallback) {
+    // Try local model first.
+    const local = await callLocal(text, characters);
+    if (local && isValidAttribution(local)) {
+      console.info("[story-parser] local model attribution ok");
+      return { messages: [{ role: "assistant", content: local }], method: "local-llm" };
+    }
+    if (local) {
+      console.warn("[story-parser] local model returned prose instead of attribution — trying external API");
+    } else {
+      console.info("[story-parser] local model unavailable — trying external API");
     }
 
-    if (attributed) {
-      // Single message containing the reformatted text.
-      // The chunker's line parser detects "Name: " prefixes within it.
-      return {
-        messages: [{ role: "assistant", content: attributed }],
-        method: "llm",
-      };
+    // Fall back to external API.
+    const external = await callExternal(text, characters);
+    if (external && isValidAttribution(external)) {
+      console.info("[story-parser] external API attribution ok");
+      return { messages: [{ role: "assistant", content: external }], method: "external-llm" };
+    }
+    if (external) {
+      console.warn("[story-parser] external API also returned prose — falling back to paragraph split");
+    } else {
+      console.warn("[story-parser] external API unavailable — falling back to paragraph split");
     }
   }
 
-  console.warn("[story-parser] Using paragraph-split fallback — speaker attribution unavailable.");
+  console.warn("[story-parser] paragraph-split fallback — speaker attribution unavailable");
   return { messages: paragraphSplit(text), method: "paragraph" };
 }

@@ -1217,6 +1217,7 @@ async function doStoryIngest() {
       chunksAnalyzed: res.chunksAnalyzed,
       chunksFiltered: res.chunksFiltered,
       chunksFailed:   res.chunksFailed,
+      parseMethod:    res.parseMethod,
     };
     notifyIngestDone(characterName, res.beats?.length ?? 0);
   } catch (err) {
@@ -1378,10 +1379,12 @@ function renderStoryIngestSection() {
       resultEl.textContent = `✗ ${panelState.ingestResult.error}`;
     } else {
       resultEl.className = "me-ingest-result me-ingest-ok";
-      const { beats, chunksTotal, chunksFiltered, chunksFailed } = panelState.ingestResult;
+      const { beats, chunksTotal, chunksFiltered, chunksFailed, parseMethod } = panelState.ingestResult;
       const beatCount = beats?.length ?? 0;
+      const methodLabel = { "pre-attributed": "pre-attributed", "local-llm": "local model", "external-llm": "external API", "paragraph": "paragraph split" }[parseMethod] ?? parseMethod ?? "";
       const lines = [`✓ ${beatCount} beat${beatCount === 1 ? "" : "s"} from ${chunksTotal} chunks`];
-      if (chunksFiltered > 0) lines.push(`${chunksFiltered} one-off speakers filtered`);
+      if (methodLabel) lines.push(`via ${methodLabel}`);
+      if (chunksFiltered > 0) lines.push(`${chunksFiltered} speakers filtered`);
       if (chunksFailed  > 0) lines.push(`${chunksFailed} failed`);
       resultEl.textContent = lines.join(" · ");
     }

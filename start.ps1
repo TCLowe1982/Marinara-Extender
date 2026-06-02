@@ -44,7 +44,7 @@ $nodeModules = Join-Path $sidecarDir "node_modules"
 if (-not (Test-Path $nodeModules)) {
     Write-Host "  Installing dependencies (first run)..." -ForegroundColor Yellow
     Push-Location $sidecarDir
-    & npm install --silent
+    & npm.cmd install --silent
     Pop-Location
     Write-Host "  [OK] Dependencies installed" -ForegroundColor Green
     Write-Host ""
@@ -71,8 +71,8 @@ if (Test-Sidecar) {
     Write-Host "  [OK] Memory Extender is already running" -ForegroundColor Green
 } else {
     Write-Host "  [..] Starting Memory Extender..." -ForegroundColor Yellow
-    Start-Process "npm" `
-        -ArgumentList "run","dev" `
+    Start-Process "cmd.exe" `
+        -ArgumentList "/c npm.cmd run dev" `
         -WorkingDirectory $sidecarDir `
         -WindowStyle Normal
 }

@@ -416,6 +416,7 @@ export async function analyzeChunks(
   targets: ClassificationResult[],
   allChunks?: ClassificationResult[],
   onItem?: (current: number, total: number, reason?: string) => void,
+  signal?: AbortSignal,
 ): Promise<AnalyzedBeat[]> {
   const context = allChunks ?? targets;
   const passing = targets.filter((r) => r.passesThreshold && r.primaryEmotion);
@@ -424,6 +425,7 @@ export async function analyzeChunks(
 
   let i = 0;
   for (const result of passing) {
+    if (signal?.aborted) break; // cancelled — stop analyzing, keep what we have
     i++;
     const idx = context.indexOf(result);
     try {

@@ -23,6 +23,8 @@ export interface PipelineOptions {
   progressLabel?: string;
   // Override the MARINARA_EXTENDER_PROGRESS env toggle for this run.
   progress?: boolean;
+  // Aborts the analysis loop (cancelled import); no beats are encoded.
+  signal?: AbortSignal;
 }
 
 export interface PipelineResult {
@@ -93,7 +95,14 @@ export async function runSentimentPipeline(
   const analyzed = await analyzeChunks(filtered, classifications, (current, total, reason) => {
     if (reason) report.error(current, reason);
     report.tick(current, total);
-  });
+  }, options.signal);
+
+  // If cancelled mid-analysis, stop before writing any beats so a restart
+  // starts clean.
+  if (options.signal?.aborted) {
+    report.done("cancelled");
+    throw new Error("cancelled");
+  }
 
   // Narrative position boost: the final 20% of a story carries climax and
   // resolution weight. Boost stored salience so these beats surface first

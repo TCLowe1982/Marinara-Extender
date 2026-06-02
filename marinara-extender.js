@@ -118,6 +118,20 @@ marinara.addStyle(`
     padding: 6px 0;
   }
 
+  /* Tab bar */
+  .me-tabbar {
+    display: flex; flex-shrink: 0;
+    border-bottom: 1px solid #2e2b27;
+  }
+  .me-tab {
+    flex: 1; background: none; border: none; cursor: pointer;
+    color: #8b8680; font-size: 11px; font-weight: 600;
+    padding: 7px 4px; border-bottom: 2px solid transparent;
+    font-family: inherit;
+  }
+  .me-tab:hover { color: #e8e5e0; background: #211f1c; }
+  .me-tab.active { color: #e8e5e0; border-bottom-color: #8b5cf6; }
+
   /* Icon buttons in header */
   .me-icon-btn {
     background: none; border: none; color: #6b7280;
@@ -340,6 +354,11 @@ marinara.addStyle(`
     padding: 3px 6px; font-family: inherit; outline: none; min-width: 0;
   }
   .me-ingest-input:focus { border-color: #f97316; }
+  .me-ingest-check {
+    display: flex; align-items: center; gap: 6px; margin-bottom: 6px;
+    font-size: 10px; color: #8b8680; cursor: pointer;
+  }
+  .me-ingest-check input { accent-color: #8b5cf6; cursor: pointer; }
   .me-ingest-file-row { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
   .me-ingest-file-btn {
     flex-shrink: 0; background: #252320; border: 1px solid #3d3a36;
@@ -529,6 +548,7 @@ marinara.setInterval(checkSidecar, 15_000);
 
 const panelState = {
   session: null,
+  activeTab: "memory",     // "memory" | "import" | "settings"
   chatEntries: [],
   bookmarks: [],
   addingLane: null,
@@ -548,9 +568,13 @@ const panelState = {
   // Story ingest section
   ingestExpanded: false,
   ingestPovChar: "",
+  ingestCharacters: "",        // comma-separated speaker names to pin (sent as `characters`)
+  ingestCharsLoadedFor: null,  // characterId the saved names were prefilled for
+  ingestUseExternal: false,    // attribute via external API + bigger windows
   ingestText: "",
   ingestFileName: null,
   ingestRunning: false,
+  ingestAbort: null,           // AbortController for the in-flight import
   ingestStatus: "",    // short message shown while running
   ingestResult: null,
   ingestClearRunning: false,
@@ -569,6 +593,31 @@ const panelState = {
   renameInput: "",
   renameStatus: null,      // null | "ok" | string (error message)
 };
+
+// ── Remembered speaker names (per character, persisted) ─────────────────────────
+// Maps characterId → the comma-separated speaker names the user pins for story
+// imports, so e.g. "Mari" is remembered for "Dr. Mari Zielińska" next time.
+
+const CHAR_NAMES_KEY = `${marinara.extensionId}:char-names`;
+
+function loadCharNamesMap() {
+  try { return JSON.parse(localStorage.getItem(CHAR_NAMES_KEY) || "{}"); }
+  catch { return {}; }
+}
+
+function getSavedCharNames(characterId) {
+  if (!characterId) return "";
+  return loadCharNamesMap()[characterId] ?? "";
+}
+
+function setSavedCharNames(characterId, names) {
+  if (!characterId) return;
+  const map = loadCharNamesMap();
+  const trimmed = (names ?? "").trim();
+  if (trimmed) map[characterId] = trimmed;
+  else delete map[characterId];
+  try { localStorage.setItem(CHAR_NAMES_KEY, JSON.stringify(map)); } catch { /* quota */ }
+}
 
 // ── Settings helpers ──────────────────────────────────────────────────────────
 
@@ -743,8 +792,32 @@ const panel = marinara.addElement(document.body, "div", { id: "me-panel" });
 
 // ── Render ────────────────────────────────────────────────────────────────────
 
+const PANEL_TABS = [
+  { key: "memory",   label: "Memory" },
+  { key: "import",   label: "Import" },
+  { key: "settings", label: "Settings" },
+];
+
+function setActiveTab(key) {
+  if (panelState.activeTab === key) return;
+  panelState.activeTab = key;
+  // Entering a tab opens its sections so controls are visible without a second click.
+  if (key === "import")   { panelState.importExpanded = true; panelState.ingestExpanded = true; }
+  if (key === "settings") { panelState.settingsExpanded = true; panelState.identityExpanded = true; }
+  renderPanel();
+}
+
 function renderPanel() {
   if (!panel) return;
+
+  // Preserve scroll position across the full re-render (every action rebuilds
+  // the DOM, which would otherwise jump the view back to the top). On a tab
+  // switch the content differs, so reset to the top instead.
+  const prevContent = panel.querySelector(".me-panel-content");
+  const prevScroll = prevContent ? prevContent.scrollTop : 0;
+  const tabChanged = panelState._lastRenderedTab !== panelState.activeTab;
+  panelState._lastRenderedTab = panelState.activeTab;
+
   panel.innerHTML = "";
 
   // Header
@@ -771,36 +844,48 @@ function renderPanel() {
     panel.appendChild(info);
   }
 
+  // Tab bar
+  const tabs = panelState.activeTab;
+  const tabBar = el("div", "me-tabbar");
+  for (const t of PANEL_TABS) {
+    const tabBtn = el("button", "me-tab" + (tabs === t.key ? " active" : ""));
+    tabBtn.textContent = t.label;
+    tabBtn.addEventListener("click", () => setActiveTab(t.key));
+    tabBar.appendChild(tabBtn);
+  }
+  panel.appendChild(tabBar);
+
   // Scrollable content
   const content = el("div", "me-panel-content");
 
   if (panelState.loading) {
-    const msg = el("div", "me-loading");
-    msg.textContent = "Loading…";
-    content.appendChild(msg);
+    content.appendChild(Object.assign(el("div", "me-loading"), { textContent: "Loading…" }));
   } else if (!panelState.session) {
-    const msg = el("div", "me-empty");
-    msg.textContent = "Open a chat with a character to use the ledger.";
-    content.appendChild(msg);
+    if (tabs === "settings") {
+      content.appendChild(renderSettingsSection());
+    } else {
+      content.appendChild(Object.assign(el("div", "me-empty"), { textContent: "Open a chat with a character to use the ledger." }));
+    }
   } else if (panelState.error) {
-    const msg = el("div", "me-error");
-    msg.textContent = panelState.error;
-    content.appendChild(msg);
-  } else {
+    content.appendChild(Object.assign(el("div", "me-error"), { textContent: panelState.error }));
+  } else if (tabs === "memory") {
     for (const lane of LANES) {
       const entries = panelState.chatEntries.filter(e => e.lane === lane.key);
       content.appendChild(renderLaneSection(lane, entries));
     }
     content.appendChild(renderBookmarksSection(panelState.bookmarks));
-    content.appendChild(renderIdentitySection());
+  } else if (tabs === "import") {
     content.appendChild(renderImportSection());
     content.appendChild(renderStoryIngestSection());
+  } else if (tabs === "settings") {
+    content.appendChild(renderIdentitySection());
+    content.appendChild(renderSettingsSection());
   }
 
-  // Settings is always rendered regardless of session state
-  content.appendChild(renderSettingsSection());
-
   panel.appendChild(content);
+
+  // Restore scroll once layout is in place (unless we just switched tabs).
+  if (prevScroll && !tabChanged) content.scrollTop = prevScroll;
 }
 
 function renderLaneSection(lane, entries) {
@@ -1241,14 +1326,20 @@ async function loadIngestFile(file) {
 
 async function doStoryIngest() {
   if (!panelState.session || !panelState.ingestText.trim()) return;
+  const { characterId, characterName } = panelState.session;
+
+  const ac = new AbortController();
+  panelState.ingestAbort = ac;
   panelState.ingestRunning = true;
   panelState.ingestStatus = "Analyzing story…";
   panelState.ingestResult = null;
   panelState.ingestClearResult = null;
   renderPanel();
 
+  // Persist the pinned speaker names for this character.
+  setSavedCharNames(characterId, panelState.ingestCharacters);
+
   try {
-    const { characterId, characterName } = panelState.session;
     const body = {
       characterId,
       characterName: characterName ?? "the character",
@@ -1256,10 +1347,13 @@ async function doStoryIngest() {
     };
     const pov = panelState.ingestPovChar.trim();
     if (pov) body.povCharacter = pov;
+    const names = panelState.ingestCharacters.split(",").map(s => s.trim()).filter(Boolean);
+    if (names.length) body.characters = names;
+    if (panelState.ingestUseExternal) body.useExternal = true;
     // Label the sidecar-console progress output with the file name.
     if (panelState.ingestFileName) body.title = panelState.ingestFileName;
 
-    const res = await memFetch("/api/ingest-story", { method: "POST", body: JSON.stringify(body) });
+    const res = await memFetch("/api/ingest-story", { method: "POST", body: JSON.stringify(body), signal: ac.signal });
     if (res?.error) throw new Error(res.error);
     panelState.ingestResult = {
       beats:          res.beats,
@@ -1272,12 +1366,24 @@ async function doStoryIngest() {
     };
     notifyIngestDone(characterName, res.beats?.length ?? 0);
   } catch (err) {
-    panelState.ingestResult = { error: err.message ?? "Ingest failed" };
-    notifyIngestDone(characterName, 0);  // badge still appears so they know it finished
+    if (err?.name === "AbortError") {
+      panelState.ingestResult = { cancelled: true };
+    } else {
+      panelState.ingestResult = { error: err.message ?? "Ingest failed" };
+      notifyIngestDone(characterName, 0);  // badge still appears so they know it finished
+    }
   }
 
+  panelState.ingestAbort = null;
   panelState.ingestRunning = false;
   panelState.ingestStatus = "";
+  renderPanel();
+}
+
+function cancelStoryIngest() {
+  if (!panelState.ingestAbort) return;
+  panelState.ingestAbort.abort();
+  panelState.ingestStatus = "Cancelling…";
   renderPanel();
 }
 
@@ -1335,11 +1441,25 @@ function renderStoryIngestSection() {
     body.appendChild(runWrap);
 
     const hint = el("div", "me-ingest-hint");
-    hint.textContent = "Long stories can take 1–2 minutes — the model reads each chunk individually.";
+    hint.textContent = "Long stories run in the sidecar console — watch there for the live progress bar. You can cancel and restart anytime.";
     body.appendChild(hint);
+
+    const cancelRow = el("div", "me-ingest-bottom");
+    const cancelBtn = el("button", "me-btn-danger");
+    cancelBtn.textContent = "Cancel import";
+    cancelBtn.addEventListener("click", cancelStoryIngest);
+    cancelRow.appendChild(cancelBtn);
+    body.appendChild(cancelRow);
 
     wrap.appendChild(body);
     return wrap;
+  }
+
+  // Prefill remembered speaker names when the active character changes.
+  const cid = panelState.session?.characterId ?? null;
+  if (panelState.ingestCharsLoadedFor !== cid) {
+    panelState.ingestCharacters = getSavedCharNames(cid);
+    panelState.ingestCharsLoadedFor = cid;
   }
 
   // POV character field
@@ -1353,6 +1473,34 @@ function renderStoryIngestSection() {
   povInput.addEventListener("input", e => { panelState.ingestPovChar = e.target.value; });
   povRow.append(povLbl, povInput);
   body.appendChild(povRow);
+
+  // Character names to pin (remembered per character). Matches speaker labels in
+  // the attributed text so e.g. "Mari" is kept for "Dr. Mari Zielińska".
+  const charRow = el("div", "me-ingest-row");
+  const charLbl_ = el("span", "me-ingest-lbl");
+  charLbl_.textContent = "Names";
+  const charInput = el("input", "me-ingest-input");
+  charInput.type = "text";
+  charInput.placeholder = "e.g. Mari, Cole (comma-separated)";
+  charInput.value = panelState.ingestCharacters;
+  charInput.title = "Speaker names to keep. Remembered for this character.";
+  charInput.addEventListener("input", e => {
+    panelState.ingestCharacters = e.target.value;
+    setSavedCharNames(panelState.session?.characterId, e.target.value);
+  });
+  charRow.append(charLbl_, charInput);
+  body.appendChild(charRow);
+
+  // External-API attribution toggle (faster, bigger windows, more consistent).
+  const extRow = el("label", "me-ingest-check");
+  const extBox = el("input");
+  extBox.type = "checkbox";
+  extBox.checked = panelState.ingestUseExternal;
+  extBox.addEventListener("change", e => { panelState.ingestUseExternal = e.target.checked; });
+  const extTxt = el("span");
+  extTxt.textContent = "Use external API for attribution (faster, fewer windows)";
+  extRow.append(extBox, extTxt);
+  body.appendChild(extRow);
 
   // Saving-for hint — shows which character's beats will be stored
   const savingHint = el("div", "me-ingest-hint");
@@ -1425,7 +1573,9 @@ function renderStoryIngestSection() {
   // Result display
   if (panelState.ingestResult) {
     const resultEl = el("div", "me-ingest-result");
-    if (panelState.ingestResult.error) {
+    if (panelState.ingestResult.cancelled) {
+      resultEl.textContent = "Import cancelled.";
+    } else if (panelState.ingestResult.error) {
       resultEl.className = "me-ingest-result me-ingest-err";
       resultEl.textContent = `✗ ${panelState.ingestResult.error}`;
     } else {

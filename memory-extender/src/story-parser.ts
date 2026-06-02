@@ -150,7 +150,9 @@ async function callExternal(text: string, characters: string[]): Promise<string 
           { role: "user",   content: text },
         ],
         temperature: 0.1,
-        max_tokens: Math.min(8192, Math.ceil(text.length / 2.5)),
+        // Attribution output is ~as long as the input; allow plenty of room so
+        // larger external windows aren't truncated.
+        max_tokens: Math.min(16384, Math.ceil(text.length / 2.5)),
       }),
     });
     if (!res.ok) return null;
@@ -177,7 +179,10 @@ function paragraphSplit(text: string): DigestMessage[] {
 // at paragraph boundaries into windows small enough that each window's output
 // fits comfortably under the cap, then attribute each independently.
 
-const MAX_ATTRIBUTION_WINDOW_CHARS = 12_000;
+// Local models handle smaller contexts/outputs; the external API can take much
+// larger windows, meaning fewer round-trips and more consistent speaker labels.
+const MAX_ATTRIBUTION_WINDOW_CHARS_LOCAL = 12_000;
+const MAX_ATTRIBUTION_WINDOW_CHARS_EXTERNAL = 28_000;
 
 function splitIntoWindows(text: string, maxChars: number): string[] {
   const paragraphs = text.split(/\n{2,}/);
@@ -195,14 +200,18 @@ function splitIntoWindows(text: string, maxChars: number): string[] {
   return windows.length > 0 ? windows : [text];
 }
 
-// Attribute one window: local model → external API → paragraph-split fallback.
+// Attribute one window. When useExternal is set, go straight to the external API
+// (skipping the local model); otherwise local → external → paragraph-split.
 async function attributeWindow(
   text: string,
   characters: string[],
+  useExternal: boolean,
 ): Promise<{ messages: DigestMessage[]; method: ParseMethod }> {
-  const local = await callLocal(text, characters);
-  if (local && isValidAttribution(local)) {
-    return { messages: [{ role: "assistant", content: local }], method: "local-llm" };
+  if (!useExternal) {
+    const local = await callLocal(text, characters);
+    if (local && isValidAttribution(local)) {
+      return { messages: [{ role: "assistant", content: local }], method: "local-llm" };
+    }
   }
   const external = await callExternal(text, characters);
   if (external && isValidAttribution(external)) {
@@ -216,6 +225,11 @@ async function attributeWindow(
 export interface ParseStoryOptions {
   characters?: string[];
   forceFallback?: boolean;
+  // Skip the local model and attribute via the external API, using larger
+  // windows (fewer calls, more consistent labels).
+  useExternal?: boolean;
+  // Aborts the (potentially long) multi-window attribution loop.
+  signal?: AbortSignal;
   // Called as each window begins attribution (1-based). Lets the caller render
   // progress for the otherwise-silent multi-window attribution phase.
   onWindow?: (current: number, total: number) => void;
@@ -232,7 +246,7 @@ export async function parseStoryToMessages(
   text: string,
   options: ParseStoryOptions = {},
 ): Promise<ParseStoryResult> {
-  const { characters = [], forceFallback = false, onWindow } = options;
+  const { characters = [], forceFallback = false, useExternal = false, signal, onWindow } = options;
 
   // Fast path: text is already attributed (RP log, chat export).
   if (!forceFallback && isPreAttributed(text)) {
@@ -249,16 +263,18 @@ export async function parseStoryToMessages(
   }
 
   // Window large inputs so attribution output isn't truncated by the token cap.
-  const windows = splitIntoWindows(text, MAX_ATTRIBUTION_WINDOW_CHARS);
+  const windowChars = useExternal ? MAX_ATTRIBUTION_WINDOW_CHARS_EXTERNAL : MAX_ATTRIBUTION_WINDOW_CHARS_LOCAL;
+  const windows = splitIntoWindows(text, windowChars);
   if (windows.length > 1) {
-    console.info(`[story-parser] long input — attributing in ${windows.length} windows`);
+    console.info(`[story-parser] long input — attributing in ${windows.length} windows (${useExternal ? "external" : "local"})`);
   }
 
   const messages: DigestMessage[] = [];
   const methodsUsed = new Set<ParseMethod>();
   for (let i = 0; i < windows.length; i++) {
+    if (signal?.aborted) throw new Error("cancelled");
     onWindow?.(i + 1, windows.length);
-    const result = await attributeWindow(windows[i]!, characters);
+    const result = await attributeWindow(windows[i]!, characters, useExternal);
     messages.push(...result.messages);
     methodsUsed.add(result.method);
   }

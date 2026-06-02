@@ -911,8 +911,9 @@ export function registerApiRoutes(app: FastifyInstance): void {
       characters?: string[];
       povCharacter?: string;
       sourceType?: "chat" | "story";
-      title?: string;     // label for console progress (e.g. the file name)
-      progress?: boolean; // override the MARINARA_EXTENDER_PROGRESS toggle
+      title?: string;       // label for console progress (e.g. the file name)
+      progress?: boolean;   // override the MARINARA_EXTENDER_PROGRESS toggle
+      useExternal?: boolean; // attribute via external API + larger windows
     };
   }>("/api/ingest-story", async (req, reply) => {
     const {
@@ -924,6 +925,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
       sourceType = "story",
       title,
       progress,
+      useExternal = false,
     } = req.body ?? {};
 
     if (!characterId || !characterName) {
@@ -936,11 +938,17 @@ export function registerApiRoutes(app: FastifyInstance): void {
     const identityKey = await resolveIdentity(characterId, characterName);
     const label = title?.trim() || characterName;
 
+    // Cancel the import when the client aborts the request (the Cancel button).
+    const ac = new AbortController();
+    req.raw.once("close", () => { if (!reply.raw.writableEnded) ac.abort(); });
+
     try {
       const progressReport = new Progress(label, progress ?? progressEnabled());
-      progressReport.stage(`importing "${label}" — attributing text...`);
+      progressReport.stage(`importing "${label}" — attributing text${useExternal ? " (external)" : ""}...`);
       const { messages, method } = await parseStoryToMessages(text, {
         characters,
+        useExternal,
+        signal: ac.signal,
         onWindow: (current, total) => progressReport.tick(current, total, "window"),
       });
       progressReport.stage(`attribution complete (${method})`);
@@ -951,15 +959,20 @@ export function registerApiRoutes(app: FastifyInstance): void {
         povCharacter,
         progressLabel: label,
         progress,
+        signal: ac.signal,
       });
       console.info(
         `[ME] story ingest — key:${identityKey} — method:${method} — ${result.beats.length} beats, ${result.chunksFiltered} filtered`,
       );
       return reply.send({ ...result, parseMethod: method });
     } catch (err) {
-      return reply.code(500).send({
-        error: err instanceof Error ? err.message : "Story ingest failed",
-      });
+      const msg = err instanceof Error ? err.message : String(err);
+      if (ac.signal.aborted || msg === "cancelled") {
+        console.info(`[ME] story ingest cancelled — key:${identityKey}`);
+        if (!reply.raw.writableEnded) return reply.code(499).send({ cancelled: true });
+        return; // client already gone
+      }
+      return reply.code(500).send({ error: msg || "Story ingest failed" });
     }
   });
 

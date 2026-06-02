@@ -2,7 +2,7 @@
 //
 // Scores a text chunk against emotion keyword dictionaries and structural
 // patterns. No LLM calls — pure regex + scoring, designed to be fast enough
-// to run on every chunk before deciding which ones warrant a Gemma call.
+// to run on every chunk before deciding which ones warrant an LLM call.
 //
 // Architecture mirrors AutoTroll's ToxicityDetector:
 //   keyword match counts → per-category scores → weighted sum → compound boost

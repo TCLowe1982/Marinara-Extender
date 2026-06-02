@@ -4,8 +4,9 @@
 // same-speaker turns that are semantically related (high cosine similarity)
 // into coherent chunks for the classifier.
 //
-// Embedding calls go to the Marinara Engine sidecar. If the sidecar is
-// unavailable and fallback is enabled, turns are grouped by speaker only.
+// Embedding calls go to Ollama (opt-in via MARINARA_EXTENDER_EMBED_MODEL). When
+// no embed model is configured, turns are grouped by speaker only — no external
+// Marinara Engine sidecar is involved.
 
 import type { DigestMessage } from "../digest.js";
 import type { Chunk, DialogueTurn } from "./types.js";
@@ -65,31 +66,39 @@ export function parseTurns(messages: DigestMessage[], characterName: string): Di
   return turns;
 }
 
-// ── Embeddings via Marinara sidecar ──────────────────────────────────────────
+// ── Embeddings via Ollama ─────────────────────────────────────────────────────
+// Semantic merging is opt-in: set MARINARA_EXTENDER_EMBED_MODEL to an Ollama
+// embedding model (e.g. "nomic-embed-text", after `ollama pull nomic-embed-text").
+// When unset, fetchEmbeddings returns null and chunkMessages falls back to
+// speaker-turn grouping — no Marinara Engine sidecar involved.
 
 type EmbeddingResponse = {
-  data: Array<{ embedding: number[]; index: number }>;
+  data: Array<{ embedding: number[]; index?: number }>;
 };
 
 async function fetchEmbeddings(texts: string[]): Promise<number[][] | null> {
-  const engineUrl = (process.env.MARINARA_ENGINE_URL ?? "http://localhost:7860").replace(/\/$/, "");
+  const base = (process.env.MARINARA_EXTENDER_LOCAL_URL ?? "").replace(/\/$/, "");
+  const model = process.env.MARINARA_EXTENDER_EMBED_MODEL;
+  if (!base || !model) return null; // embeddings opt-in; otherwise turn-only grouping
 
   try {
-    const res = await fetch(`${engineUrl}/api/sidecar/v1/embeddings`, {
+    const res = await fetch(`${base}/embeddings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ input: texts }),
+      body: JSON.stringify({ model, input: texts }),
       signal: AbortSignal.timeout(30_000),
     });
 
     if (!res.ok) return null;
 
     const json = (await res.json()) as EmbeddingResponse;
-    if (!Array.isArray(json.data)) return null;
+    if (!Array.isArray(json.data) || json.data.length !== texts.length) return null;
 
-    // Return in original order.
-    const sorted = [...json.data].sort((a, b) => a.index - b.index);
-    return sorted.map((d) => d.embedding);
+    // Ollama returns items in input order; sort by index only when present.
+    const ordered = json.data.every((d) => typeof d.index === "number")
+      ? [...json.data].sort((a, b) => a.index! - b.index!)
+      : json.data;
+    return ordered.map((d) => d.embedding);
   } catch {
     return null;
   }
@@ -206,20 +215,24 @@ export async function chunkMessages(
 
   if (turns.length === 0) return [];
 
-  // Try semantic merging via embeddings.
+  // Semantic merging via Ollama embeddings (opt-in via MARINARA_EXTENDER_EMBED_MODEL).
   const embeddings = await fetchEmbeddings(turns.map((t) => t.text));
 
   if (embeddings && embeddings.length === turns.length) {
     return mergeByEmbedding(turns, embeddings, cfg.merge_threshold, cfg.max_turns_per_chunk);
   }
 
-  // Sidecar unavailable.
+  // Embeddings unavailable — honor the config flag for callers that require them.
   if (!cfg.fallback_on_sidecar_unavailable) {
     throw new Error(
-      "Chunker: Marinara sidecar is unavailable and fallback_on_sidecar_unavailable is false.",
+      "Chunker: embeddings unavailable and fallback_on_sidecar_unavailable is false. Set MARINARA_EXTENDER_EMBED_MODEL or enable the fallback.",
     );
   }
 
-  console.warn("[chunker] Sidecar unavailable — falling back to speaker-turn grouping only.");
+  // Only warn when embeddings were actually attempted (a model is configured);
+  // otherwise turn-only grouping is the intended default, silently.
+  if (process.env.MARINARA_EXTENDER_EMBED_MODEL) {
+    console.warn("[chunker] embeddings unavailable (is the embed model pulled in Ollama?) — using speaker-turn grouping.");
+  }
   return mergeByTurnOnly(turns, cfg.max_turns_per_chunk);
 }

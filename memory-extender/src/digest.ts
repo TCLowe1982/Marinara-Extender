@@ -1,6 +1,6 @@
 // Digest a batch of chat messages into persistent memory entries.
-// Tries the Marinara Engine's local Gemma sidecar first; falls back to an
-// external OpenAI-compatible API if the sidecar is unavailable.
+// Tries the local Ollama model first; falls back to an external
+// OpenAI-compatible API if Ollama is unavailable.
 
 import { getCachedAuth } from "./auth-cache.js";
 import {
@@ -101,7 +101,7 @@ async function callExternalLlm(systemPrompt: string, userPrompt: string, model: 
   const auth = getCachedAuth();
   if (!auth) {
     throw new Error(
-      "Local sidecar unavailable and no API key set. Either enable a local model in Marinara Engine → Settings → Local Model, or set MARINARA_EXTENDER_API_KEY in memory-extender/.env.",
+      "Local Ollama model unavailable and no API key set. Either run Ollama with MARINARA_EXTENDER_LOCAL_URL/LOCAL_MODEL set, or set MARINARA_EXTENDER_API_KEY in memory-extender/.env.",
     );
   }
 

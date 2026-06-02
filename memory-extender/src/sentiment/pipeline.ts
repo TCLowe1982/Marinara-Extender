@@ -11,7 +11,7 @@ import { encodeBeats } from "./encoder.js";
 export interface PipelineOptions {
   sourceType?: "chat" | "story";
   // Only analyze chunks attributed to these speakers. Unrecognized speakers
-  // (e.g. walk-on characters) are dropped before the Gemma call.
+  // (e.g. walk-on characters) are dropped before the deep-analysis LLM call.
   characters?: string[];
   // If provided, chunks with speaker "Narrator" are relabeled to this name
   // before filtering. Use for first-person prose where the narrator IS a

@@ -1,9 +1,9 @@
 // Stage 2: Deep Sentiment Analysis
 //
-// For each ClassificationResult that passes the salience threshold, calls
-// the Marinara Engine sidecar (POST /api/sidecar/tracker) with an
-// emotion-specific system prompt to extract structured BeatAnalysis JSON.
-// Falls back to the external API if the sidecar is unavailable.
+// For each ClassificationResult that passes the salience threshold, calls the
+// local Ollama model with an emotion-specific system prompt to extract
+// structured BeatAnalysis JSON. Falls back to the external API if Ollama is
+// unavailable.
 //
 // Each emotion has its own system prompt tuned to ask the right questions.
 // Dysregulation is the most complex: it identifies which sub-pattern is
@@ -103,7 +103,7 @@ async function callExternal(systemPrompt: string, userPrompt: string): Promise<s
   const auth = getCachedAuth();
   if (!auth) {
     throw new Error(
-      "Analyzer: sidecar unavailable and no API key set. Enable a local model in Marinara Engine or set MARINARA_EXTENDER_API_KEY.",
+      "Analyzer: local Ollama model unavailable and no API key set. Run Ollama (MARINARA_EXTENDER_LOCAL_URL/LOCAL_MODEL) or set MARINARA_EXTENDER_API_KEY.",
     );
   }
   const upstream = (process.env.MARINARA_EXTENDER_DIGEST_UPSTREAM ?? "https://api.openai.com")

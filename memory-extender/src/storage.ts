@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, access, unlink, readdir } from "fs/promises";
+import { readFile, writeFile, mkdir, access, unlink, readdir, rename } from "fs/promises";
 import { join, dirname } from "path";
 import { parse, stringify } from "yaml";
 
@@ -119,9 +119,21 @@ async function readYaml<T>(filePath: string): Promise<T | null> {
   }
 }
 
+// Atomic write: serialize to a temp file, then rename over the target. rename is
+// atomic, so a concurrent reader (or a writer that lost the race) never sees a
+// half-written / interleaved file — the file is always a complete prior or new
+// version. Also protects against a process kill mid-write (the temp is orphaned,
+// the real file stays intact). rename replaces an existing file on Windows too.
 async function writeYaml(filePath: string, data: unknown): Promise<void> {
   await ensureDir(filePath);
-  await writeFile(filePath, stringify(data), "utf8");
+  const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  await writeFile(tmp, stringify(data), "utf8");
+  try {
+    await rename(tmp, filePath);
+  } catch (err) {
+    await unlink(tmp).catch(() => {});
+    throw err;
+  }
 }
 
 // ── Write serialization ───────────────────────────────────────────────────────
@@ -163,7 +175,14 @@ export async function upsertIndexEntry(
 ): Promise<void> {
   const p = indexPath(scope, scopeId);
   return serializedWrite(p, async () => {
-    const index = (await readIndex(scope, scopeId)) ?? emptyIndex(scope, scopeId);
+    const existing = await readIndex(scope, scopeId);
+    // Guard: if the index file is present but unreadable, do NOT treat it as
+    // empty — that would rebuild it from this one entry and orphan all the
+    // others. Bail loudly; the file stays intact for the repair script.
+    if (!existing && (await exists(p))) {
+      throw new Error(`[storage] refusing to overwrite unreadable index ${p} — run scripts/repair-indexes.mjs`);
+    }
+    const index = existing ?? emptyIndex(scope, scopeId);
     const i = index.entries.findIndex((e) => e.id === entry.id);
     if (i >= 0) index.entries[i] = entry;
     else index.entries.push(entry);

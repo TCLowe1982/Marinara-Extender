@@ -7,8 +7,7 @@
 // Safe to run multiple times — idempotent.
 
 import {
-  readIndex,
-  writeIndex,
+  mutateIndex,
   deleteEntryFile,
   listScopeIds,
   type Scope,
@@ -82,10 +81,11 @@ export async function runCleanup(): Promise<CleanupResult> {
   let pruned = 0, deduped = 0, transients = 0;
 
   for (const { scope, id } of scopes) {
-    const index = await readIndex(scope, id);
-    if (!index || index.entries.length === 0) continue;
-
     const toDelete: IndexEntry[] = [];
+
+    await mutateIndex(scope, id, (index) => {
+    if (index.entries.length === 0) return false;
+
     let changed = false;
 
     // ── Pass 1: ghost prune ───────────────────────────────────────────────────
@@ -153,13 +153,12 @@ export async function runCleanup(): Promise<CleanupResult> {
       }
     }
 
-    if (!changed) continue;
+    if (!changed) return false;
 
-    // Apply hard deletes.
+    // Apply hard deletes to the index (entry files removed after the locked write).
     const deleteIds = new Set(toDelete.map((e) => e.id));
     index.entries = index.entries.filter((e) => !deleteIds.has(e.id));
-    index.lastUpdated = new Date().toISOString();
-    await writeIndex(index);
+    });
 
     for (const entry of toDelete) {
       await deleteEntryFile(scope, id, entry.path).catch(() => {});

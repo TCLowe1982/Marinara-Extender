@@ -7,8 +7,6 @@
 // Call runPromotion(scope, scopeId) from process-turn for each active scope.
 
 import {
-  readIndex,
-  writeIndex,
   mutateIndex,
   deleteEntryFile,
   listScopeIds,
@@ -91,42 +89,42 @@ function nextTier(entry: IndexEntry): {
 // ── Public: run promotion pass for one scope ──────────────────────────────────
 
 export async function runPromotion(scope: Scope, scopeId: string): Promise<void> {
-  const index = await readIndex(scope, scopeId);
-  if (!index || index.entries.length === 0) return;
-
   const toRemove: IndexEntry[] = [];
-  let changed = false;
 
-  for (const entry of index.entries) {
-    if (entry.status === "done") continue;
-    const { tier, cycleCount, prune } = nextTier(entry);
+  // Serialized read-modify-write so the promotion pass can't collide with the
+  // Tier-2/Tier-3/retrieval writes that run concurrently on the same index.
+  await mutateIndex(scope, scopeId, (index) => {
+    if (index.entries.length === 0) return false;
+    let changed = false;
 
-    if (prune) {
-      toRemove.push(entry);
-      changed = true;
-      continue;
+    for (const entry of index.entries) {
+      if (entry.status === "done") continue;
+      const { tier, cycleCount, prune } = nextTier(entry);
+
+      if (prune) {
+        toRemove.push(entry);
+        changed = true;
+        continue;
+      }
+
+      if (tier !== (entry.tier ?? "short") || cycleCount !== (entry.cycleCount ?? 0)) {
+        const oldTier = entry.tier ?? "short";
+        entry.tier = tier;
+        entry.cycleCount = cycleCount;
+        changed = true;
+        console.info(
+          `[promotion] ${scope}:${scopeId} — ${entry.id} ${oldTier} → ${tier}` +
+          (cycleCount > 0 ? ` (cycle ${cycleCount})` : ""),
+        );
+      }
     }
 
-    if (tier !== (entry.tier ?? "short") || cycleCount !== (entry.cycleCount ?? 0)) {
-      const oldTier = entry.tier ?? "short";
-      entry.tier = tier;
-      entry.cycleCount = cycleCount;
-      changed = true;
-      console.info(
-        `[promotion] ${scope}:${scopeId} — ${entry.id} ${oldTier} → ${tier}` +
-        (cycleCount > 0 ? ` (cycle ${cycleCount})` : ""),
-      );
-    }
-  }
+    if (!changed) return false;
+    const removeIds = new Set(toRemove.map((e) => e.id));
+    index.entries = index.entries.filter((e) => !removeIds.has(e.id));
+  });
 
-  if (!changed) return;
-
-  // Remove pruned entries from the index and delete their files.
-  const removeIds = new Set(toRemove.map((e) => e.id));
-  index.entries = index.entries.filter((e) => !removeIds.has(e.id));
-  index.lastUpdated = new Date().toISOString();
-  await writeIndex(index);
-
+  // Delete pruned entry files after the index no longer references them.
   for (const entry of toRemove) {
     await deleteEntryFile(scope, scopeId, entry.path).catch(() => {});
     console.info(`[promotion] pruned stale entry ${entry.id} (${entry.summary.slice(0, 50)})`);
@@ -152,48 +150,46 @@ export async function runPromotionAll(): Promise<{ scopes: number; promoted: num
   let pruned = 0;
 
   for (const { scope, id } of scopes) {
-    const index = await readIndex(scope, id);
-    if (!index || index.entries.length === 0) continue;
-    console.info(`[promotion:backfill] ${scope}:${id} — ${index.entries.length} entries`);
-
     const toRemove: IndexEntry[] = [];
-    let changed = false;
 
-    for (const entry of index.entries) {
-      if (entry.status === "done") continue;
-      // Prune ghost entries — empty summary or suspiciously tiny content.
-      if (!entry.summary?.trim()) {
-        toRemove.push(entry);
-        changed = true;
-        pruned++;
-        console.info(`[promotion:backfill] pruned ghost entry ${entry.id} (empty summary, retrievalCount=${entry.retrievalCount ?? 0})`);
-        continue;
+    await mutateIndex(scope, id, (index) => {
+      if (index.entries.length === 0) return false;
+      console.info(`[promotion:backfill] ${scope}:${id} — ${index.entries.length} entries`);
+      let changed = false;
+
+      for (const entry of index.entries) {
+        if (entry.status === "done") continue;
+        // Prune ghost entries — empty summary or suspiciously tiny content.
+        if (!entry.summary?.trim()) {
+          toRemove.push(entry);
+          changed = true;
+          pruned++;
+          console.info(`[promotion:backfill] pruned ghost entry ${entry.id} (empty summary, retrievalCount=${entry.retrievalCount ?? 0})`);
+          continue;
+        }
+        const { tier, cycleCount, prune } = nextTier(entry);
+
+        if (prune) {
+          toRemove.push(entry);
+          changed = true;
+          pruned++;
+          continue;
+        }
+
+        if (tier !== (entry.tier ?? "short") || cycleCount !== (entry.cycleCount ?? 0)) {
+          const oldTier = entry.tier ?? "short";
+          entry.tier = tier;
+          entry.cycleCount = cycleCount;
+          changed = true;
+          promoted++;
+          console.info(`[promotion:backfill] ${scope}:${id} — ${entry.id} ${oldTier} → ${tier}`);
+        }
       }
-      const { tier, cycleCount, prune } = nextTier(entry);
 
-      if (prune) {
-        toRemove.push(entry);
-        changed = true;
-        pruned++;
-        continue;
-      }
-
-      if (tier !== (entry.tier ?? "short") || cycleCount !== (entry.cycleCount ?? 0)) {
-        const oldTier = entry.tier ?? "short";
-        entry.tier = tier;
-        entry.cycleCount = cycleCount;
-        changed = true;
-        promoted++;
-        console.info(`[promotion:backfill] ${scope}:${id} — ${entry.id} ${oldTier} → ${tier}`);
-      }
-    }
-
-    if (!changed) continue;
-
-    const removeIds = new Set(toRemove.map((e) => e.id));
-    index.entries = index.entries.filter((e) => !removeIds.has(e.id));
-    index.lastUpdated = new Date().toISOString();
-    await writeIndex(index);
+      if (!changed) return false;
+      const removeIds = new Set(toRemove.map((e) => e.id));
+      index.entries = index.entries.filter((e) => !removeIds.has(e.id));
+    });
 
     for (const entry of toRemove) {
       await deleteEntryFile(scope, id, entry.path).catch(() => {});

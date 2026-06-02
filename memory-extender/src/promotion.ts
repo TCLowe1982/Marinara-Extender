@@ -145,12 +145,18 @@ export async function runPromotionAll(): Promise<{ scopes: number; promoted: num
   for (const id of charIds) scopes.push({ scope: "character", id });
   for (const id of chatIds) scopes.push({ scope: "chat", id });
 
+  console.info(`[promotion:backfill] scanning ${scopes.length} scopes`);
+
   let promoted = 0;
   let pruned = 0;
 
   for (const { scope, id } of scopes) {
     const index = await readIndex(scope, id);
     if (!index || index.entries.length === 0) continue;
+    console.info(`[promotion:backfill] ${scope}:${id} — ${index.entries.length} entries`);
+    for (const e of index.entries) {
+      console.info(`  ${e.id} tier=${e.tier ?? "none"} retrievalCount=${e.retrievalCount ?? "none"} score=${computeScore(e)}`);
+    }
 
     const toRemove: IndexEntry[] = [];
     let changed = false;

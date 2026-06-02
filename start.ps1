@@ -50,6 +50,26 @@ if (-not (Test-Path $nodeModules)) {
     Write-Host ""
 }
 
+# ── Check for Ollama update in progress ──────────────────────────────────────
+
+$ollamaUpdate = Get-Process -Name "OllamaSetup" -ErrorAction SilentlyContinue
+if ($ollamaUpdate) {
+    Write-Host "  [..] Ollama is updating — waiting for it to finish..." -ForegroundColor Yellow
+    $waited = 0
+    while ((Get-Process -Name "OllamaSetup" -ErrorAction SilentlyContinue) -and $waited -lt 120) {
+        Start-Sleep -Seconds 3
+        $waited += 3
+        Write-Host -NoNewline "`r  [..] Ollama updating... ${waited}s elapsed  "
+    }
+    Write-Host ""
+    if ($waited -ge 120) {
+        Write-Host "  [!!] Ollama update timed out. It may still be running." -ForegroundColor Yellow
+    } else {
+        Write-Host "  [OK] Ollama update finished" -ForegroundColor Green
+        Start-Sleep -Seconds 2  # give it a moment to settle
+    }
+}
+
 # ── Start Ollama ──────────────────────────────────────────────────────────────
 
 if (Test-Ollama) {

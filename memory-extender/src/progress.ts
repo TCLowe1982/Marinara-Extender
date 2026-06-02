@@ -36,10 +36,11 @@ export class Progress {
     console.log(`  ${msg}`);
   }
 
-  // Update the in-place progress bar for the current item.
-  tick(current: number, total: number, note?: string): void {
+  // Update the in-place progress bar for the current item. `unit` names what is
+  // being counted (e.g. "chunk", "window").
+  tick(current: number, total: number, unit = "chunk"): void {
     if (!this.enabled) return;
-    const line = `  importing "${this.label}" — chunk ${current}/${total} ${bar(current, total)} ${pct(current, total)}%${note ? `  ${note}` : ""}`;
+    const line = `  importing "${this.label}" — ${unit} ${current}/${total} ${bar(current, total)} ${pct(current, total)}%`;
     if (process.stdout.isTTY) {
       const pad = Math.max(0, this.lastLen - line.length);
       process.stdout.write(`\r${line}${" ".repeat(pad)}`);

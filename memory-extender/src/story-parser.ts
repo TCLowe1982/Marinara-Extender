@@ -216,6 +216,9 @@ async function attributeWindow(
 export interface ParseStoryOptions {
   characters?: string[];
   forceFallback?: boolean;
+  // Called as each window begins attribution (1-based). Lets the caller render
+  // progress for the otherwise-silent multi-window attribution phase.
+  onWindow?: (current: number, total: number) => void;
 }
 
 export type ParseMethod = "pre-attributed" | "local-llm" | "external-llm" | "paragraph";
@@ -229,7 +232,7 @@ export async function parseStoryToMessages(
   text: string,
   options: ParseStoryOptions = {},
 ): Promise<ParseStoryResult> {
-  const { characters = [], forceFallback = false } = options;
+  const { characters = [], forceFallback = false, onWindow } = options;
 
   // Fast path: text is already attributed (RP log, chat export).
   if (!forceFallback && isPreAttributed(text)) {
@@ -253,8 +256,9 @@ export async function parseStoryToMessages(
 
   const messages: DigestMessage[] = [];
   const methodsUsed = new Set<ParseMethod>();
-  for (const window of windows) {
-    const result = await attributeWindow(window, characters);
+  for (let i = 0; i < windows.length; i++) {
+    onWindow?.(i + 1, windows.length);
+    const result = await attributeWindow(windows[i]!, characters);
     messages.push(...result.messages);
     methodsUsed.add(result.method);
   }

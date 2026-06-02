@@ -939,8 +939,11 @@ export function registerApiRoutes(app: FastifyInstance): void {
     try {
       const progressReport = new Progress(label, progress ?? progressEnabled());
       progressReport.stage(`importing "${label}" — attributing text...`);
-      const { messages, method } = await parseStoryToMessages(text, { characters });
-      progressReport.stage(`attribution: ${method}`);
+      const { messages, method } = await parseStoryToMessages(text, {
+        characters,
+        onWindow: (current, total) => progressReport.tick(current, total, "window"),
+      });
+      progressReport.stage(`attribution complete (${method})`);
 
       const result = await runSentimentPipeline(messages, identityKey, characterName, {
         sourceType,

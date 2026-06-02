@@ -1,4 +1,4 @@
-# Marinara Extender — Startup Script
+# Marinara Extender - Startup Script
 # Starts Ollama and the Memory Extender sidecar, then shows live progress
 # until both services are ready.
 
@@ -23,18 +23,19 @@ function Test-Sidecar {
 
 function Get-Bar($current, $total, $width = 34) {
     $filled = [int]([Math]::Min([double]$current / $total, 1.0) * $width)
-    ("█" * $filled) + ("░" * ($width - $filled))
+    $empty  = $width - $filled
+    ("[" + ("#" * $filled) + ("-" * $empty) + "]")
 }
 
-$spinFrames = @("⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏")
+$spinFrames = @("|", "/", "-", "\")
 
 # ── Header ────────────────────────────────────────────────────────────────────
 
 Clear-Host
 Write-Host ""
-Write-Host "  ╔════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "  ║      Marinara Extender — Startup       ║" -ForegroundColor Cyan
-Write-Host "  ╚════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "  +------------------------------------------+" -ForegroundColor Cyan
+Write-Host "  |      Marinara Extender -- Startup        |" -ForegroundColor Cyan
+Write-Host "  +------------------------------------------+" -ForegroundColor Cyan
 Write-Host ""
 
 # ── Install deps if needed ────────────────────────────────────────────────────
@@ -45,17 +46,16 @@ if (-not (Test-Path $nodeModules)) {
     Push-Location $sidecarDir
     & npm install --silent
     Pop-Location
-    Write-Host "  ✓ Dependencies installed" -ForegroundColor Green
+    Write-Host "  [OK] Dependencies installed" -ForegroundColor Green
     Write-Host ""
 }
 
 # ── Start Ollama ──────────────────────────────────────────────────────────────
 
 if (Test-Ollama) {
-    Write-Host "  ✓ Ollama is already running" -ForegroundColor Green
+    Write-Host "  [OK] Ollama is already running" -ForegroundColor Green
 } else {
-    Write-Host "  ↑ Starting Ollama..." -ForegroundColor Yellow
-    # Try common install locations, fall back to PATH
+    Write-Host "  [..] Starting Ollama..." -ForegroundColor Yellow
     $ollamaExe = @(
         "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe",
         "$env:PROGRAMFILES\Ollama\ollama.exe",
@@ -68,9 +68,9 @@ if (Test-Ollama) {
 # ── Start Memory Extender ─────────────────────────────────────────────────────
 
 if (Test-Sidecar) {
-    Write-Host "  ✓ Memory Extender is already running" -ForegroundColor Green
+    Write-Host "  [OK] Memory Extender is already running" -ForegroundColor Green
 } else {
-    Write-Host "  ↑ Starting Memory Extender..." -ForegroundColor Yellow
+    Write-Host "  [..] Starting Memory Extender..." -ForegroundColor Yellow
     Start-Process "npm" `
         -ArgumentList "run","dev" `
         -WorkingDirectory $sidecarDir `
@@ -86,7 +86,7 @@ Write-Host "  Ollama          [?] ..."
 Write-Host "  Memory Extender [?] ..."
 Write-Host ""
 $barRow = [Console]::CursorTop
-Write-Host "  [$(Get-Bar 0 $TIMEOUT_SEC)] 0s / ${TIMEOUT_SEC}s"
+Write-Host "  $(Get-Bar 0 $TIMEOUT_SEC) 0s / ${TIMEOUT_SEC}s"
 Write-Host ""
 
 $startTime  = Get-Date
@@ -105,35 +105,34 @@ while ($true) {
     # Ollama line
     [Console]::SetCursorPosition(0, $statusRow)
     if ($ollamaOk) {
-        Write-Host "  Ollama          [✓] Ready        " -ForegroundColor Green
+        Write-Host "  Ollama          [OK] Ready        " -ForegroundColor Green
     } else {
-        Write-Host "  Ollama          [$spin] Starting... " -ForegroundColor Yellow
+        Write-Host "  Ollama          [$spin]  Starting... " -ForegroundColor Yellow
     }
 
     # Sidecar line
     [Console]::SetCursorPosition(0, $statusRow + 1)
     if ($sidecarOk) {
-        Write-Host "  Memory Extender [✓] Ready        " -ForegroundColor Green
+        Write-Host "  Memory Extender [OK] Ready        " -ForegroundColor Green
     } else {
-        Write-Host "  Memory Extender [$spin] Starting... " -ForegroundColor Yellow
+        Write-Host "  Memory Extender [$spin]  Starting... " -ForegroundColor Yellow
     }
 
     # Progress bar
     [Console]::SetCursorPosition(0, $barRow)
-    $bar = Get-Bar $elapsed $TIMEOUT_SEC
-    Write-Host "  [$bar] ${elapsed}s / ${TIMEOUT_SEC}s  " -ForegroundColor DarkGray
+    Write-Host "  $(Get-Bar $elapsed $TIMEOUT_SEC) ${elapsed}s / ${TIMEOUT_SEC}s  " -ForegroundColor DarkGray
 
     if ($ollamaOk -and $sidecarOk) {
         [Console]::SetCursorPosition(0, $barRow + 2)
-        Write-Host "  ✓ All services ready — open Marinara in your browser." -ForegroundColor Green
+        Write-Host "  [OK] All services ready -- open Marinara in your browser." -ForegroundColor Green
         Write-Host ""
         break
     }
 
     if ($elapsed -ge $TIMEOUT_SEC) {
         [Console]::SetCursorPosition(0, $barRow + 2)
-        if (-not $ollamaOk)  { Write-Host "  ✗ Ollama did not respond. Is it installed?" -ForegroundColor Red }
-        if (-not $sidecarOk) { Write-Host "  ✗ Memory Extender did not start. Check the npm window for errors." -ForegroundColor Red }
+        if (-not $ollamaOk)  { Write-Host "  [!!] Ollama did not respond. Is it installed?" -ForegroundColor Red }
+        if (-not $sidecarOk) { Write-Host "  [!!] Memory Extender did not start. Check the npm window for errors." -ForegroundColor Red }
         Write-Host ""
         break
     }

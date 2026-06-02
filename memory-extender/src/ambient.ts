@@ -31,25 +31,26 @@ export interface AmbientFact {
   text: string;   // original sentence
   fact: string;   // concise extracted fact
   lane: Lane;
+  scope: "character" | "chat"; // character = permanent; chat = this conversation only
 }
 
-const SYSTEM_PROMPT = `You are extracting stable facts from conversation sentences.
+const SYSTEM_PROMPT = `You are extracting facts from conversation sentences and deciding how long they matter.
 
-A stable fact reveals something lasting about who a person IS: preferences, history, identity, relationships, circumstances, recurring patterns. NOT temporary actions, in-scene events, or things that only matter right now.
+SCOPE RULES:
+- "character" scope = permanent facts about who someone IS. Save these.
+- "chat" scope = facts only relevant to this conversation (plans for today, current tasks, temporary states). Save these too, but flag them correctly.
+- Skip entirely: pure actions with no informational content, meta-references, in-scene roleplay events.
 
-Examples of stable facts:
-- "I grew up in Texas" → grew up in Texas
-- "I cried at the MGS3 ending" → was moved to tears by MGS3's ending
-- "I've been coding for ten years" → has ~10 years coding experience
-- "My dog's name is Biscuit" → has a dog named Biscuit
+Examples:
+- "I grew up in Texas" → character scope, user_topics
+- "I cried at the MGS3 ending" → character scope, user_topics
+- "I've been coding for ten years" → character scope, user_topics
+- "My dog's name is Biscuit" → character scope, user_topics
+- "I have a meeting until 5 PM" → chat scope, user_topics
+- "I'm working on the ledger logic today" → chat scope, user_topics
+- "She always deflects with humor when nervous" → character scope, character_topics
 
-NOT stable facts (skip these):
-- "I'm going to the store" (temporary action)
-- "I love this scene" (in-context reaction)
-- "I said that last turn" (meta-reference)
-
-Return a JSON array. Each entry: {"text":"<original sentence>","fact":"<concise fact>","lane":"user_topics|character_topics"}.
-Use "user_topics" if the fact is about the human user, "character_topics" if about the AI character.
+Return a JSON array. Each entry: {"text":"<original sentence>","fact":"<concise fact>","lane":"user_topics|character_topics","scope":"character|chat"}.
 Return [] if nothing qualifies. Raw JSON only — no explanation, no markdown.`;
 
 async function callLocal(prompt: string): Promise<string | null> {
@@ -88,12 +89,17 @@ function parseFactsJson(raw: string | null): AmbientFact[] {
     try {
       const parsed = JSON.parse(attempt);
       if (!Array.isArray(parsed)) continue;
-      return parsed.filter(
-        (f): f is AmbientFact =>
-          typeof f?.text === "string" &&
-          typeof f?.fact === "string" &&
-          (f?.lane === "user_topics" || f?.lane === "character_topics"),
-      );
+      return parsed
+        .filter(
+          (f): f is AmbientFact =>
+            typeof f?.text === "string" &&
+            typeof f?.fact === "string" &&
+            (f?.lane === "user_topics" || f?.lane === "character_topics"),
+        )
+        .map((f) => ({
+          ...f,
+          scope: f.scope === "chat" ? "chat" : "character",
+        }));
     } catch { /* try next */ }
   }
   return [];

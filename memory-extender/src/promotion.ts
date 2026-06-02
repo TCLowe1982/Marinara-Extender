@@ -160,6 +160,14 @@ export async function runPromotionAll(): Promise<{ scopes: number; promoted: num
 
     for (const entry of index.entries) {
       if (entry.status === "done") continue;
+      // Prune ghost entries — empty summary or suspiciously tiny content.
+      if (!entry.summary?.trim()) {
+        toRemove.push(entry);
+        changed = true;
+        pruned++;
+        console.info(`[promotion:backfill] pruned ghost entry ${entry.id} (empty summary, retrievalCount=${entry.retrievalCount ?? 0})`);
+        continue;
+      }
       const { tier, cycleCount, prune } = nextTier(entry);
 
       if (prune) {

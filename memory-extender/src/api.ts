@@ -52,8 +52,8 @@ import {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// Jaccard similarity on word bags — used to detect duplicate <remember> entries.
-function summarySimilarity(a: string, b: string): number {
+// Jaccard similarity on word bags.
+function jaccardSimilarity(a: string, b: string): number {
   const words = (s: string) =>
     new Set(s.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean));
   const wa = words(a);
@@ -61,6 +61,15 @@ function summarySimilarity(a: string, b: string): number {
   const intersection = [...wa].filter((w) => wb.has(w)).length;
   const union = new Set([...wa, ...wb]).size;
   return union === 0 ? 0 : intersection / union;
+}
+
+// Dedup check: summary OR content is too similar to an existing entry.
+function isDuplicate(summary: string, content: string, existing: import("./storage.js").IndexEntry[]): boolean {
+  return existing.some(
+    (e) =>
+      jaccardSimilarity(e.summary, summary) >= DEDUP_SIMILARITY_THRESHOLD ||
+      (content.length > 20 && jaccardSimilarity(e.summary, content) >= DEDUP_SIMILARITY_THRESHOLD),
+  );
 }
 
 // Truncate a summary string at a word boundary ≤ maxLen characters.
@@ -71,7 +80,15 @@ function truncateSummary(s: string, maxLen = 120): string {
   return lastSpace > 0 ? cut.slice(0, lastSpace) : cut;
 }
 
-const DEDUP_SIMILARITY_THRESHOLD = 0.45;
+// Cap content at ~600 chars (~150 tokens) to prevent oversized entries.
+function capContent(s: string, maxChars = 600): string {
+  if (s.length <= maxChars) return s;
+  const cut = s.slice(0, maxChars);
+  const lastSentence = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf(".\n"));
+  return lastSentence > 300 ? cut.slice(0, lastSentence + 1) : cut.trimEnd() + "…";
+}
+
+const DEDUP_SIMILARITY_THRESHOLD = 0.35;
 
 const VALID_SCOPES: Scope[] = ["global", "character", "chat"];
 const VALID_LANES: Lane[] = ["open_threads", "user_topics", "character_topics"];
@@ -439,9 +456,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
         );
       }
       const existing = indexCache.get(cacheKey)!;
-      const isDupe = existing.some(
-        (e) => summarySimilarity(e.summary, summary) >= DEDUP_SIMILARITY_THRESHOLD,
-      );
+      const isDupe = isDuplicate(summary, rem.content ?? "", existing);
       if (isDupe) {
         console.info(`[ME] skipped duplicate entry: "${summary.slice(0, 60)}"`);
         continue;
@@ -517,13 +532,16 @@ export function registerApiRoutes(app: FastifyInstance): void {
             const summary = truncateSummary(
               `[${beat.emotion}] ${analysis.motivation}`,
             );
-            const content = [
+            if (!summary.trim()) continue; // skip empty summaries
+
+            const rawContent = [
               `Emotion: ${beat.emotion}${beat.subpattern ? ` (${beat.subpattern})` : ""}`,
               `Motivation: ${analysis.motivation}`,
               `Relational dynamics: ${analysis.relationalDynamics}`,
               `Outcome: ${analysis.outcome}`,
               ...(analysis.subtext ? [`Subtext: ${analysis.subtext}`] : []),
             ].join("\n");
+            const content = capContent(rawContent);
 
             const entryId  = `ctopic-${nanoid(8)}`;
             const now      = today();
@@ -553,27 +571,32 @@ export function registerApiRoutes(app: FastifyInstance): void {
       void (async () => {
         try {
           const facts = await classifyAmbient({ userText: userMessageText, characterText: messageText });
+          let saved = 0;
           for (const fact of facts) {
             const summary = truncateSummary(fact.fact);
+            if (!summary.trim()) continue;
+            const scope   = (fact.scope ?? "character") as "character" | "chat";
+            const scopeId = scope === "character" ? identityKey : chatId;
             const entryId = `${fact.lane === "user_topics" ? "utopic" : "ctopic"}-${nanoid(8)}`;
             const now     = today();
-            const scope   = "character" as const;
+            const content = capContent(fact.text);
             const newEntry: Entry = {
               id: entryId, lane: fact.lane, summary,
               status: "open", created: now, lastAccessed: now,
-              content: fact.text,
-              tokens: estimateTokens(`${summary} ${fact.text}`),
+              content,
+              tokens: estimateTokens(`${summary} ${content}`),
               ...(timeCtx ? { timeContext: timeCtx } : {}),
             };
-            const relPath = await writeEntry(scope, identityKey, newEntry);
-            await upsertIndexEntry(scope, identityKey, {
+            const relPath = await writeEntry(scope, scopeId, newEntry);
+            await upsertIndexEntry(scope, scopeId, {
               id: entryId, path: relPath, summary,
               tokens: newEntry.tokens, lane: fact.lane,
               status: "open", lastAccessed: now,
             });
+            saved++;
           }
-          if (facts.length > 0) {
-            console.info(`[ME:tier3] saved ${facts.length} ambient fact(s) for ${identityKey}`);
+          if (saved > 0) {
+            console.info(`[ME:tier3] saved ${saved} ambient fact(s) for ${identityKey}`);
           }
         } catch (err) {
           console.warn("[ME:tier3] ambient pass failed:", err);
@@ -693,9 +716,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
         );
       }
       const existing = indexCache.get(cacheKey)!;
-      const isDupe = existing.some(
-        (e) => summarySimilarity(e.summary, summary) >= DEDUP_SIMILARITY_THRESHOLD,
-      );
+      const isDupe = isDuplicate(summary, cmd.content ?? "", existing);
       if (isDupe) {
         console.info(`[ME] skipped duplicate entry: "${summary.slice(0, 60)}"`);
         continue;

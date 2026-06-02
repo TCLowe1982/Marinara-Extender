@@ -915,6 +915,10 @@ export function registerApiRoutes(app: FastifyInstance): void {
       title?: string;       // label for console progress (e.g. the file name)
       progress?: boolean;   // override the MARINARA_EXTENDER_PROGRESS toggle
       useExternal?: boolean; // attribute via external API + larger windows
+      // Multi-character: route beats to several characters from one import. Each
+      // gets the chunks whose speaker matches its names. Falls back to a single
+      // assignment built from characterId/characterName/characters when omitted.
+      assignments?: Array<{ characterId: string; characterName?: string; names?: string[] }>;
     };
   }>("/api/ingest-story", async (req, reply) => {
     const {
@@ -927,6 +931,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
       title,
       progress,
       useExternal = false,
+      assignments,
     } = req.body ?? {};
 
     if (!characterId || !characterName) {
@@ -936,8 +941,29 @@ export function registerApiRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: "text is required" });
     }
 
-    const identityKey = await resolveIdentity(characterId, characterName);
+    // Normalize to a list of assignments. Single-character requests (no
+    // assignments) become one assignment from the open character + names.
+    const rawAssignments = (assignments && assignments.length)
+      ? assignments
+      : [{ characterId, characterName, names: characters }];
+
+    // Resolve each to a stable identity key up front.
+    const targets = [];
+    for (const a of rawAssignments) {
+      if (!a.characterId) continue;
+      const name = a.characterName ?? characterId;
+      const key = await resolveIdentity(a.characterId, a.characterName);
+      const names = (a.names ?? []).map((n) => n.trim()).filter(Boolean);
+      targets.push({ identityKey: key, characterName: name, names });
+    }
+    if (targets.length === 0) {
+      return reply.code(400).send({ error: "no valid character assignments" });
+    }
+
     const label = title?.trim() || characterName;
+    const primaryKey = targets[0]!.identityKey;
+    // Attribution hint + cache key cover every assigned speaker name.
+    const unionNames = [...new Set(targets.flatMap((t) => t.names))];
 
     // Cancel the import when the client aborts the request (the Cancel button).
     const ac = new AbortController();
@@ -946,11 +972,11 @@ export function registerApiRoutes(app: FastifyInstance): void {
     try {
       const progressReport = new Progress(label, progress ?? progressEnabled());
 
-      // Resumable import job: cache attributed windows so a re-run of the same
-      // text+options skips attribution it already finished. Analysis resumes off
-      // beats already on disk (handled in the pipeline).
-      const jobKey = computeJobKey(text, { povCharacter, characters, useExternal });
-      const job = (await loadJob(identityKey, jobKey)) ?? {
+      // Resumable import job (shared across all target characters): cache
+      // attributed windows keyed by text + options. Stored under the primary
+      // character so a re-run with the same setup resumes attribution.
+      const jobKey = computeJobKey(text, { povCharacter, characters: unionNames, useExternal });
+      const job = (await loadJob(primaryKey, jobKey)) ?? {
         jobKey, title: label, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
         attributedWindows: [],
       };
@@ -962,40 +988,59 @@ export function registerApiRoutes(app: FastifyInstance): void {
       );
 
       const { messages, method } = await parseStoryToMessages(text, {
-        characters,
+        characters: unionNames,
         useExternal,
         signal: ac.signal,
         onWindow: (current, total) => progressReport.tick(current, total, "window"),
         cachedWindows: job.attributedWindows,
         onWindowDone: async (index, msgs) => {
           (job.attributedWindows ??= [])[index] = msgs;
-          await saveJob(identityKey, job);
+          await saveJob(primaryKey, job);
         },
       });
       job.method = method;
-      await saveJob(identityKey, job);
-      progressReport.stage(`attribution complete (${method})`);
+      await saveJob(primaryKey, job);
+      progressReport.stage(`attribution complete (${method}) — ${targets.length} character(s)`);
 
-      const result = await runSentimentPipeline(messages, identityKey, characterName, {
-        sourceType,
-        characters: characters.length ? characters : undefined,
-        povCharacter,
-        progressLabel: label,
-        progress,
-        signal: ac.signal,
-      });
+      // Analyze + encode per character. Chunks are disjoint by speaker, so each
+      // chunk is analyzed once overall; resume skips done chunks per character.
+      const perCharacter = [];
+      let speakers: string[] = [];
+      let chunksTotal = 0;
+      for (const t of targets) {
+        const r = await runSentimentPipeline(messages, t.identityKey, t.characterName, {
+          sourceType,
+          characters: t.names.length ? t.names : undefined,
+          povCharacter,
+          progressLabel: targets.length > 1 ? `${label} — ${t.characterName}` : label,
+          progress,
+          signal: ac.signal,
+        });
+        perCharacter.push({
+          characterName: t.characterName,
+          identityKey: t.identityKey,
+          beats: r.beats.length,
+          skipped: r.skipped,
+          chunksFiltered: r.chunksFiltered,
+          chunksFailed: r.chunksFailed,
+        });
+        if (!speakers.length) speakers = r.speakers;
+        chunksTotal = r.chunksTotal;
+      }
 
-      // Import finished — drop the cached attribution job (beats are the record now).
-      await deleteJob(identityKey, jobKey);
+      // All characters done — drop the cached attribution job.
+      await deleteJob(primaryKey, jobKey);
+      const totalBeats = perCharacter.reduce((s, c) => s + c.beats, 0);
+      const totalResumed = perCharacter.reduce((s, c) => s + c.skipped, 0);
       console.info(
-        `[ME] story ingest — key:${identityKey} — method:${method} — ${result.beats.length} new beats` +
-        `${result.skipped ? `, ${result.skipped} resumed` : ""}, ${result.chunksFiltered} filtered`,
+        `[ME] story ingest — method:${method} — ${targets.length} char(s), ${totalBeats} new beats` +
+        `${totalResumed ? `, ${totalResumed} resumed` : ""}`,
       );
-      return reply.send({ ...result, parseMethod: method });
+      return reply.send({ parseMethod: method, speakers, chunksTotal, beats: totalBeats, perCharacter });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (ac.signal.aborted || msg === "cancelled") {
-        console.info(`[ME] story ingest cancelled — key:${identityKey}`);
+        console.info(`[ME] story ingest cancelled — primary:${primaryKey}`);
         if (!reply.raw.writableEnded) return reply.code(499).send({ cancelled: true });
         return; // client already gone
       }

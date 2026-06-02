@@ -359,6 +359,9 @@ marinara.addStyle(`
     font-size: 10px; color: #8b8680; cursor: pointer;
   }
   .me-ingest-check input { accent-color: #8b5cf6; cursor: pointer; }
+  .me-ingest-sublabel { font-size: 10px; color: #8b8680; font-weight: 600; margin: 8px 0 4px; }
+  select.me-ingest-input { cursor: pointer; }
+  select.me-ingest-input option { background: #1a1917; color: #e8e5e0; }
   .me-ingest-file-row { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
   .me-ingest-file-btn {
     flex-shrink: 0; background: #252320; border: 1px solid #3d3a36;
@@ -568,8 +571,10 @@ const panelState = {
   // Story ingest section
   ingestExpanded: false,
   ingestPovChar: "",
-  ingestCharacters: "",        // comma-separated speaker names to pin (sent as `characters`)
-  ingestCharsLoadedFor: null,  // characterId the saved names were prefilled for
+  ingestAssignments: [],       // [{ characterId, characterName, names }] — who gets which speaker
+  ingestAssignmentsFor: null,  // session characterId the assignments were initialized for
+  allCharacters: null,         // null = not loaded; [{ id, name }] for the picker
+  allCharactersLoading: false,
   ingestUseExternal: false,    // attribute via external API + bigger windows
   ingestText: "",
   ingestFileName: null,
@@ -617,6 +622,22 @@ function setSavedCharNames(characterId, names) {
   if (trimmed) map[characterId] = trimmed;
   else delete map[characterId];
   try { localStorage.setItem(CHAR_NAMES_KEY, JSON.stringify(map)); } catch { /* quota */ }
+}
+
+// Load the full character list once, for the multi-character import picker.
+async function loadAllCharacters() {
+  if (panelState.allCharacters || panelState.allCharactersLoading) return;
+  panelState.allCharactersLoading = true;
+  try {
+    const res = await marinara.apiFetch("/characters");
+    const arr = Array.isArray(res) ? res : (res?.characters ?? res?.data ?? []);
+    panelState.allCharacters = arr
+      .map(c => { const d = parseData(c); return { id: String(c.id ?? d.id ?? ""), name: d.name ?? c.name ?? "Unknown" }; })
+      .filter(c => c.id)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch { panelState.allCharacters = []; }
+  panelState.allCharactersLoading = false;
+  renderPanel();
 }
 
 // ── Settings helpers ──────────────────────────────────────────────────────────
@@ -1336,8 +1357,17 @@ async function doStoryIngest() {
   panelState.ingestClearResult = null;
   renderPanel();
 
-  // Persist the pinned speaker names for this character.
-  setSavedCharNames(characterId, panelState.ingestCharacters);
+  // Build per-character assignments (and persist each one's remembered names).
+  const assignments = panelState.ingestAssignments
+    .filter(a => a.characterId)
+    .map(a => {
+      setSavedCharNames(a.characterId, a.names);
+      return {
+        characterId: a.characterId,
+        characterName: a.characterName,
+        names: (a.names || "").split(",").map(s => s.trim()).filter(Boolean),
+      };
+    });
 
   try {
     const body = {
@@ -1347,8 +1377,7 @@ async function doStoryIngest() {
     };
     const pov = panelState.ingestPovChar.trim();
     if (pov) body.povCharacter = pov;
-    const names = panelState.ingestCharacters.split(",").map(s => s.trim()).filter(Boolean);
-    if (names.length) body.characters = names;
+    if (assignments.length) body.assignments = assignments;
     if (panelState.ingestUseExternal) body.useExternal = true;
     // Label the sidecar-console progress output with the file name.
     if (panelState.ingestFileName) body.title = panelState.ingestFileName;
@@ -1358,14 +1387,12 @@ async function doStoryIngest() {
     panelState.ingestResult = {
       beats:          res.beats,
       chunksTotal:    res.chunksTotal,
-      chunksAnalyzed: res.chunksAnalyzed,
-      chunksFiltered: res.chunksFiltered,
-      chunksFailed:   res.chunksFailed,
-      skipped:        res.skipped,
+      skipped:        res.perCharacter?.reduce((s, c) => s + (c.skipped || 0), 0) ?? 0,
       parseMethod:    res.parseMethod,
       speakers:       res.speakers ?? [],
+      perCharacter:   res.perCharacter ?? [],
     };
-    notifyIngestDone(characterName, res.beats?.length ?? 0);
+    notifyIngestDone(characterName, res.beats ?? 0);
   } catch (err) {
     if (err?.name === "AbortError") {
       panelState.ingestResult = { cancelled: true };
@@ -1456,12 +1483,17 @@ function renderStoryIngestSection() {
     return wrap;
   }
 
-  // Prefill remembered speaker names when the active character changes.
+  // Initialize the character assignments for the open chat's character, once per
+  // character switch. Each row maps a character to the speaker label(s) they
+  // appear as in the story. Speaker names are remembered per character.
   const cid = panelState.session?.characterId ?? null;
-  if (panelState.ingestCharsLoadedFor !== cid) {
-    panelState.ingestCharacters = getSavedCharNames(cid);
-    panelState.ingestCharsLoadedFor = cid;
+  if (panelState.ingestAssignmentsFor !== cid) {
+    panelState.ingestAssignments = cid
+      ? [{ characterId: cid, characterName: panelState.session.characterName ?? cid, names: getSavedCharNames(cid) }]
+      : [];
+    panelState.ingestAssignmentsFor = cid;
   }
+  if (!panelState.allCharacters && !panelState.allCharactersLoading) loadAllCharacters();
 
   // POV character field
   const povRow = el("div", "me-ingest-row");
@@ -1475,22 +1507,63 @@ function renderStoryIngestSection() {
   povRow.append(povLbl, povInput);
   body.appendChild(povRow);
 
-  // Character names to pin (remembered per character). Matches speaker labels in
-  // the attributed text so e.g. "Mari" is kept for "Dr. Mari Zielińska".
-  const charRow = el("div", "me-ingest-row");
-  const charLbl_ = el("span", "me-ingest-lbl");
-  charLbl_.textContent = "Names";
-  const charInput = el("input", "me-ingest-input");
-  charInput.type = "text";
-  charInput.placeholder = "e.g. Mari, Cole (comma-separated)";
-  charInput.value = panelState.ingestCharacters;
-  charInput.title = "Speaker names to keep. Remembered for this character.";
-  charInput.addEventListener("input", e => {
-    panelState.ingestCharacters = e.target.value;
-    setSavedCharNames(panelState.session?.characterId, e.target.value);
+  // ── Characters in this story (multi-character routing) ──────────────────────
+  const charsTitle = el("div", "me-ingest-sublabel");
+  charsTitle.textContent = "Characters in this story";
+  body.appendChild(charsTitle);
+
+  panelState.ingestAssignments.forEach((asg, idx) => {
+    const row = el("div", "me-ingest-row");
+
+    const sel = el("select", "me-ingest-input");
+    const ph = el("option");
+    ph.value = "";
+    ph.textContent = panelState.allCharactersLoading ? "loading…" : "pick character…";
+    sel.appendChild(ph);
+    for (const c of (panelState.allCharacters ?? [])) {
+      const o = el("option");
+      o.value = c.id;
+      o.textContent = c.name;
+      if (c.id === asg.characterId) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.value = asg.characterId || "";
+    sel.addEventListener("change", e => {
+      const c = (panelState.allCharacters ?? []).find(x => x.id === e.target.value);
+      asg.characterId = e.target.value;
+      asg.characterName = c?.name ?? "";
+      asg.names = getSavedCharNames(asg.characterId); // load this character's remembered names
+      renderPanel();
+    });
+
+    const namesInput = el("input", "me-ingest-input");
+    namesInput.type = "text";
+    namesInput.placeholder = "speaker name(s)";
+    namesInput.value = asg.names;
+    namesInput.title = "How this character is labeled in the story (comma-separated). Remembered.";
+    namesInput.addEventListener("input", e => {
+      asg.names = e.target.value;
+      setSavedCharNames(asg.characterId, e.target.value);
+    });
+
+    row.append(sel, namesInput);
+    if (panelState.ingestAssignments.length > 1) {
+      const rm = el("button", "me-ingest-clear");
+      rm.textContent = "×";
+      rm.title = "Remove character";
+      rm.addEventListener("click", () => { panelState.ingestAssignments.splice(idx, 1); renderPanel(); });
+      row.appendChild(rm);
+    }
+    body.appendChild(row);
   });
-  charRow.append(charLbl_, charInput);
-  body.appendChild(charRow);
+
+  const addCharBtn = el("button", "me-add-btn");
+  addCharBtn.textContent = "+ add character";
+  addCharBtn.addEventListener("click", () => {
+    panelState.ingestAssignments.push({ characterId: "", characterName: "", names: "" });
+    renderPanel();
+  });
+  body.appendChild(addCharBtn);
 
   // External-API attribution toggle (faster, bigger windows, more consistent).
   const extRow = el("label", "me-ingest-check");
@@ -1503,10 +1576,9 @@ function renderStoryIngestSection() {
   extRow.append(extBox, extTxt);
   body.appendChild(extRow);
 
-  // Saving-for hint — shows which character's beats will be stored
+  // Hint
   const savingHint = el("div", "me-ingest-hint");
-  const charLabel = panelState.session?.characterName ?? "this character";
-  savingHint.textContent = `Saves beats for: ${charLabel}. Open each character's chat and run separately for multi-character stories.`;
+  savingHint.textContent = "One pass routes beats to each character by their speaker label(s). Leave names blank to match by the character's display name.";
   body.appendChild(savingHint);
 
   // File upload row
@@ -1581,15 +1653,24 @@ function renderStoryIngestSection() {
       resultEl.textContent = `✗ ${panelState.ingestResult.error}`;
     } else {
       resultEl.className = "me-ingest-result me-ingest-ok";
-      const { beats, chunksTotal, chunksFiltered, chunksFailed, skipped, parseMethod, speakers } = panelState.ingestResult;
-      const beatCount = beats?.length ?? 0;
+      const { beats, chunksTotal, skipped, parseMethod, speakers, perCharacter } = panelState.ingestResult;
+      const beatCount = beats ?? 0;
       const methodLabel = { "pre-attributed": "pre-attributed", "local-llm": "local model", "external-llm": "external API", "paragraph": "paragraph split" }[parseMethod] ?? parseMethod ?? "";
       const lines = [`✓ ${beatCount} beat${beatCount === 1 ? "" : "s"} from ${chunksTotal} chunks`];
       if (methodLabel) lines.push(`via ${methodLabel}`);
       if (skipped > 0) lines.push(`${skipped} resumed`);
-      if (chunksFiltered > 0) lines.push(`${chunksFiltered} filtered`);
-      if (chunksFailed  > 0) lines.push(`${chunksFailed} failed`);
       resultEl.textContent = lines.join(" · ");
+      // Per-character breakdown when more than one character was assigned.
+      if (perCharacter && perCharacter.length > 1) {
+        for (const pc of perCharacter) {
+          const l = el("div");
+          l.style.cssText = "margin-top:3px; font-size:10px; color:#8b8680;";
+          l.textContent = `${pc.characterName}: ${pc.beats} beat${pc.beats === 1 ? "" : "s"}`
+            + (pc.skipped ? ` (${pc.skipped} resumed)` : "")
+            + (pc.chunksFailed ? `, ${pc.chunksFailed} failed` : "");
+          resultEl.appendChild(l);
+        }
+      }
       if (speakers?.length) {
         const speakerEl = el("div");
         speakerEl.style.cssText = "margin-top:4px; font-size:10px; color:#6b7280;";

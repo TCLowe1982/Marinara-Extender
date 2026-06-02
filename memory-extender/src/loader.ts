@@ -142,52 +142,53 @@ function surfaceBookmarks(bookmarks: Bookmark[], turnNumber: number): Bookmark[]
 // harmless — the model ignores the redundancy.
 
 const MEMORY_SYSTEM_INSTRUCTIONS = `<memory_system>
-Each turn may begin with a <memory> block containing context organized into sections:
+Your memory is stored externally. Each turn may start with a <memory> block.
 
-  ### Global context       — conventions and rules that apply everywhere
+STRUCTURE:
+  ### Global context       — rules that apply everywhere
   ### Character context    — your arc, voice, established lore
-  ### Active threads & topics — tasks you're tracking, topics the user returns to,
-                                and things on your own agenda
-  ### Soft callbacks       — specific things that surfaced this turn to potentially revisit
+  ### Active threads       — things being tracked or worked on
+  ### Soft callbacks       — things worth revisiting if the moment fits
 
-How to use it:
-- Let it quietly inform your response. Don't narrate the memory system or say
-  "I see in my notes…" — just know what you know.
-- Soft callbacks are suggestions. Weave one in naturally if the moment is right.
-  Skip it if it isn't. Never force a callback.
-- Thread statuses: [in_progress] = active, [open] = not yet started, [deferred] = on hold.
-  Acknowledge in-progress threads when they're relevant; don't inventory them aloud.
+SESSION CONTEXT LINE:
+At the top of the block you'll see something like:
+  Session context: morning, Saturday
 
-How to save something permanently (ledger entry — no decay):
-BEFORE writing a [remember: ...] command, check the entries already in this block:
-  - If the topic is already captured under the same lane, do NOT re-save it.
-    Duplicates are pruned automatically, but it still wastes a turn. One entry
-    per topic is enough.
-  - Use ONE [remember: ...] command per distinct fact. Do not bundle multiple topics.
+This is narrative time — when the scene is happening inside the story.
+It does NOT update in real time. It only changes when someone signals
+a shift ("let's get dinner", "good morning", "heading to bed").
+Until then, time holds. A conversation that takes 200 messages is still
+morning if nobody said otherwise. Use it to orient yourself in the scene,
+not to track how long you've been talking.
 
-Use [remember: ...] when something is genuinely worth keeping long-term:
+USING MEMORY:
+- Let it inform you silently. Never say "according to my notes" or
+  "I remember from my memory block." You just know what you know.
+- Soft callbacks are optional. Use one if it fits naturally. Skip it if not.
+- Thread statuses: [in_progress] = active, [open] = not started, [deferred] = parked.
+
+SAVING MEMORY:
+Only save things that genuinely matter long-term. Not every exchange needs one.
+Check existing entries first — don't duplicate. One [remember: ...] per distinct fact.
 
   [remember: lane="user_topics", content="User's daughter Emma just turned 8."]
   [remember: lane="open_threads", content="User wants to plan Emma's birthday party."]
   [remember: lane="character_topics", content="I want to ask how the party went next time."]
-  [remember: lane="open_threads", scope="chat", content="We are currently mid-way through editing the cover letter."]
+  [remember: lane="open_threads", scope="chat", content="Mid-way through editing the cover letter."]
 
-  lane  — user_topics (facts about the user) · open_threads (tasks to track) ·
-          character_topics (things you want to bring up)
-  scope — character (persists across all future chats, default) · chat (this conversation only)
+  lane  — user_topics | open_threads | character_topics
+  scope — character (default, persists everywhere) | chat (this conversation only)
 
-How to save a soft signal (decays over time):
-For things that matter right now but may fade naturally — unresolved emotion,
-a follow-up you owe, something the user keeps circling back to:
+SOFT SIGNALS (decay over time):
+For things that matter now but may fade — unresolved feelings, follow-ups, recurring topics:
 
   [bookmark: topic="sister-situation", weight=0.8, why="unresolved", summary="One sentence summary."]
 
-  topic  — kebab-case identifier, e.g. "sister-situation", "hargrove-case", "the-band"
-  weight — 0.1 (minor note) · 0.5 (worth remembering) · 0.9 (must revisit)
+  topic  — kebab-case identifier, e.g. "sister-situation", "hargrove-case"
+  weight — 0.1 (minor) to 0.9 (must revisit)
   why    — unresolved | important | emotional | promised | curious | follow-up
 
-Both commands are stripped from visible output automatically. Use them sparingly —
-not every exchange needs a memory. Save things that would genuinely matter next time.
+Commands are stripped from output. Use sparingly.
 </memory_system>`;
 
 // ── Context assembly ──────────────────────────────────────────────────────────

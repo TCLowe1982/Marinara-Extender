@@ -17,7 +17,7 @@ function Test-Ollama {
 }
 
 function Test-Sidecar {
-    try { ((Invoke-WebRequest -Uri "$SIDECAR_URL/api/health" -TimeoutSec 2 -UseBasicParsing).StatusCode) -lt 300 }
+    try { ((Invoke-WebRequest -Uri "$SIDECAR_URL/api/health" -TimeoutSec 6 -UseBasicParsing).StatusCode) -lt 300 }
     catch { $false }
 }
 

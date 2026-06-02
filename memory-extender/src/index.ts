@@ -51,7 +51,7 @@ app.get("/api/health", { logLevel: "silent" }, async (_req, reply) => {
   let ollama: "ok" | "unavailable" | "not_configured" = "not_configured";
   if (localUrl) {
     try {
-      const r = await fetch(localUrl, { signal: AbortSignal.timeout(2000) });
+      const r = await fetch(localUrl, { signal: AbortSignal.timeout(1000) });
       ollama = r.ok ? "ok" : "unavailable";
     } catch {
       ollama = "unavailable";

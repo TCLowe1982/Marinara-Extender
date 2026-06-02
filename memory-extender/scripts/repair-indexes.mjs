@@ -28,10 +28,6 @@ async function exists(p) {
   try { await stat(p); return true; } catch { return false; }
 }
 
-async function isParseable(file) {
-  try { parse(await readFile(file, "utf8")); return true; } catch { return false; }
-}
-
 async function writeYamlAtomic(file, data) {
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
   await writeFile(tmp, stringify(data), "utf8");
@@ -73,21 +69,33 @@ async function rebuildEntries(scopeDir) {
 async function repairScope(scope, scopeId, scopeDir) {
   const indexPath = join(scopeDir, "index.yaml");
   const hasIndex = await exists(indexPath);
-  if (!hasIndex && !FORCE) return;
 
-  const ok = hasIndex ? await isParseable(indexPath) : false;
-  if (ok && !FORCE) return; // valid — leave it alone
+  // Current state of the index file.
+  let parsed = null, ok = false;
+  if (hasIndex) {
+    try { parsed = parse(await readFile(indexPath, "utf8")); ok = true; } catch { ok = false; }
+  }
+  const curCount = ok && Array.isArray(parsed?.entries) ? parsed.entries.length : 0;
 
+  // Authoritative entry set from the (intact) entry files.
   const entries = await rebuildEntries(scopeDir);
   const label = `${scope}:${scopeId}`;
-  if (ok) console.log(`  ${label} — valid, rebuilding anyway (--force): ${entries.length} entries`);
-  else    console.log(`  ${label} — CORRUPT, rebuilding from ${entries.length} entry files`);
+
+  // Rebuild when: the index is unreadable, OR entry files exist that the index
+  // no longer references (decimation), OR --force.
+  const corrupt = hasIndex && !ok;
+  const decimated = entries.length > curCount;
+  if (!corrupt && !decimated && !FORCE) return; // healthy — leave it alone
+  if (entries.length === 0 && !corrupt) return; // nothing to rebuild from
+
+  const why = corrupt ? "CORRUPT" : decimated ? `decimated (${curCount} indexed / ${entries.length} on disk)` : "forced";
+  console.log(`  ${label} — ${why} → rebuilding from ${entries.length} entry files`);
 
   if (DRY) return;
   await writeYamlAtomic(indexPath, {
     scope, scopeId, lastUpdated: new Date().toISOString(), entries,
   });
-  console.log(`    -> wrote ${indexPath}`);
+  console.log(`    -> wrote ${indexPath} (${entries.length} entries)`);
 }
 
 async function listDirs(parent) {

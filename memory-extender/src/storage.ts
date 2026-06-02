@@ -266,16 +266,20 @@ export async function writeBookmarks(
   await writeYaml(bookmarksPath(scope, scopeId), bookmarks);
 }
 
-export async function upsertBookmark(
+// Serialized read-modify-write of a scope's bookmarks. Use for any update that
+// reads the current list and writes a modified one, so concurrent callers
+// (per-turn decay, panel edits, ingest) share one per-file lock instead of
+// racing and corrupting bookmarks.yaml. The mutator returns the new array.
+export async function mutateBookmarks(
   scope: Scope,
   scopeId: string,
-  bookmark: Bookmark,
+  mutate: (bookmarks: Bookmark[]) => Bookmark[],
 ): Promise<void> {
-  const bookmarks = await readBookmarks(scope, scopeId);
-  const i = bookmarks.findIndex((b) => b.id === bookmark.id);
-  if (i >= 0) bookmarks[i] = bookmark;
-  else bookmarks.push(bookmark);
-  await writeBookmarks(scope, scopeId, bookmarks);
+  const p = bookmarksPath(scope, scopeId);
+  return serializedWrite(p, async () => {
+    const current = (await readYaml<Bookmark[]>(p)) ?? [];
+    await writeYaml(p, mutate(current));
+  });
 }
 
 // ── Token estimation ──────────────────────────────────────────────────────────

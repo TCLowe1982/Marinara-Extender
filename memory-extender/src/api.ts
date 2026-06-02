@@ -15,7 +15,7 @@ import {
   upsertIndexEntry,
   removeIndexEntry,
   readBookmarks,
-  writeBookmarks,
+  mutateBookmarks,
   listScopeIds,
   estimateTokens,
   type Scope,
@@ -36,6 +36,7 @@ import { classifyChunks } from "./sentiment/classifier.js";
 import { analyzeChunk } from "./sentiment/analyzer.js";
 import { encodeBeat } from "./sentiment/encoder.js";
 import { classifyAmbient } from "./ambient.js";
+import { createEntryIfUnique, isDuplicate } from "./dedup.js";
 import type { Chunk } from "./sentiment/types.js";
 import mammoth from "mammoth";
 import { parseStoryToMessages } from "./story-parser.js";
@@ -53,26 +54,6 @@ import {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// Jaccard similarity on word bags.
-function jaccardSimilarity(a: string, b: string): number {
-  const words = (s: string) =>
-    new Set(s.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean));
-  const wa = words(a);
-  const wb = words(b);
-  const intersection = [...wa].filter((w) => wb.has(w)).length;
-  const union = new Set([...wa, ...wb]).size;
-  return union === 0 ? 0 : intersection / union;
-}
-
-// Dedup check: summary OR content is too similar to an existing entry.
-function isDuplicate(summary: string, content: string, existing: import("./storage.js").IndexEntry[]): boolean {
-  return existing.some(
-    (e) =>
-      jaccardSimilarity(e.summary, summary) >= DEDUP_SIMILARITY_THRESHOLD ||
-      (content.length > 20 && jaccardSimilarity(e.summary, content) >= DEDUP_SIMILARITY_THRESHOLD),
-  );
-}
-
 // Truncate a summary string at a word boundary ≤ maxLen characters.
 function truncateSummary(s: string, maxLen = 120): string {
   if (s.length <= maxLen) return s;
@@ -89,8 +70,6 @@ function capContent(s: string, maxChars = 600): string {
   return lastSentence > 300 ? cut.slice(0, lastSentence + 1) : cut.trimEnd() + "…";
 }
 
-const DEDUP_SIMILARITY_THRESHOLD = 0.35;
-
 const VALID_SCOPES: Scope[] = ["global", "character", "chat"];
 const VALID_LANES: Lane[] = ["open_threads", "user_topics", "character_topics"];
 const VALID_STATUSES: EntryStatus[] = ["open", "in_progress", "done", "deferred"];
@@ -104,11 +83,6 @@ function idPrefix(lane: Lane): string {
 function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
-
-function scopeErr(reply: ReturnType<FastifyInstance["inject"]> | never) {
-  void reply; // type narrowing guard — actual usage below
-}
-void scopeErr; // prevent unused warning
 
 // ── Route registration ────────────────────────────────────────────────────────
 
@@ -335,18 +309,20 @@ export function registerApiRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: "scope and scopeId are required" });
     }
 
-    const bookmarks = await readBookmarks(scope, scopeId);
-    const i = bookmarks.findIndex((b) => b.id === id);
-    if (i === -1) return reply.code(404).send({ error: "bookmark not found" });
-
-    const updated: Bookmark = {
-      ...bookmarks[i]!,
-      ...(weight !== undefined && { weight: Math.min(1, Math.max(0, weight)) }),
-      ...(why !== undefined && { why }),
-      ...(summary !== undefined && { summary }),
-    };
-    bookmarks[i] = updated;
-    await writeBookmarks(scope, scopeId, bookmarks);
+    let updated: Bookmark | null = null;
+    await mutateBookmarks(scope, scopeId, (bookmarks) => {
+      const i = bookmarks.findIndex((b) => b.id === id);
+      if (i === -1) return bookmarks;
+      updated = {
+        ...bookmarks[i]!,
+        ...(weight !== undefined && { weight: Math.min(1, Math.max(0, weight)) }),
+        ...(why !== undefined && { why }),
+        ...(summary !== undefined && { summary }),
+      };
+      bookmarks[i] = updated;
+      return bookmarks;
+    });
+    if (!updated) return reply.code(404).send({ error: "bookmark not found" });
 
     return reply.send(updated);
   });
@@ -366,13 +342,13 @@ export function registerApiRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: "scope and scopeId are required" });
     }
 
-    const bookmarks = await readBookmarks(scope, scopeId);
-    const filtered = bookmarks.filter((b) => b.id !== id);
-    if (filtered.length === bookmarks.length) {
-      return reply.code(404).send({ error: "bookmark not found" });
-    }
-
-    await writeBookmarks(scope, scopeId, filtered);
+    let removed = false;
+    await mutateBookmarks(scope, scopeId, (bookmarks) => {
+      const filtered = bookmarks.filter((b) => b.id !== id);
+      removed = filtered.length !== bookmarks.length;
+      return filtered;
+    });
+    if (!removed) return reply.code(404).send({ error: "bookmark not found" });
     return reply.send({ ok: true });
   });
 
@@ -542,23 +518,13 @@ export function registerApiRoutes(app: FastifyInstance): void {
               `Outcome: ${analysis.outcome}`,
               ...(analysis.subtext ? [`Subtext: ${analysis.subtext}`] : []),
             ].join("\n");
-            const content = capContent(rawContent);
 
-            const entryId  = `ctopic-${nanoid(8)}`;
-            const now      = today();
-            const newEntry: Entry = {
-              id: entryId, lane: "character_topics", summary,
-              status: "open", created: now, lastAccessed: now,
-              content, tokens: estimateTokens(`${summary} ${content}`),
-              ...(timeCtx ? { timeContext: timeCtx } : {}),
-            };
-            const relPath = await writeEntry("character", identityKey, newEntry);
-            await upsertIndexEntry("character", identityKey, {
-              id: entryId, path: relPath, summary,
-              tokens: newEntry.tokens, lane: "character_topics",
-              status: "open", lastAccessed: now,
+            const entry = await createEntryIfUnique("character", identityKey, {
+              lane: "character_topics", summary, content: capContent(rawContent), timeContext: timeCtx,
             });
-            console.info(`[ME:tier2] saved beat ${beat.id} + ledger entry for ${beat.emotion} (salience ${beat.salience.toFixed(2)})`);
+            if (entry) {
+              console.info(`[ME:tier2] saved beat ${beat.id} + ledger entry for ${beat.emotion} (salience ${beat.salience.toFixed(2)})`);
+            }
           }
         } catch (err) {
           console.warn("[ME:tier2] sentiment pass failed:", err);
@@ -578,23 +544,10 @@ export function registerApiRoutes(app: FastifyInstance): void {
             if (!summary.trim()) continue;
             const scope   = (fact.scope ?? "character") as "character" | "chat";
             const scopeId = scope === "character" ? identityKey : chatId;
-            const entryId = `${fact.lane === "user_topics" ? "utopic" : "ctopic"}-${nanoid(8)}`;
-            const now     = today();
-            const content = capContent(fact.text);
-            const newEntry: Entry = {
-              id: entryId, lane: fact.lane, summary,
-              status: "open", created: now, lastAccessed: now,
-              content,
-              tokens: estimateTokens(`${summary} ${content}`),
-              ...(timeCtx ? { timeContext: timeCtx } : {}),
-            };
-            const relPath = await writeEntry(scope, scopeId, newEntry);
-            await upsertIndexEntry(scope, scopeId, {
-              id: entryId, path: relPath, summary,
-              tokens: newEntry.tokens, lane: fact.lane,
-              status: "open", lastAccessed: now,
+            const entry = await createEntryIfUnique(scope, scopeId, {
+              lane: fact.lane, summary, content: capContent(fact.text), timeContext: timeCtx,
             });
-            saved++;
+            if (entry) saved++;
           }
           if (saved > 0) {
             console.info(`[ME:tier3] saved ${saved} ambient fact(s) for ${identityKey}`);
@@ -789,8 +742,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
     }
 
     if (newBookmarks.length > 0) {
-      const existing = await readBookmarks("chat", chatId);
-      await writeBookmarks("chat", chatId, [...existing, ...newBookmarks]);
+      await mutateBookmarks("chat", chatId, (existing) => [...existing, ...newBookmarks]);
     }
 
     if (created > 0 || bookmarksAdded > 0) {
@@ -809,13 +761,15 @@ export function registerApiRoutes(app: FastifyInstance): void {
   // Query: characterId, chatId
 
   app.get<{
-    Querystring: { characterId: string; chatId: string };
+    Querystring: { characterId: string; chatId: string; characterName?: string };
   }>("/api/memory-block", async (req, reply) => {
-    const { characterId, chatId } = req.query;
+    const { characterId, chatId, characterName } = req.query;
     if (!characterId || !chatId) {
       return reply.code(400).send({ error: "characterId and chatId are required" });
     }
-    const identityKey = await resolveIdentity(characterId);
+    // Pass the name so a brand-new character (whose first call is this endpoint,
+    // before any process-turn) gets a readable identity slug, not the card ID.
+    const identityKey = await resolveIdentity(characterId, characterName);
     const { contextBlock } = await loadContext({ characterId: identityKey, chatId, turnNumber: 0 });
     if (contextBlock) {
       console.info(`[ME] memory loaded — key:${identityKey} chat:${chatId}`);

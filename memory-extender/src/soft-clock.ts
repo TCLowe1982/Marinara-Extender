@@ -153,7 +153,21 @@ export async function updateSoftClock(
   const tod = detectTimeSignal(text);
   const day = detectDaySignal(text);
 
-  if (!tod && !day) return state; // No signal — no update.
+  // The "(morning after …)" annotation should surface for exactly the turn the
+  // inference fired, then clear. Without this it sticks to the context line for
+  // the rest of the conversation. Track whether we (re)set it this turn.
+  const hadAnnotation = state.previousSessionTimeOfDay !== undefined;
+  let setAnnotationThisTurn = false;
+
+  if (!tod && !day) {
+    // No signal this turn — but we may still need to retire a stale annotation.
+    if (hadAnnotation) {
+      delete state.previousSessionTimeOfDay;
+      state.lastUpdatedAt = new Date().toISOString();
+      await writeClock(chatId, state);
+    }
+    return state;
+  }
 
   // Morning-after inference: if previous known state was evening/night and
   // this message signals morning, infer a day has passed.
@@ -162,6 +176,12 @@ export async function updateSoftClock(
       state.dayOfWeek = nextDay(state.dayOfWeek);
     }
     state.previousSessionTimeOfDay = state.timeOfDay;
+    setAnnotationThisTurn = true;
+  }
+
+  // Retire an annotation left over from a previous turn so it shows only once.
+  if (hadAnnotation && !setAnnotationThisTurn) {
+    delete state.previousSessionTimeOfDay;
   }
 
   if (tod) {

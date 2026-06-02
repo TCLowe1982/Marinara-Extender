@@ -5,7 +5,7 @@
 //   4. Runs per-turn weight decay on existing bookmarks
 
 import { nanoid } from "./nanoid.js";
-import { readBookmarks, writeBookmarks, type Bookmark, type Lane, type Scope } from "./storage.js";
+import { mutateBookmarks, type Bookmark, type Lane, type Scope } from "./storage.js";
 
 // ── Bookmark parsing ──────────────────────────────────────────────────────────
 // Attribute order is intentionally NOT enforced — models vary.
@@ -87,9 +87,15 @@ export interface ExtractedRemember {
   content: string;
 }
 
+// Accept both quoted (content="…") and unquoted (weight=0.8) values. The model
+// is told to emit weight unquoted, so a quote-only match silently dropped every
+// weight to its 0.5 default. Quoted values may contain commas; unquoted values
+// run to the next comma or closing bracket.
 function parseBracketParam(params: string, key: string): string | undefined {
-  const re = new RegExp(`${key}\\s*=\\s*"([^"]*)"`, "i");
-  return params.match(re)?.[1];
+  const re = new RegExp(`${key}\\s*=\\s*(?:"([^"]*)"|([^,\\]]+))`, "i");
+  const m = params.match(re);
+  if (!m) return undefined;
+  return (m[1] ?? m[2])?.trim();
 }
 
 export function extractRememberTags(text: string): ExtractedRemember[] {
@@ -163,22 +169,22 @@ export async function processResponse(
   const clean = stripRememberTags(stripBookmarkTags(rawText));
 
   // Decay runs every turn regardless of whether new bookmarks were found.
-  let bookmarks = await readBookmarks("chat", chatId);
-  bookmarks = decayBookmarks(bookmarks);
-
-  for (const b of extracted) {
-    bookmarks.push({
-      id: nanoid(),
-      topic: b.topic,
-      summary: b.summary,
-      weight: b.weight,
-      why: b.why,
-      createdTurn: turnNumber,
-      lastSeenTurn: turnNumber,
-      decayRate: 0.97,
-    });
-  }
-
-  await writeBookmarks("chat", chatId, bookmarks);
+  // Serialized so the read-decay-write can't race with panel edits or ingest.
+  await mutateBookmarks("chat", chatId, (current) => {
+    const bookmarks = decayBookmarks(current);
+    for (const b of extracted) {
+      bookmarks.push({
+        id: nanoid(),
+        topic: b.topic,
+        summary: b.summary,
+        weight: b.weight,
+        why: b.why,
+        createdTurn: turnNumber,
+        lastSeenTurn: turnNumber,
+        decayRate: 0.97,
+      });
+    }
+    return bookmarks;
+  });
   return { clean, bookmarksExtracted: extracted.length };
 }

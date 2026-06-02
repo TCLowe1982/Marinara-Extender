@@ -4,14 +4,11 @@
 
 import { getCachedAuth } from "./auth-cache.js";
 import {
-  writeEntry,
-  upsertIndexEntry,
-  estimateTokens,
   type Entry,
   type Lane,
   type EntryStatus,
 } from "./storage.js";
-import { nanoid } from "./nanoid.js";
+import { createEntryIfUnique } from "./dedup.js";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -189,47 +186,22 @@ function parseEntriesJson(raw: string, label: string): ExtractedEntry[] {
 const VALID_LANES: Lane[] = ["open_threads", "user_topics", "character_topics"];
 const VALID_STATUSES: EntryStatus[] = ["open", "in_progress", "done", "deferred"];
 
-function idPrefix(lane: Lane): string {
-  if (lane === "open_threads") return "thread";
-  if (lane === "user_topics") return "utopic";
-  return "ctopic";
-}
-
+// Returns the created Entry, or null if it was a duplicate of an existing one.
 async function createEntry(
   characterId: string,
   e: ExtractedEntry,
-): Promise<Entry> {
-  const now = new Date().toISOString().slice(0, 10);
-  const id = `${idPrefix(e.lane)}-${nanoid(8)}`;
-
+): Promise<Entry | null> {
   const status: EntryStatus =
     e.lane === "open_threads" && VALID_STATUSES.includes(e.status as EntryStatus)
       ? (e.status as EntryStatus)
       : "open";
 
-  const entry: Entry = {
-    id,
+  return createEntryIfUnique("character", characterId, {
     lane: e.lane,
     summary: e.summary.trim().slice(0, 200),
+    content: e.content ?? "",
     status,
-    created: now,
-    lastAccessed: now,
-    content: (e.content ?? "").trim(),
-    tokens: estimateTokens(`${e.summary} ${e.content ?? ""}`),
-  };
-
-  const relativePath = await writeEntry("character", characterId, entry);
-  await upsertIndexEntry("character", characterId, {
-    id,
-    path: relativePath,
-    summary: entry.summary,
-    tokens: entry.tokens,
-    lane: e.lane,
-    status,
-    lastAccessed: now,
   });
-
-  return entry;
 }
 
 // ── Snapshot prompt (session summary — different framing from full import) ────
@@ -280,7 +252,8 @@ export async function snapshotSession(
   for (const e of extracted) {
     if (!VALID_LANES.includes(e.lane)) continue;
     if (!e.summary?.trim()) continue;
-    created.push(await createEntry(characterId, e));
+    const entry = await createEntry(characterId, e);
+    if (entry) created.push(entry);
   }
 
   console.info(`[ME:snapshot] saved ${created.length} entries for ${characterId}`);
@@ -309,7 +282,8 @@ export async function digestMessages(
   for (const e of extracted) {
     if (!VALID_LANES.includes(e.lane)) continue;
     if (!e.summary?.trim()) continue;
-    created.push(await createEntry(characterId, e));
+    const entry = await createEntry(characterId, e);
+    if (entry) created.push(entry);
   }
 
   return { created: created.length, entries: created };

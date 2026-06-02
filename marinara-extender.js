@@ -2210,8 +2210,9 @@ function stripVisibleMemoryTags() {
 async function syncMemoryBlock(session) {
   dbg(`syncMemoryBlock: char=${session.characterId} chat=${session.chatId}`);
   try {
+    const nameParam = session.characterName ? `&characterName=${encodeURIComponent(session.characterName)}` : "";
     const res = await memFetch(
-      `/api/memory-block?characterId=${encodeURIComponent(session.characterId)}&chatId=${encodeURIComponent(session.chatId)}`,
+      `/api/memory-block?characterId=${encodeURIComponent(session.characterId)}&chatId=${encodeURIComponent(session.chatId)}${nameParam}`,
     );
     dbg(`syncMemoryBlock: sidecar response memoryBlock length=${res?.memoryBlock?.length ?? "null"}`);
     if (!res?.memoryBlock) { dbg("syncMemoryBlock: empty memoryBlock — skipping lorebook write"); return; }

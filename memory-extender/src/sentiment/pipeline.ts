@@ -75,6 +75,9 @@ export async function runSentimentPipeline(
     filtered = passing;
   }
 
+  console.info(`[ME:pipeline] speakers found: ${speakers.join(", ")}`);
+  console.info(`[ME:pipeline] matching against: "${characterName}" — ${filtered.length}/${passing.length} chunks kept`);
+
   // Stage 2: deep analyze (only passing + allowed chunks)
   const analyzed = await analyzeChunks(filtered);
 

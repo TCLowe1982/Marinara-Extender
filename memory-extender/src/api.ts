@@ -409,8 +409,9 @@ export function registerApiRoutes(app: FastifyInstance): void {
 
     const identityKey = await resolveIdentity(characterId, characterName);
 
-    // Update soft clock from the incoming message text (fire-and-forget).
-    const clockState = await updateSoftClock(chatId, messageText, turnNumber).catch(() => null);
+    // Update soft clock — AI text drives time-of-day; the user's message drives
+    // explicit presence ("I'm leaving" / "I'm back").
+    const clockState = await updateSoftClock(chatId, messageText, turnNumber, userMessageText).catch(() => null);
     const timeCtx = makeTimeContext(clockState);
 
     // Extract <remember> tags and create permanent entries before bookmark processing.

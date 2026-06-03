@@ -26,6 +26,12 @@ export interface SoftClockState {
   // Used for morning-after inference
   previousSessionTimeOfDay?: TimeOfDay;
   previousSessionEndedAt?: string;  // ISO datetime
+  // Explicit presence from the user ("I'm leaving" / "I'm back"). Authoritative:
+  // the user telling you they're stepping out and back means the session is NOT
+  // a continuous marathon — used to keep the character from nagging about breaks.
+  presence?: "present" | "away";
+  awayReturns?: number;    // times the user explicitly stepped away and came back
+  lastAway?: string;
 }
 
 export interface TimeContext {
@@ -73,6 +79,17 @@ const DAY_SIGNALS: Record<DayOfWeek, string[]> = {
   unknown:   [],
 };
 
+// Explicit presence signals — read from the USER's message only. A user saying
+// they're stepping out or back is authoritative and overrides any guesswork
+// about how long they've "been here".
+const AWAY_SIGNALS = [
+  "i'm leaving", "im leaving", "i'm heading out", "heading out", "headed out",
+  "gonna head out", "gotta go", "got to go", "gtg", "brb", "be right back",
+  "be back", "stepping away", "stepping out", "step away", "on mobile",
+  "mobile internet", "at the park", "out and about", "afk", "ttyl",
+  "talk later", "talk to you later", "logging off", "going offline",
+  "i'm off", "signing off", "out for a bit", "away for", "leaving for",
+];
 // Days that typically follow each other (used for morning-after inference).
 const DAY_SEQUENCE: DayOfWeek[] = [
   "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
@@ -133,6 +150,11 @@ function detectDaySignal(text: string): DayOfWeek | null {
   return null;
 }
 
+function isAwaySignal(text: string): boolean {
+  const lower = text.toLowerCase();
+  return AWAY_SIGNALS.some((s) => lower.includes(s));
+}
+
 function nextDay(day: DayOfWeek): DayOfWeek {
   if (day === "unknown") return "unknown";
   const idx = DAY_SEQUENCE.indexOf(day);
@@ -147,11 +169,27 @@ export async function updateSoftClock(
   chatId: string,
   text: string,
   turnNumber: number,
+  userText = "",
 ): Promise<SoftClockState> {
   const state = (await readClock(chatId)) ?? defaultClock();
 
   const tod = detectTimeSignal(text);
   const day = detectDaySignal(text);
+  // Presence — the user's own message is authoritative. An away signal marks
+  // them away; any later message (explicit "I'm back" or just resuming) means
+  // they've returned, so we count the round trip and clear "away".
+  let presenceChanged = false;
+  if (userText) {
+    if (isAwaySignal(userText)) {
+      if (state.presence !== "away") presenceChanged = true;
+      state.presence = "away";
+      state.lastAway = userText.slice(0, 80);
+    } else if (state.presence === "away") {
+      state.awayReturns = (state.awayReturns ?? 0) + 1;
+      state.presence = "present";
+      presenceChanged = true;
+    }
+  }
 
   // The "(morning after …)" annotation should surface for exactly the turn the
   // inference fired, then clear. Without this it sticks to the context line for
@@ -160,9 +198,10 @@ export async function updateSoftClock(
   let setAnnotationThisTurn = false;
 
   if (!tod && !day) {
-    // No signal this turn — but we may still need to retire a stale annotation.
-    if (hadAnnotation) {
-      delete state.previousSessionTimeOfDay;
+    // No time/day signal — but still persist a presence change or retire a stale
+    // annotation.
+    if (presenceChanged || hadAnnotation) {
+      if (hadAnnotation) delete state.previousSessionTimeOfDay;
       state.lastUpdatedAt = new Date().toISOString();
       await writeClock(chatId, state);
     }
@@ -214,11 +253,24 @@ export function formatClockContext(state: SoftClockState | null): string {
     const cap = state.dayOfWeek[0]!.toUpperCase() + state.dayOfWeek.slice(1);
     parts.push(cap);
   }
-  if (parts.length === 0) return "";
   const inferred = state.previousSessionTimeOfDay
     ? ` (morning after ${state.previousSessionTimeOfDay.replace("_", " ")})`
     : "";
-  return `Session context: ${parts.join(", ")}${inferred}`;
+
+  // Presence note — tells the model the user controls their own time, so it
+  // doesn't nag about breaks during what looks like a long session.
+  let presenceNote = "";
+  if (state.presence === "away") {
+    presenceNote = "the user has stepped away and will return when ready";
+  } else if ((state.awayReturns ?? 0) > 0) {
+    presenceNote = "the user steps away and comes back on their own schedule — they manage their own time";
+  }
+
+  const bits: string[] = [];
+  if (parts.length > 0) bits.push(`${parts.join(", ")}${inferred}`);
+  if (presenceNote) bits.push(presenceNote);
+  if (bits.length === 0) return "";
+  return `Session context: ${bits.join(" · ")}`;
 }
 
 // Enrich a new entry with the current time context.

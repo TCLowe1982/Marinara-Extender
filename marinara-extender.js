@@ -132,6 +132,23 @@ marinara.addStyle(`
   .me-tab:hover { color: #e8e5e0; background: #211f1c; }
   .me-tab.active { color: #e8e5e0; border-bottom-color: #8b5cf6; }
 
+  /* First-run onboarding */
+  .me-onboard {
+    display: flex; flex-direction: column; align-items: center; text-align: center;
+    gap: 10px; padding: 30px 18px 24px;
+  }
+  .me-onboard-head { font-size: 15px; font-weight: 700; color: #e8e5e0; }
+  .me-onboard-copy { font-size: 12px; color: #b8b3ab; line-height: 1.5; max-width: 240px; }
+  .me-onboard-sub { font-size: 11px; color: #8b8680; line-height: 1.4; max-width: 250px; }
+  .me-onboard-line { font-size: 12px; color: #e8e5e0; font-weight: 600; margin-top: 2px; }
+  .me-onboard-cta { margin-top: 6px; padding: 9px 18px; font-size: 13px; font-weight: 600; width: 100%; }
+  .me-onboard-skip { font-size: 11px; color: #6b7280; text-decoration: none; }
+  .me-onboard-skip:hover { color: #b8b3ab; text-decoration: underline; }
+  .me-onboard-bar { width: 100%; height: 8px; background: #2e2b27; border-radius: 4px; overflow: hidden; margin-top: 4px; }
+  .me-onboard-bar-fill { height: 100%; background: #8b5cf6; transition: width 0.3s ease; }
+  .me-onboard-check { font-size: 30px; color: #34d399; line-height: 1; }
+  .me-onboard-payoff { font-size: 14px; font-weight: 600; color: #e8e5e0; line-height: 1.45; max-width: 250px; }
+
   /* Icon buttons in header */
   .me-icon-btn {
     background: none; border: none; color: #6b7280;
@@ -568,6 +585,13 @@ const panelState = {
   importAllProgress: null, // { current, total }
   importResults: {},       // { [chatId]: { count } | { error } }
   importFilter: "",        // live search string
+  // First-run onboarding import flow
+  importFlow: "intro",     // intro | estimating | ready | running | done
+  importFlowStats: null,   // { chats, calls, tokens }
+  importFlowProgress: null,// { current, total, startMs }
+  importFlowResult: null,  // { moments, chats, failed }
+  importCancel: false,
+  _onboardMsgs: {},        // chatId -> messages, cached from the estimate scan
   // Story ingest section
   ingestExpanded: false,
   ingestPovChar: "",
@@ -865,6 +889,15 @@ function renderPanel() {
     panel.appendChild(info);
   }
 
+  // First-run onboarding takes over the panel (no tabs) until imported or skipped.
+  if (panelState.session && !panelState.loading && !panelState.error && !isOnboarded()) {
+    const obContent = el("div", "me-panel-content");
+    renderOnboarding(obContent);
+    panel.appendChild(obContent);
+    if (prevScroll && !tabChanged) obContent.scrollTop = prevScroll;
+    return;
+  }
+
   // Tab bar
   const tabs = panelState.activeTab;
   const tabBar = el("div", "me-tabbar");
@@ -907,6 +940,98 @@ function renderPanel() {
 
   // Restore scroll once layout is in place (unless we just switched tabs).
   if (prevScroll && !tabChanged) content.scrollTop = prevScroll;
+}
+
+function etaText(current, total, startMs) {
+  if (!startMs || current <= 1) return "estimating time remaining…"; // need 1 done chat to time
+  const per = (Date.now() - startMs) / (current - 1); // chats actually completed so far
+  const remain = per * (total - current + 1);
+  if (remain < 1500) return "almost done…";
+  const mins = Math.round(remain / 60000);
+  return mins >= 1
+    ? `about ${mins} minute${mins === 1 ? "" : "s"} remaining`
+    : `about ${Math.round(remain / 1000)} seconds remaining`;
+}
+
+// First-run onboarding: a single prominent action, honest progress, a payoff.
+function renderOnboarding(content) {
+  const wrap = el("div", "me-onboard");
+  const flow = panelState.importFlow;
+
+  if (flow === "running") {
+    const { current, total, startMs } = panelState.importFlowProgress ?? { current: 0, total: 0, startMs: 0 };
+    const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+    wrap.append(Object.assign(el("div", "me-onboard-head"), { textContent: "Building your characters' memories" }));
+    const bar = el("div", "me-onboard-bar");
+    const fill = el("div", "me-onboard-bar-fill"); fill.style.width = `${pct}%`; bar.appendChild(fill);
+    wrap.append(bar);
+    wrap.append(Object.assign(el("div", "me-onboard-line"), { textContent: `Analyzing chat ${current} of ${total}` }));
+    wrap.append(Object.assign(el("div", "me-onboard-sub"), { textContent: etaText(current, total, startMs) }));
+    const cancel = el("button", "me-btn-danger");
+    cancel.textContent = panelState.importCancel ? "Finishing current chat…" : "Cancel";
+    cancel.disabled = panelState.importCancel;
+    cancel.addEventListener("click", cancelOnboarding);
+    wrap.append(cancel);
+    content.appendChild(wrap);
+    return;
+  }
+
+  if (flow === "done") {
+    const r = panelState.importFlowResult ?? { moments: 0, chats: 0, failed: 0 };
+    wrap.append(Object.assign(el("div", "me-onboard-check"), { textContent: "✓" }));
+    wrap.append(Object.assign(el("div", "me-onboard-payoff"), {
+      textContent: `Your characters remembered ${r.moments.toLocaleString()} moment${r.moments === 1 ? "" : "s"} across ${r.chats.toLocaleString()} conversation${r.chats === 1 ? "" : "s"}.`,
+    }));
+    const cta = el("button", "me-btn-primary me-onboard-cta");
+    cta.textContent = "Open a chat";
+    cta.addEventListener("click", finishOnboarding);
+    wrap.append(cta);
+    if (r.failed) wrap.append(Object.assign(el("div", "me-onboard-sub"), { textContent: `${r.failed} chat${r.failed === 1 ? "" : "s"} couldn't be processed and were skipped.` }));
+    if (r.cancelled) wrap.append(Object.assign(el("div", "me-onboard-sub"), { textContent: "Stopped early — re-open the Import tab to finish the rest anytime." }));
+    content.appendChild(wrap);
+    return;
+  }
+
+  if (flow === "estimating") {
+    wrap.append(Object.assign(el("div", "me-onboard-head"), { textContent: "Scanning your chats…" }));
+    const p = panelState.importFlowProgress;
+    wrap.append(Object.assign(el("div", "me-onboard-sub"), { textContent: p ? `reading chat ${p.current} of ${p.total}` : "one moment…" }));
+    content.appendChild(wrap);
+    return;
+  }
+
+  if (flow === "ready") {
+    const s = panelState.importFlowStats ?? { chats: 0, calls: 0, tokens: 0 };
+    if (s.chats === 0) {
+      wrap.append(Object.assign(el("div", "me-onboard-head"), { textContent: "No past chats yet" }));
+      wrap.append(Object.assign(el("div", "me-onboard-copy"), { textContent: "This character has no other conversations to import. Come back once you've chatted more." }));
+      const ok = el("button", "me-btn-primary me-onboard-cta"); ok.textContent = "Got it"; ok.addEventListener("click", skipOnboarding);
+      wrap.append(ok);
+      content.appendChild(wrap);
+      return;
+    }
+    wrap.append(Object.assign(el("div", "me-onboard-head"), { textContent: "Ready to import" }));
+    wrap.append(Object.assign(el("div", "me-onboard-sub"), {
+      textContent: `${s.chats.toLocaleString()} conversation${s.chats === 1 ? "" : "s"} · ~${s.calls.toLocaleString()} analysis call${s.calls === 1 ? "" : "s"} (~${s.tokens.toLocaleString()} tokens)`,
+    }));
+    const start = el("button", "me-btn-primary me-onboard-cta"); start.textContent = "Start import"; start.addEventListener("click", onboardRun);
+    wrap.append(start);
+    const later = el("a", "me-onboard-skip"); later.textContent = "Not now"; later.href = "#";
+    later.addEventListener("click", (e) => { e.preventDefault(); skipOnboarding(); });
+    wrap.append(later);
+    content.appendChild(wrap);
+    return;
+  }
+
+  // intro (default)
+  wrap.append(Object.assign(el("div", "me-onboard-head"), { textContent: "Give your characters their memory" }));
+  wrap.append(Object.assign(el("div", "me-onboard-copy"), { textContent: "Import your past chats so your characters can remember them." }));
+  const btn = el("button", "me-btn-primary me-onboard-cta"); btn.textContent = "Import my past chats"; btn.addEventListener("click", onboardScan);
+  wrap.append(btn);
+  const later = el("a", "me-onboard-skip"); later.textContent = "Not now"; later.href = "#";
+  later.addEventListener("click", (e) => { e.preventDefault(); skipOnboarding(); });
+  wrap.append(later);
+  content.appendChild(wrap);
 }
 
 function renderLaneSection(lane, entries) {
@@ -1882,6 +2007,90 @@ function renderImportSection() {
 }
 
 // ── Import data functions ─────────────────────────────────────────────────────
+
+// ── First-run onboarding import ─────────────────────────────────────────────
+
+const ONBOARDED_KEY = `${marinara.extensionId}:onboarded`;
+function isOnboarded() { try { return localStorage.getItem(ONBOARDED_KEY) === "1"; } catch { return false; } }
+function setOnboarded() { try { localStorage.setItem(ONBOARDED_KEY, "1"); } catch { /* ignore */ } }
+
+function skipOnboarding() { setOnboarded(); renderPanel(); }
+function finishOnboarding() { setOnboarded(); closePanel(); }
+
+// Step 1: load the chat list and run the free estimate across all of them.
+async function onboardScan() {
+  if (!panelState.session) return;
+  panelState.importFlow = "estimating";
+  panelState.importFlowStats = null;
+  renderPanel();
+
+  if (panelState.importChats === null) await loadImportChats(); // populates panelState.importChats
+  const chats = panelState.importChats ?? [];
+  const { characterName } = panelState.session;
+
+  let calls = 0, tokens = 0, counted = 0;
+  panelState._onboardMsgs = {};
+  for (const chat of chats) {
+    panelState.importFlowProgress = { current: ++counted, total: chats.length, startMs: 0 };
+    renderPanel();
+    try {
+      const messages = await fetchChatMessages(chat.id);
+      panelState._onboardMsgs[chat.id] = messages;
+      if (!messages.length) continue;
+      const est = await memFetch("/api/estimate-beats", {
+        method: "POST",
+        body: JSON.stringify({ messages, characterName: characterName ?? "the character" }),
+      });
+      calls += est.analysisCalls ?? 0;
+      tokens += est.estTokens ?? 0;
+    } catch { /* uncountable — skip in estimate */ }
+  }
+
+  panelState.importFlowStats = { chats: chats.length, calls, tokens };
+  panelState.importFlowProgress = null;
+  panelState.importFlow = "ready";
+  renderPanel();
+}
+
+// Step 2: run the import, one chat at a time, skipping failures.
+async function onboardRun() {
+  if (!panelState.session) return;
+  const chats = panelState.importChats ?? [];
+  panelState.importCancel = false;
+  panelState.importFlow = "running";
+  panelState.importFlowProgress = { current: 0, total: chats.length, startMs: Date.now() };
+  renderPanel();
+
+  let moments = 0, failed = 0, done = 0;
+  for (const chat of chats) {
+    if (panelState.importCancel) break;
+    done++;
+    panelState.importFlowProgress = { current: done, total: chats.length, startMs: panelState.importFlowProgress.startMs };
+    renderPanel();
+    try {
+      await importOneChat(chat, panelState._onboardMsgs[chat.id]); // graceful: catches internally
+      const r = panelState.importResults[chat.id];
+      if (r?.error) failed++;
+      else moments += r?.count ?? 0;
+    } catch (err) {
+      // Defensive — importOneChat already catches, but never let one chat halt the batch.
+      console.error("[ME] onboarding import skipped a chat:", chat.id, err);
+      failed++;
+    }
+  }
+
+  panelState.importFlowResult = { moments, chats: done - failed, failed, cancelled: panelState.importCancel };
+  panelState.importFlowProgress = null;
+  panelState.importFlow = "done";
+  panelState._onboardMsgs = {};
+  setOnboarded(); // they've engaged; don't nag again
+  renderPanel();
+}
+
+function cancelOnboarding() {
+  panelState.importCancel = true;
+  renderPanel();
+}
 
 async function loadImportChats() {
   if (!panelState.session) return;

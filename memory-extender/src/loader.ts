@@ -20,11 +20,22 @@ export interface TokenBudgets {
   global: number;
 }
 
-const DEFAULT_BUDGETS: TokenBudgets = {
-  chat: 4000,
-  character: 2000,
-  global: 1000,
-};
+// Token budgets per scope for the Current working cache. Read at call time (not
+// module load) so the .env loaded by index.ts is respected, and so a tighter
+// model can be tuned without code changes:
+//   MARINARA_EXTENDER_BUDGET_CHAT / _CHARACTER / _GLOBAL
+// (Per-character/per-model budgets are a planned follow-up — see open issues.)
+function getBudgets(): TokenBudgets {
+  const n = (key: string, fallback: number): number => {
+    const v = parseInt(process.env[key] ?? "", 10);
+    return Number.isFinite(v) && v > 0 ? v : fallback;
+  };
+  return {
+    chat:      n("MARINARA_EXTENDER_BUDGET_CHAT", 4000),
+    character: n("MARINARA_EXTENDER_BUDGET_CHARACTER", 2000),
+    global:    n("MARINARA_EXTENDER_BUDGET_GLOBAL", 1000),
+  };
+}
 
 // ── Lane priority for entry selection ────────────────────────────────────────
 // open_threads first (active work), then user_topics, then character_topics
@@ -286,7 +297,7 @@ function dbg(...args: unknown[]): void {
 
 export async function loadContext(
   session: LoaderSession,
-  budgets: TokenBudgets = DEFAULT_BUDGETS,
+  budgets: TokenBudgets = getBudgets(),
 ): Promise<LoadResult> {
   dbg(`loadContext start — char:${session.characterId} chat:${session.chatId} turn:${session.turnNumber}`);
 
@@ -350,7 +361,9 @@ export async function loadContext(
         ...e,
         lastAccessed: todayStr,
         retrievalCount: (e.retrievalCount ?? 0) + 1,
-        lastRetrievedAt: nowIso,
+        // NOTE: lastRetrievedAt is NOT stamped here. Being loaded into context is
+        // not the same as being used. It's stamped in recordRecitation (promotion.ts)
+        // only when the model demonstrably uses the entry — that's the honest signal.
       }),
     ),
     ...charSelection.selected.map((e) =>
@@ -358,7 +371,9 @@ export async function loadContext(
         ...e,
         lastAccessed: todayStr,
         retrievalCount: (e.retrievalCount ?? 0) + 1,
-        lastRetrievedAt: nowIso,
+        // NOTE: lastRetrievedAt is NOT stamped here. Being loaded into context is
+        // not the same as being used. It's stamped in recordRecitation (promotion.ts)
+        // only when the model demonstrably uses the entry — that's the honest signal.
       }),
     ),
     ...globalSelection.selected.map((e) =>
@@ -366,7 +381,9 @@ export async function loadContext(
         ...e,
         lastAccessed: todayStr,
         retrievalCount: (e.retrievalCount ?? 0) + 1,
-        lastRetrievedAt: nowIso,
+        // NOTE: lastRetrievedAt is NOT stamped here. Being loaded into context is
+        // not the same as being used. It's stamped in recordRecitation (promotion.ts)
+        // only when the model demonstrably uses the entry — that's the honest signal.
       }),
     ),
   ]).catch(() => {});

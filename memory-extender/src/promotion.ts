@@ -214,6 +214,12 @@ export async function recordRecitation(
     if (!entry) return false;
 
     entry.recitationCount = (entry.recitationCount ?? 0) + 1;
+    // Demonstrable use IS retrieval — stamp the honest recency signal here, not
+    // in the loader (which only knows the entry was loaded, not used). This is
+    // what drives demotion-by-staleness and the Current cache's recency.
+    const now = new Date().toISOString();
+    entry.lastRetrievedAt = now;
+    entry.lastAccessed = now.slice(0, 10);
 
     // Check if recitation tips the entry into the next tier immediately.
     const { tier, cycleCount } = nextTier(entry);

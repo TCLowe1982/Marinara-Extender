@@ -46,6 +46,33 @@ export interface PipelineResult {
 
 const NARRATIVE_POSITION_BOOST = 1.3;
 
+// Partial/contains matching so "Mari" matches "Dr. Mari Zielinska", "Professor
+// Mari", etc. Exported so the orchestrator can identify which passing chunks
+// matched no assigned character (the true orphans that route to the holding pool).
+export function speakerMatches(speaker: string, needle: string): boolean {
+  const s = speaker.trim().toLowerCase();
+  const n = needle.trim().toLowerCase();
+  return !!s && !!n && (s === n || s.includes(n) || n.includes(s));
+}
+
+// Run only Stages 0–1 (chunk + classify + threshold) — no LLM deep analysis.
+// The orchestrator uses this to find passing chunks whose speaker matched none
+// of the assigned characters, so they can be held instead of dropped.
+export async function collectPassingClassifications(
+  messages: DigestMessage[],
+  characterName: string,
+  options: { sourceType?: "chat" | "story"; povCharacter?: string } = {},
+): Promise<{ speakers: string[]; passing: ClassificationResult[] }> {
+  const { sourceType = "chat", povCharacter } = options;
+  let chunks = await chunkMessages(messages, characterName);
+  if (povCharacter) {
+    chunks = chunks.map((c) => (c.speaker === "Narrator" ? { ...c, speaker: povCharacter } : c));
+  }
+  const passing = classifyChunks(chunks, sourceType).filter((c) => c.passesThreshold);
+  const speakers = [...new Set(chunks.map((c) => c.speaker))].sort();
+  return { speakers, passing };
+}
+
 export async function runSentimentPipeline(
   messages: DigestMessage[],
   characterId: string,
@@ -71,15 +98,6 @@ export async function runSentimentPipeline(
 
   // Collect unique speakers for diagnostics.
   const speakers = [...new Set(chunks.map((c) => c.speaker))].sort();
-
-  // Speaker filter: keep only chunks for the target character.
-  // Uses partial/contains matching so "Mari" matches "Dr. Mari Zielinska",
-  // "Professor Mari", etc. Pass an explicit characters list to pin exact names.
-  function speakerMatches(speaker: string, needle: string): boolean {
-    const s = speaker.trim().toLowerCase();
-    const n = needle.trim().toLowerCase();
-    return s === n || s.includes(n) || n.includes(s);
-  }
 
   let filtered: ClassificationResult[];
   if (characters?.length) {
@@ -167,7 +185,7 @@ export async function runSentimentPipeline(
       analysis = { ...analysis, salience: Math.min(1.0, analysis.salience * NARRATIVE_POSITION_BOOST) };
     }
 
-    const beat = await encodeBeat(characterId, result, analysis, sourceType);
+    const beat = await encodeBeat(characterId, result, analysis, sourceType, options.sourceChatId);
     beats.push(beat);
 
     // Also write a retrievable ledger entry. The loader builds the injected

@@ -21,6 +21,7 @@ import {
   addPending,
   listPendingSpeakers,
   migratePendingBeats,
+  routeOrphans,
   ignoreSpeaker,
   restoreIgnored,
   purgeExpiredIgnored,
@@ -188,6 +189,42 @@ describe("holding pool", () => {
     const re = await restoreIgnored("Walk-On");
     expect(re.restored).toBe(1);
     expect((await listPendingSpeakers())[0]?.normalized).toBe("walk-on");
+  });
+
+  it("routeOrphans auto-routes exact aliases, holds fuzzy + miss, skips user", async () => {
+    await addAlias("priya-uuid", "Dr. Priya Chandrasekaran", "Priya");
+
+    const orphans = [
+      { classification: classification("Priya", "I can't.", 1), sourceType: "story" as const },     // exact → auto-route
+      { classification: classification("Prija", "Typo of priya.", 2), sourceType: "story" as const }, // fuzzy → held + suggestion
+      { classification: classification("Stranger", "Who?", 3), sourceType: "story" as const },        // miss → held
+      { classification: classification("user", "my line", 4), sourceType: "story" as const },          // user → skipped
+    ];
+    const summary = await routeOrphans(orphans, { analyze: stubAnalyze });
+
+    expect(summary.autoRouted).toBe(1);
+    expect(summary.held).toBe(2);
+    // Priya's beat landed under her character, not the pool.
+    expect((await readBeatIndex("priya-uuid"))?.entries).toHaveLength(1);
+
+    const rows = await listPendingSpeakers();
+    const labels = rows.map((r) => r.normalized).sort();
+    expect(labels).toEqual(["prija", "stranger"]);
+    // The fuzzy one carries a suggestion toward Priya; the miss does not.
+    expect(rows.find((r) => r.normalized === "prija")?.suggestion?.identityKey).toBe("priya-uuid");
+    expect(rows.find((r) => r.normalized === "stranger")?.suggestion).toBeUndefined();
+  });
+
+  it("routeOrphans holds (no suggestion) when a label collides across characters", async () => {
+    await addAlias("a-uuid", "Alex Stone", "Alex");
+    await addAlias("b-uuid", "Alexandra Reed", "Alex");
+    const summary = await routeOrphans(
+      [{ classification: classification("Alex", "ambiguous", 1), sourceType: "story" as const }],
+      { analyze: stubAnalyze },
+    );
+    expect(summary.autoRouted).toBe(0);
+    expect(summary.held).toBe(1);
+    expect((await listPendingSpeakers())[0]?.suggestion).toBeUndefined(); // forced manual
   });
 
   it("purges ignored groups older than the TTL only", async () => {

@@ -13,7 +13,14 @@
 
 import { join } from "path";
 import { getDataDir, readYamlFile, mutateYamlFile } from "./storage.js";
-import { normalizeLabel } from "./aliases.js";
+import {
+  normalizeLabel,
+  readAliasTable,
+  findExactMatches,
+  findFuzzySuggestion,
+  bumpAliasUsage,
+  USER_IDENTITY_KEY,
+} from "./aliases.js";
 import { beatIdForChunk, encodeBeat } from "./sentiment/encoder.js";
 import { analyzeChunks } from "./sentiment/analyzer.js";
 import type { ClassificationResult } from "./sentiment/types.js";
@@ -161,6 +168,82 @@ export async function migratePendingBeats(
     migrated++;
   }
   return { migrated };
+}
+
+// ── Orphan routing (import-time) ───────────────────────────────────────────────
+
+export interface OrphanItem {
+  classification: ClassificationResult;
+  sourceType: "chat" | "story";
+  sourceChatId?: string;
+}
+
+export interface RouteSummary {
+  autoRouted: number;        // beats routed to an exact-alias character immediately
+  held: number;              // beats placed in the holding pool for resolution
+  pendingLabels: string[];   // distinct speaker labels now awaiting resolution
+}
+
+function isUserSpeaker(speaker: string): boolean {
+  return normalizeLabel(speaker) === "user";
+}
+
+// Route chunks whose speaker matched no assigned character. Exact (single) alias
+// hit → auto-route to that character now (the user already taught us this name).
+// Collision (label maps to >1 character) → hold with no suggestion (manual per
+// beat). Fuzzy near-miss → hold WITH a suggestion (never auto-routed). Miss →
+// hold. User-attributed chunks are skipped (they aren't a character). Best-effort:
+// callers wrap this so a holding-pool hiccup never fails the import.
+export async function routeOrphans(
+  orphans: OrphanItem[],
+  opts: { analyze?: AnalyzeFn } = {},
+): Promise<RouteSummary> {
+  const table = await readAliasTable();
+  const pendingLabels = new Set<string>();
+  // Group by normalized label so each distinct speaker is decided once.
+  const byLabel = new Map<string, OrphanItem[]>();
+  for (const o of orphans) {
+    if (isUserSpeaker(o.classification.chunk.speaker)) continue;
+    const key = normalizeLabel(o.classification.chunk.speaker);
+    if (!key) continue;
+    (byLabel.get(key) ?? byLabel.set(key, []).get(key)!).push(o);
+  }
+
+  let autoRouted = 0;
+  let held = 0;
+  for (const [, items] of byLabel) {
+    const label = items[0]!.classification.chunk.speaker;
+    const exact = findExactMatches(table, label);
+
+    if (exact.length === 1) {
+      // Known character — route now (deferred analysis runs via migrate).
+      const identityKey = exact[0]!.identityKey;
+      if (identityKey === USER_IDENTITY_KEY) continue; // user's own — not a character beat
+      for (const it of items) {
+        await addPending({ speaker: it.classification.chunk.speaker, classification: it.classification, sourceType: it.sourceType, sourceChatId: it.sourceChatId });
+      }
+      const { migrated } = await migratePendingBeats(normalizeLabel(label), identityKey, opts);
+      autoRouted += migrated;
+      await bumpAliasUsage(identityKey, label);
+      continue;
+    }
+
+    // Collision (>1) → no suggestion (force manual). Otherwise offer a fuzzy hint.
+    const suggestion = exact.length > 1 ? undefined : findFuzzySuggestion(table, label) ?? undefined;
+    for (const it of items) {
+      await addPending({
+        speaker: it.classification.chunk.speaker,
+        classification: it.classification,
+        sourceType: it.sourceType,
+        sourceChatId: it.sourceChatId,
+        suggestion: suggestion ? { identityKey: suggestion.identityKey, canonicalName: suggestion.canonicalName, score: suggestion.score } : undefined,
+      });
+      held++;
+    }
+    pendingLabels.add(normalizeLabel(label));
+  }
+
+  return { autoRouted, held, pendingLabels: [...pendingLabels] };
 }
 
 // ── Ignore bucket (30-day recoverable soft delete) ─────────────────────────────

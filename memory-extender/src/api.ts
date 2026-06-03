@@ -32,7 +32,8 @@ import { loadContext } from "./loader.js";
 import { runPromotion, runPromotionAll, recordRecitation } from "./promotion.js";
 import { runCleanup } from "./cleanup.js";
 import { updateSoftClock, makeTimeContext } from "./soft-clock.js";
-import { runSentimentPipeline } from "./sentiment/pipeline.js";
+import { runSentimentPipeline, collectPassingClassifications, speakerMatches } from "./sentiment/pipeline.js";
+import { routeOrphans } from "./holding-pool.js";
 import { chunkMessages } from "./sentiment/chunker.js";
 import { classifyChunks } from "./sentiment/classifier.js";
 import { analyzeChunks } from "./sentiment/analyzer.js";
@@ -1085,15 +1086,37 @@ export function registerApiRoutes(app: FastifyInstance): void {
         chunksTotal = r.chunksTotal;
       }
 
+      // Route speakers that matched NO assigned character through the alias
+      // table instead of dropping them: exact alias → routed now; otherwise held
+      // in the pool for resolution. Best-effort — never fail the import on this.
+      let pending = 0;
+      let autoRouted = 0;
+      try {
+        const { passing } = await collectPassingClassifications(messages, targets[0]!.characterName, { sourceType, povCharacter });
+        const assignedNames = unionNames.length ? unionNames : targets.map((t) => t.characterName);
+        const orphanItems = passing
+          .filter((c) => !assignedNames.some((n) => speakerMatches(c.chunk.speaker, n)))
+          .map((c) => ({ classification: c, sourceType }));
+        if (orphanItems.length) {
+          const routed = await routeOrphans(orphanItems);
+          pending = routed.held;
+          autoRouted = routed.autoRouted;
+        }
+      } catch (err) {
+        console.warn(`[ME] orphan routing skipped: ${err instanceof Error ? err.message : err}`);
+      }
+
       // All characters done — drop the cached attribution job.
       await deleteJob(primaryKey, jobKey);
-      const totalBeats = perCharacter.reduce((s, c) => s + c.beats, 0);
+      const totalBeats = perCharacter.reduce((s, c) => s + c.beats, 0) + autoRouted;
       const totalResumed = perCharacter.reduce((s, c) => s + c.skipped, 0);
       console.info(
         `[ME] story ingest — method:${method} — ${targets.length} char(s), ${totalBeats} new beats` +
-        `${totalResumed ? `, ${totalResumed} resumed` : ""}`,
+        `${totalResumed ? `, ${totalResumed} resumed` : ""}` +
+        `${autoRouted ? `, ${autoRouted} auto-routed via alias` : ""}` +
+        `${pending ? `, ${pending} held for speaker resolution` : ""}`,
       );
-      return reply.send({ parseMethod: method, speakers, chunksTotal, beats: totalBeats, perCharacter });
+      return reply.send({ parseMethod: method, speakers, chunksTotal, beats: totalBeats, perCharacter, pending, autoRouted });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (ac.signal.aborted || msg === "cancelled") {

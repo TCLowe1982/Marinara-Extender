@@ -6,7 +6,7 @@ import type { EmotionalBeat, ClassificationResult } from "./types.js";
 import { chunkMessages } from "./chunker.js";
 import { classifyChunks } from "./classifier.js";
 import { analyzeChunk } from "./analyzer.js";
-import { encodeBeat, beatIdForChunk, readBeatIndex, companionEntryFromBeat } from "./encoder.js";
+import { encodeBeat, beatIdForChunk, readBeatIndex, readBeat, companionEntryFromBeat } from "./encoder.js";
 import { createEntryIfUnique } from "../dedup.js";
 import { Progress, progressEnabled } from "../progress.js";
 
@@ -122,9 +122,18 @@ export async function runSentimentPipeline(
     const result = filtered[i]!;
     const current = i + 1;
 
-    // Skip if this chunk's beat already exists (resume).
-    if (existingBeatIds.has(beatIdForChunk(result.chunk))) {
+    // Skip analysis if this chunk's beat already exists (resume) — but still
+    // make sure its companion ledger entry is present. A clean re-import clears
+    // companions by sourceChatId; without this, skipped chunks would lose their
+    // retrievable entry. Re-derive it from the stored beat (no re-analysis).
+    const beatId = beatIdForChunk(result.chunk);
+    if (existingBeatIds.has(beatId)) {
       skipped++;
+      const existing = await readBeat(characterId, beatId);
+      if (existing) {
+        const { summary, content } = companionEntryFromBeat(existing);
+        if (summary) await createEntryIfUnique("character", characterId, { lane: "character_topics", summary, content, sourceChatId: options.sourceChatId });
+      }
       report.tick(current, total);
       continue;
     }

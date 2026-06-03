@@ -840,6 +840,10 @@ export function registerApiRoutes(app: FastifyInstance): void {
 
     const identityKey = await resolveIdentity(characterId, characterName);
 
+    // Cancel mid-chat when the client aborts (long chats can be 100+ calls).
+    const ac = new AbortController();
+    req.raw.once("close", () => { if (!reply.raw.writableEnded) ac.abort(); });
+
     try {
       // Clean re-import: drop this chat's prior companion entries first so a
       // re-run replaces rather than piles up. (Beats are idempotent by id.)
@@ -851,15 +855,20 @@ export function registerApiRoutes(app: FastifyInstance): void {
         sourceType,
         progressLabel: title?.trim() || `${characterName} (chat history)`,
         sourceChatId: chatId,
+        signal: ac.signal,
       });
       console.info(
         `[ME] sentiment pipeline — key:${identityKey} — ${result.beats.length} beats from ${result.chunksTotal} chunks`,
       );
       return reply.send(result);
     } catch (err) {
-      return reply.code(500).send({
-        error: err instanceof Error ? err.message : "Sentiment pipeline failed",
-      });
+      const msg = err instanceof Error ? err.message : String(err);
+      if (ac.signal.aborted || msg === "cancelled") {
+        // Partial beats are already saved (incremental encode); resume continues later.
+        if (!reply.raw.writableEnded) return reply.code(499).send({ cancelled: true });
+        return;
+      }
+      return reply.code(500).send({ error: msg || "Sentiment pipeline failed" });
     }
   });
 

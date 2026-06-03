@@ -606,6 +606,7 @@ const panelState = {
   importFlowProgress: null,// { current, total, startMs }
   importFlowResult: null,  // { moments, chats, failed }
   importCancel: false,
+  importAbort: null,       // AbortController for the in-flight chat
   _onboardMsgs: {},        // chatId -> messages, cached from the estimate scan
   // Story ingest section
   ingestExpanded: false,
@@ -2233,6 +2234,7 @@ async function onboardRun() {
     try {
       await importOneChat(chat, panelState._onboardMsgs[chat.id]); // graceful: catches internally
       const r = panelState.importResults[chat.id];
+      if (r?.cancelled) { done--; break; } // aborted mid-chat — don't count it
       if (r?.error) failed++;
       else moments += r?.count ?? 0;
     } catch (err) {
@@ -2251,6 +2253,7 @@ async function onboardRun() {
 
 function cancelOnboarding() {
   panelState.importCancel = true;
+  if (panelState.importAbort) panelState.importAbort.abort(); // stop the in-flight chat too
   renderPanel();
 }
 
@@ -2316,7 +2319,7 @@ async function fetchChatMessages(chatId) {
         return (role && content) ? { role: String(role), content: String(content) } : null;
       })
       .filter(Boolean)
-      .slice(-200); // cap at 200 most-recent messages
+      .slice(-5000); // generous cap — long RP chats (1k+ messages) import in full
   } catch {
     return [];
   }
@@ -2332,6 +2335,8 @@ async function importOneChat(chat, preFetched) {
   panelState.importingSet.add(chat.id);
   renderPanel();
 
+  const ac = new AbortController();
+  panelState.importAbort = ac;
   try {
     const messages = preFetched ?? await fetchChatMessages(chat.id);
     if (messages.length === 0) {
@@ -2339,9 +2344,11 @@ async function importOneChat(chat, preFetched) {
     } else {
       // Granular import: run the full sentiment pipeline (beats + retrievable
       // companion entries), the same depth a live chat builds — not the old
-      // shallow one-shot digest. Per-beat dedup makes re-running safe.
+      // shallow one-shot digest. Per-beat dedup makes re-running safe; the abort
+      // signal lets a long chat (100+ calls) be cancelled mid-run.
       const result = await memFetch("/api/analyze-beats", {
         method: "POST",
+        signal: ac.signal,
         body: JSON.stringify({
           characterId,
           characterName: characterName ?? "the character",
@@ -2355,10 +2362,16 @@ async function importOneChat(chat, preFetched) {
       panelState.importResults[chat.id] = { count: result.beats?.length ?? 0, skipped: result.skipped ?? 0 };
     }
   } catch (err) {
-    console.error("[ME] import failed for chat", chat.id, ":", err);
-    panelState.importResults[chat.id] = { error: String(err) };
+    if (err?.name === "AbortError") {
+      // Cancelled mid-chat — partial beats are saved server-side; resume later.
+      panelState.importResults[chat.id] = { cancelled: true };
+    } else {
+      console.error("[ME] import failed for chat", chat.id, ":", err);
+      panelState.importResults[chat.id] = { error: String(err) };
+    }
   }
 
+  panelState.importAbort = null;
   panelState.importingSet.delete(chat.id);
   renderPanel();
 }

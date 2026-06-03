@@ -38,6 +38,9 @@ const app = Fastify({
   logger: process.env.ME_HTTP_LOG === "1"
     ? { transport: { target: "pino-pretty", options: { colorize: true, translateTime: "HH:MM:ss", ignore: "pid,hostname" } } }
     : { level: "warn" },
+  // Long chats (1k+ messages) are POSTed whole for granular import; the default
+  // 1MB body limit is far too small.
+  bodyLimit: 64 * 1024 * 1024, // 64 MB
 });
 
 // ── CORS (for extension fetch() calls to /api/*) ──────────────────────────────

@@ -1973,6 +1973,7 @@ async function importOneChat(chat, preFetched) {
           messages,
           sourceType: "chat",
           title: chat.name || chat.title || `chat ${shorten(chat.id)}`,
+          chatId: chat.id, // tags entries for clean re-import
         }),
       });
       if (result?.error) throw new Error(result.detail ?? result.error);

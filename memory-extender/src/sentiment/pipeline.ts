@@ -26,6 +26,9 @@ export interface PipelineOptions {
   progress?: boolean;
   // Aborts the analysis loop (cancelled import); no beats are encoded.
   signal?: AbortSignal;
+  // Tag companion ledger entries with the chat they came from, so a re-import
+  // of that chat can cleanly replace them.
+  sourceChatId?: string;
 }
 
 export interface PipelineResult {
@@ -158,7 +161,7 @@ export async function runSentimentPipeline(
     // <memory> block from the entry index, NOT the beats store — so without this
     // companion entry the character could never recall an imported beat.
     const { summary, content } = companionEntryFromBeat(beat);
-    if (summary) await createEntryIfUnique("character", characterId, { lane: "character_topics", summary, content });
+    if (summary) await createEntryIfUnique("character", characterId, { lane: "character_topics", summary, content, sourceChatId: options.sourceChatId });
 
     report.tick(current, total);
   }

@@ -32,6 +32,7 @@ export interface IndexEntry {
   recitationCount?: number;
   cycleCount?: number;
   lastRetrievedAt?: string; // ISO datetime of last retrieval
+  sourceChatId?: string;    // chat this entry was imported/derived from (for clean re-import)
 }
 
 export interface ScopeIndex {
@@ -56,6 +57,7 @@ export interface Entry {
   recitationCount?: number;
   cycleCount?: number;
   lastRetrievedAt?: string; // ISO datetime of last retrieval
+  sourceChatId?: string;    // chat this entry was imported/derived from (for clean re-import)
   // Soft clock context at time of encoding
   timeContext?: { timeOfDay: string; dayOfWeek: string; inferredFrom?: string };
 }
@@ -235,6 +237,35 @@ export async function removeIndexEntry(
     index.lastUpdated = new Date().toISOString();
     await writeYaml(p, index);
   });
+}
+
+// Remove every entry derived from a given chat (index rows + files). Used to
+// cleanly replace a chat's import artifacts on re-import, so granular beats
+// don't pile up alongside a prior run's entries. Returns the number removed.
+export async function removeEntriesBySourceChat(
+  scope: Scope,
+  scopeId: string,
+  sourceChatId: string,
+): Promise<number> {
+  const p = indexPath(scope, scopeId);
+  const removed: IndexEntry[] = [];
+  await serializedWrite(p, async () => {
+    const index = await readIndex(scope, scopeId);
+    if (!index) return;
+    const keep: IndexEntry[] = [];
+    for (const e of index.entries) {
+      if (e.sourceChatId === sourceChatId) removed.push(e);
+      else keep.push(e);
+    }
+    if (removed.length === 0) return;
+    index.entries = keep;
+    index.lastUpdated = new Date().toISOString();
+    await writeYaml(p, index);
+  });
+  for (const e of removed) {
+    await deleteEntryFile(scope, scopeId, e.path).catch(() => {});
+  }
+  return removed.length;
 }
 
 // ── Entry operations ──────────────────────────────────────────────────────────

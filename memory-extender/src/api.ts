@@ -14,6 +14,7 @@ import {
   deleteEntryFile,
   upsertIndexEntry,
   removeIndexEntry,
+  removeEntriesBySourceChat,
   readBookmarks,
   mutateBookmarks,
   listScopeIds,
@@ -824,10 +825,11 @@ export function registerApiRoutes(app: FastifyInstance): void {
       characterId: string;
       characterName: string;
       sourceType?: "chat" | "story";
-      title?: string; // progress label, e.g. the chat name
+      title?: string;   // progress label, e.g. the chat name
+      chatId?: string;  // source chat — tags entries + enables clean re-import
     };
   }>("/api/analyze-beats", async (req, reply) => {
-    const { messages, characterId, characterName, sourceType = "chat", title } = req.body ?? {};
+    const { messages, characterId, characterName, sourceType = "chat", title, chatId } = req.body ?? {};
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return reply.code(400).send({ error: "messages array is required and must not be empty" });
@@ -839,9 +841,16 @@ export function registerApiRoutes(app: FastifyInstance): void {
     const identityKey = await resolveIdentity(characterId, characterName);
 
     try {
+      // Clean re-import: drop this chat's prior companion entries first so a
+      // re-run replaces rather than piles up. (Beats are idempotent by id.)
+      if (chatId) {
+        const purged = await removeEntriesBySourceChat("character", identityKey, chatId);
+        if (purged > 0) console.info(`[ME] re-import — cleared ${purged} prior entries for chat ${chatId}`);
+      }
       const result = await runSentimentPipeline(messages, identityKey, characterName, {
         sourceType,
         progressLabel: title?.trim() || `${characterName} (chat history)`,
+        sourceChatId: chatId,
       });
       console.info(
         `[ME] sentiment pipeline — key:${identityKey} — ${result.beats.length} beats from ${result.chunksTotal} chunks`,

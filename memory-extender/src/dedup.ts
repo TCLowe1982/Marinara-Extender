@@ -62,6 +62,7 @@ export interface CreateEntryInput {
   content: string;
   status?: EntryStatus;
   timeContext?: Entry["timeContext"];
+  sourceChatId?: string; // tag for clean per-chat re-import
 }
 
 // Create an entry only if no sufficiently similar entry already exists in the
@@ -96,6 +97,7 @@ export async function createEntryIfUnique(
     content,
     tokens: estimateTokens(`${summary} ${content}`),
     ...(input.timeContext ? { timeContext: input.timeContext } : {}),
+    ...(input.sourceChatId ? { sourceChatId: input.sourceChatId } : {}),
   };
 
   const relativePath = await writeEntry(scope, scopeId, entry);
@@ -107,6 +109,7 @@ export async function createEntryIfUnique(
     lane: input.lane,
     status,
     lastAccessed: now,
+    ...(input.sourceChatId ? { sourceChatId: input.sourceChatId } : {}),
   });
 
   return entry;

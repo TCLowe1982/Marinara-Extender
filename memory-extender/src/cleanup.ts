@@ -58,6 +58,13 @@ function isLikelyTransient(entry: IndexEntry): boolean {
   return TRANSIENT_RE.some((re) => re.test(text));
 }
 
+// A structured beat companion ("[emotion] …") carries motivation, relational
+// dynamics and outcome — far more than a shallow one-line summary of the same
+// moment. Prefer keeping the richer entry when two are duplicates.
+function richness(entry: IndexEntry): number {
+  return /^\[/.test(entry.summary ?? "") ? 2 : 1;
+}
+
 // ── Result ────────────────────────────────────────────────────────────────────
 
 export interface CleanupResult {
@@ -123,10 +130,18 @@ export async function runCleanup(): Promise<CleanupResult> {
           if (markedDone.has(b.id) || b.status === "done") continue;
           if (jaccard(a.summary, b.summary) < DEDUP_THRESHOLD) continue;
 
-          // Keep the higher-scored entry; mark the other done.
-          const scoreA = (a.retrievalCount ?? 0) + (a.recitationCount ?? 0) * 3;
-          const scoreB = (b.retrievalCount ?? 0) + (b.recitationCount ?? 0) * 3;
-          const loser  = scoreA >= scoreB ? b : a;
+          // Pick the loser. Prefer keeping the RICHER entry (a structured beat
+          // companion supersedes a shallow summary of the same moment); fall
+          // back to the higher-scored one.
+          const richA = richness(a), richB = richness(b);
+          let loser: IndexEntry;
+          if (richA !== richB) {
+            loser = richA < richB ? a : b;
+          } else {
+            const scoreA = (a.retrievalCount ?? 0) + (a.recitationCount ?? 0) * 3;
+            const scoreB = (b.retrievalCount ?? 0) + (b.recitationCount ?? 0) * 3;
+            loser = scoreA >= scoreB ? b : a;
+          }
           loser.status = "done";
           markedDone.add(loser.id);
           changed = true;

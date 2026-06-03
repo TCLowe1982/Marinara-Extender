@@ -1797,8 +1797,8 @@ function renderImportSection() {
   const allBtn = el("button", "me-import-all-btn");
   allBtn.disabled = anyBusy || chats.length === 0;
   if (panelState.importAllActive && panelState.importAllProgress) {
-    const { current, total } = panelState.importAllProgress;
-    allBtn.textContent = `Digesting… (${current}/${total})`;
+    const { current, total, phase } = panelState.importAllProgress;
+    allBtn.textContent = `${phase === "estimating" ? "Estimating" : "Analyzing"}… (${current}/${total})`;
   } else if (q) {
     allBtn.textContent = `Import filtered (${chats.length})`;
   } else {
@@ -1951,14 +1951,14 @@ async function fetchChatMessages(chatId) {
   }
 }
 
-async function importOneChat(chat) {
+async function importOneChat(chat, preFetched) {
   if (!panelState.session) return;
   const { characterId, characterName } = panelState.session;
   panelState.importingSet.add(chat.id);
   renderPanel();
 
   try {
-    const messages = await fetchChatMessages(chat.id);
+    const messages = preFetched ?? await fetchChatMessages(chat.id);
     if (messages.length === 0) {
       panelState.importResults[chat.id] = { count: 0 };
     } else {
@@ -1989,14 +1989,52 @@ async function importOneChat(chat) {
 
 async function importAllChats(chats) {
   if (!panelState.session) return;
+  const { characterName } = panelState.session;
+  const pending = chats.filter(c => !panelState.importResults[c.id]);
+
+  // ── Pre-flight estimate (free: chunk+classify only, no analysis calls) ──────
   panelState.importAllActive = true;
-  panelState.importAllProgress = { current: 0, total: chats.length };
+  panelState.importAllProgress = { current: 0, total: pending.length, phase: "estimating" };
   renderPanel();
 
-  for (let i = 0; i < chats.length; i++) {
-    if (panelState.importResults[chats[i].id]) continue; // skip already-done
-    panelState.importAllProgress = { current: i + 1, total: chats.length };
-    await importOneChat(chats[i]); // updates panel internally
+  let calls = 0, tokens = 0;
+  const cachedMsgs = {};
+  for (let i = 0; i < pending.length; i++) {
+    panelState.importAllProgress = { current: i + 1, total: pending.length, phase: "estimating" };
+    renderPanel();
+    try {
+      const messages = await fetchChatMessages(pending[i].id);
+      cachedMsgs[pending[i].id] = messages;
+      if (!messages.length) continue;
+      const est = await memFetch("/api/estimate-beats", {
+        method: "POST",
+        body: JSON.stringify({ messages, characterName: characterName ?? "the character" }),
+      });
+      calls += est.analysisCalls ?? 0;
+      tokens += est.estTokens ?? 0;
+    } catch { /* skip uncountable chat */ }
+  }
+
+  panelState.importAllActive = false;
+  panelState.importAllProgress = null;
+  renderPanel();
+
+  const proceed = confirm(
+    `Granular import of ${pending.length} chat${pending.length === 1 ? "" : "s"} will make about ` +
+    `${calls.toLocaleString()} analysis call${calls === 1 ? "" : "s"} (~${tokens.toLocaleString()} tokens).\n\n` +
+    `This runs one chat at a time and can take a while / use API credits. Proceed?`
+  );
+  if (!proceed) return;
+
+  // ── Run ─────────────────────────────────────────────────────────────────────
+  panelState.importAllActive = true;
+  panelState.importAllProgress = { current: 0, total: pending.length, phase: "analyzing" };
+  renderPanel();
+
+  for (let i = 0; i < pending.length; i++) {
+    if (panelState.importResults[pending[i].id]) continue; // skip if done since
+    panelState.importAllProgress = { current: i + 1, total: pending.length, phase: "analyzing" };
+    await importOneChat(pending[i], cachedMsgs[pending[i].id]); // reuse fetched messages
   }
 
   panelState.importAllActive = false;

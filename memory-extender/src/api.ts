@@ -32,6 +32,7 @@ import { runPromotion, runPromotionAll, recordRecitation } from "./promotion.js"
 import { runCleanup } from "./cleanup.js";
 import { updateSoftClock, makeTimeContext } from "./soft-clock.js";
 import { runSentimentPipeline } from "./sentiment/pipeline.js";
+import { chunkMessages } from "./sentiment/chunker.js";
 import { classifyChunks } from "./sentiment/classifier.js";
 import { analyzeChunks } from "./sentiment/analyzer.js";
 import { encodeBeat } from "./sentiment/encoder.js";
@@ -851,6 +852,26 @@ export function registerApiRoutes(app: FastifyInstance): void {
         error: err instanceof Error ? err.message : "Sentiment pipeline failed",
       });
     }
+  });
+
+  // ── POST /api/estimate-beats ──────────────────────────────────────────────
+  // Pre-flight cost estimate: runs Stage 0–1 (chunk + classify) only — NO
+  // analysis LLM calls — and returns how many analysis calls a real import would
+  // make (one per passing chunk). Lets the UI confirm before spending.
+  // Body: { messages, characterName? }
+
+  app.post<{
+    Body: { messages: DigestMessage[]; characterName?: string };
+  }>("/api/estimate-beats", async (req, reply) => {
+    const { messages, characterName = "the character" } = req.body ?? {};
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return reply.send({ chunksTotal: 0, analysisCalls: 0, estTokens: 0 });
+    }
+    const chunks = await chunkMessages(messages, characterName);
+    const passing = classifyChunks(chunks, "chat").filter((c) => c.passesThreshold).length;
+    // Rough: each analysis call is ~one chunk + context in, a short JSON out.
+    const estTokens = passing * 700;
+    return reply.send({ chunksTotal: chunks.length, analysisCalls: passing, estTokens });
   });
 
   // ── GET /api/beats ────────────────────────────────────────────────────────

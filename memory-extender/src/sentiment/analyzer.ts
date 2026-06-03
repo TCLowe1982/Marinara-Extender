@@ -14,6 +14,7 @@
 // register rather than reading lines in isolation.
 
 import { getCachedAuth } from "../auth-cache.js";
+import { fetchWithBackoff } from "../http.js";
 import type { BeatAnalysis, ClassificationResult, Emotion, EmotionWeight } from "./types.js";
 
 // ── JSON extraction (handles markdown-fenced responses) ────────────────────
@@ -110,7 +111,7 @@ async function callExternal(systemPrompt: string, userPrompt: string): Promise<s
     .replace(/\/$/, "");
   const model = process.env.MARINARA_EXTENDER_DIGEST_MODEL ?? "gpt-4o-mini";
 
-  const res = await fetch(`${upstream}/v1/chat/completions`, {
+  const res = await fetchWithBackoff(`${upstream}/v1/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: auth },
     body: JSON.stringify({

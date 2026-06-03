@@ -820,9 +820,10 @@ export function registerApiRoutes(app: FastifyInstance): void {
       characterId: string;
       characterName: string;
       sourceType?: "chat" | "story";
+      title?: string; // progress label, e.g. the chat name
     };
   }>("/api/analyze-beats", async (req, reply) => {
-    const { messages, characterId, characterName, sourceType = "chat" } = req.body ?? {};
+    const { messages, characterId, characterName, sourceType = "chat", title } = req.body ?? {};
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return reply.code(400).send({ error: "messages array is required and must not be empty" });
@@ -834,7 +835,10 @@ export function registerApiRoutes(app: FastifyInstance): void {
     const identityKey = await resolveIdentity(characterId, characterName);
 
     try {
-      const result = await runSentimentPipeline(messages, identityKey, characterName, { sourceType, progressLabel: `${characterName} (chat history)` });
+      const result = await runSentimentPipeline(messages, identityKey, characterName, {
+        sourceType,
+        progressLabel: title?.trim() || `${characterName} (chat history)`,
+      });
       console.info(
         `[ME] sentiment pipeline — key:${identityKey} — ${result.beats.length} beats from ${result.chunksTotal} chunks`,
       );

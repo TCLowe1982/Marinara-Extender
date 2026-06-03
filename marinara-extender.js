@@ -1847,7 +1847,8 @@ function renderImportSection() {
     } else if (result) {
       const okEl = el("span", "me-import-ok");
       okEl.textContent = `+${result.count}`;
-      okEl.title = `${result.count} memor${result.count === 1 ? "y" : "ies"} added to character memory`;
+      okEl.title = `${result.count} emotional beat${result.count === 1 ? "" : "s"} added as retrievable memory`
+        + (result.skipped ? ` (${result.skipped} already done, skipped)` : "");
       row.appendChild(okEl);
     } else {
       const importBtn = el("button", "me-chat-import-btn");
@@ -1961,12 +1962,21 @@ async function importOneChat(chat) {
     if (messages.length === 0) {
       panelState.importResults[chat.id] = { count: 0 };
     } else {
-      const result = await memFetch("/api/digest", {
+      // Granular import: run the full sentiment pipeline (beats + retrievable
+      // companion entries), the same depth a live chat builds — not the old
+      // shallow one-shot digest. Per-beat dedup makes re-running safe.
+      const result = await memFetch("/api/analyze-beats", {
         method: "POST",
-        body: JSON.stringify({ characterId, characterName: characterName ?? "the character", messages }),
+        body: JSON.stringify({
+          characterId,
+          characterName: characterName ?? "the character",
+          messages,
+          sourceType: "chat",
+          title: chat.name || chat.title || `chat ${shorten(chat.id)}`,
+        }),
       });
       if (result?.error) throw new Error(result.detail ?? result.error);
-      panelState.importResults[chat.id] = { count: result.created ?? 0 };
+      panelState.importResults[chat.id] = { count: result.beats?.length ?? 0, skipped: result.skipped ?? 0 };
     }
   } catch (err) {
     console.error("[ME] import failed for chat", chat.id, ":", err);

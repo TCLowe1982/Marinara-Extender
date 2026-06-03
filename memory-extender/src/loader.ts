@@ -41,6 +41,33 @@ export interface LoaderSession {
   characterId: string;
   chatId: string;
   turnNumber: number;
+  // Recent conversation text (last user + AI turn), used to score lexical
+  // relevance for the "Current" working cache. Omitted on cold load → the cache
+  // falls back to recency only.
+  recentText?: string;
+}
+
+// ── Relevance (lexical) ─────────────────────────────────────────────────────────
+// Fraction of a memory summary's meaningful words that appear in the recent
+// conversation. This is what lets a memory resurface when its topic comes up,
+// even if it had drifted out of the working set — the miss-path a pure-recency
+// cache lacks.
+
+const RELEVANCE_STOPWORDS = new Set(
+  ("a an and are as at be been but by for from had has have he her his i if in into is it its me my " +
+   "no not of on or our she that the their them then they this to up us was we were what when which " +
+   "who will with would you your").split(" "),
+);
+
+function relevanceScore(summary: string, recentText: string): number {
+  if (!recentText) return 0;
+  const tok = (s: string) => s.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean);
+  const words = new Set(tok(summary).filter((w) => w.length > 2 && !RELEVANCE_STOPWORDS.has(w)));
+  if (words.size === 0) return 0;
+  const hay = new Set(tok(recentText));
+  let hit = 0;
+  for (const w of words) if (hay.has(w)) hit++;
+  return hit / words.size;
 }
 
 // ── Pass 1: load all three scope indexes ─────────────────────────────────────
@@ -61,58 +88,58 @@ async function loadIndexes(session: LoaderSession): Promise<LoadedIndexes> {
 }
 
 // ── Eidetic mode ──────────────────────────────────────────────────────────────
-// When MARINARA_EXTENDER_EIDETIC=1, all non-done entries are injected regardless
-// of token budget. Useful for debugging — confirms exactly what the character knows.
+// When MARINARA_EXTENDER_EIDETIC=1, every non-done entry is injected regardless
+// of the working-cache budget — i.e. all memories are treated as "Current".
+// Testing only: confirms exactly what the character knows.
 // Read at call time so the .env loaded by index.ts is respected.
 
 export function isEideticMode(): boolean {
   return process.env.MARINARA_EXTENDER_EIDETIC === "1";
 }
 
-// ── Pass 2: select entries within budget, then load them ─────────────────────
+// ── Pass 2: build the "Current" working cache within budget ──────────────────
+// Current is the active set loaded into the prompt. It is NOT a retention tier —
+// short/long/core (managed in promotion.ts) govern what's KEPT; Current governs
+// what's LOADED right now, by recent relevance. Falling out of Current never
+// demotes or deletes a memory; it just isn't in this turn's working set.
+//
+// Ranking: relevance to the current conversation → recency → proven value →
+// lane. Fill to budget. Core competes like everything else (recency-gated) but,
+// because it's never pruned, it resurfaces whenever its topic returns.
 
 function selectEntries(
   index: ScopeIndex | null,
   budget: number,
+  recentText: string,
 ): { selected: IndexEntry[]; used: number } {
   if (!index) return { selected: [], used: 0 };
 
   const candidates = [...index.entries].filter((e) => e.status !== "done");
 
-  // Eidetic mode: skip budget filtering entirely — load everything.
+  // Eidetic mode: skip budgeting — treat every memory as Current.
   if (isEideticMode()) {
     const used = candidates.reduce((sum, e) => sum + e.tokens, 0);
     return { selected: candidates, used };
   }
 
-  // Core and secondary_core are always included — they never expire or compete.
-  const permanent = candidates.filter(
-    (e) => e.tier === "core" || e.tier === "secondary_core",
-  );
-  const budgeted = candidates
-    .filter((e) => e.tier !== "core" && e.tier !== "secondary_core")
+  const ranked = candidates
+    .map((e) => ({ e, relevance: relevanceScore(e.summary, recentText), recency: e.lastRetrievedAt ?? e.lastAccessed ?? "" }))
     .sort((a, b) => {
-      const laneDiff = (LANE_PRIORITY[a.lane] ?? 99) - (LANE_PRIORITY[b.lane] ?? 99);
-      if (laneDiff !== 0) return laneDiff;
-      // Within the same lane: higher score first, then most recently accessed.
-      const scoreDiff = computeScore(b) - computeScore(a);
+      if (b.relevance !== a.relevance) return b.relevance - a.relevance;   // topical now
+      if (a.recency !== b.recency) return b.recency.localeCompare(a.recency); // recently used
+      const scoreDiff = computeScore(b.e) - computeScore(a.e);             // proven value
       if (scoreDiff !== 0) return scoreDiff;
-      return b.lastAccessed.localeCompare(a.lastAccessed);
+      return (LANE_PRIORITY[a.e.lane] ?? 99) - (LANE_PRIORITY[b.e.lane] ?? 99);
     });
 
-  const permanentTokens = permanent.reduce((sum, e) => sum + e.tokens, 0);
-  const remainingBudget = Math.max(0, budget - permanentTokens);
-
-  const selected: IndexEntry[] = [...permanent];
-  let budgetUsed = 0;
-
-  for (const candidate of budgeted) {
-    if (budgetUsed + candidate.tokens > remainingBudget) continue;
-    selected.push(candidate);
-    budgetUsed += candidate.tokens;
+  const selected: IndexEntry[] = [];
+  let used = 0;
+  for (const { e } of ranked) {
+    if (used + e.tokens > budget) continue; // greedy fill; skip oversized, keep packing
+    selected.push(e);
+    used += e.tokens;
   }
-
-  return { selected, used: permanentTokens + budgetUsed };
+  return { selected, used };
 }
 
 async function loadSelectedEntries(
@@ -259,10 +286,11 @@ export async function loadContext(
   const indexes = await loadIndexes(session);
   dbg(`indexes loaded — chat:${indexes.chat?.entries.length ?? 0} entries | char:${indexes.character?.entries.length ?? 0} entries | global:${indexes.global?.entries.length ?? 0} entries`);
 
-  // Pass 2 — select and load entries per scope
-  const chatSelection = selectEntries(indexes.chat, budgets.chat);
-  const charSelection = selectEntries(indexes.character, budgets.character);
-  const globalSelection = selectEntries(indexes.global, budgets.global);
+  // Pass 2 — build the Current working cache per scope (relevance + recency)
+  const recentText = session.recentText ?? "";
+  const chatSelection = selectEntries(indexes.chat, budgets.chat, recentText);
+  const charSelection = selectEntries(indexes.character, budgets.character, recentText);
+  const globalSelection = selectEntries(indexes.global, budgets.global, recentText);
   dbg(`entries selected — chat:${chatSelection.selected.length}/${indexes.chat?.entries.length ?? 0} (${chatSelection.used} tokens) | char:${charSelection.selected.length}/${indexes.character?.entries.length ?? 0} (${charSelection.used} tokens) | global:${globalSelection.selected.length}/${indexes.global?.entries.length ?? 0} (${globalSelection.used} tokens)`);
   if (chatSelection.selected.length) dbg(`  chat selected: ${chatSelection.selected.map(e => e.id).join(", ")}`);
   if (charSelection.selected.length) dbg(`  char selected: ${charSelection.selected.map(e => e.id).join(", ")}`);

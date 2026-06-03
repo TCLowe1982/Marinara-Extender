@@ -462,7 +462,10 @@ export function registerApiRoutes(app: FastifyInstance): void {
     }
 
     const { bookmarksExtracted } = await processResponse(chatId, turnNumber, messageText);
-    const { contextBlock, surfaced } = await loadContext({ characterId: identityKey, chatId, turnNumber });
+    const { contextBlock, surfaced } = await loadContext({
+      characterId: identityKey, chatId, turnNumber,
+      recentText: `${userMessageText}\n${messageText}`.trim(), // drives Current relevance
+    });
 
     const saved = created + bookmarksExtracted;
     if (saved > 0) {

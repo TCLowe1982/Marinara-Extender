@@ -19,11 +19,12 @@ import {
   findExactMatches,
   findFuzzySuggestion,
   bumpAliasUsage,
+  removeAliasRecord,
   USER_IDENTITY_KEY,
 } from "./aliases.js";
-import { beatIdForChunk, encodeBeat } from "./sentiment/encoder.js";
+import { beatIdForChunk, encodeBeat, writeBeat, readAllBeats, clearBeats } from "./sentiment/encoder.js";
 import { analyzeChunks } from "./sentiment/analyzer.js";
-import type { ClassificationResult } from "./sentiment/types.js";
+import type { ClassificationResult, EmotionalBeat } from "./sentiment/types.js";
 
 export const IGNORED_TTL_DAYS = 30;
 
@@ -36,11 +37,16 @@ export interface PendingSuggestion {
 export interface PendingBeat {
   beatId: string;                  // deterministic (beatIdForChunk) — dedup + idempotent migrate
   speaker: string;                 // original-case label as attributed
-  classification: ClassificationResult;
   sourceType: "chat" | "story";
   sourceChatId?: string;
   extractedAt: string;
   suggestion?: PendingSuggestion;  // fuzzy match, if any — never auto-routed
+  // Payload — exactly one is set. `classification` is an import-time orphan whose
+  // deep analysis is deferred until it's claimed. `analyzed` is an already-analyzed
+  // beat being re-homed (e.g. a deleted character's beats cascading back) — it's
+  // migrated by re-writing it under the new character, with no re-analysis.
+  classification?: ClassificationResult;
+  analyzed?: EmotionalBeat;
 }
 
 export interface HoldingPool {
@@ -107,10 +113,16 @@ export async function addPending(beat: Omit<PendingBeat, "beatId" | "extractedAt
   beatId?: string;
   extractedAt?: string;
 }): Promise<void> {
+  const beatId =
+    beat.beatId ??
+    beat.analyzed?.id ??
+    (beat.classification ? beatIdForChunk(beat.classification.chunk) : undefined);
+  if (!beatId) throw new Error("addPending: a classification or analyzed beat is required");
   const record: PendingBeat = {
-    beatId: beat.beatId ?? beatIdForChunk(beat.classification.chunk),
+    beatId,
     speaker: beat.speaker,
     classification: beat.classification,
+    analyzed: beat.analyzed,
     sourceType: beat.sourceType,
     sourceChatId: beat.sourceChatId,
     extractedAt: beat.extractedAt ?? new Date().toISOString(),
@@ -157,15 +169,26 @@ export async function migratePendingBeats(
   const pending = await takeSpeaker(normalizedLabel);
   if (pending.length === 0) return { migrated: 0 };
 
-  const classifications: ClassificationResult[] = pending.map((p) => p.classification);
-  const provenanceByBeat = new Map(pending.map((p) => [p.beatId, p] as const));
-
-  const analyzed = await analyze(classifications);
   let migrated = 0;
-  for (const a of analyzed) {
-    const src = provenanceByBeat.get(beatIdForChunk(a.result.chunk));
-    await encodeBeat(identityKey, a.result, a.analysis, src?.sourceType ?? "story", src?.sourceChatId);
+
+  // Already-analyzed beats (cascade re-home) are re-written under the new
+  // character directly — no LLM. Beat ids are deterministic, so this is idempotent.
+  for (const p of pending) {
+    if (!p.analyzed) continue;
+    await writeBeat(identityKey, { ...p.analyzed, ...(p.sourceChatId ? { sourceChatId: p.sourceChatId } : {}) });
     migrated++;
+  }
+
+  // Import-time orphans (deferred): run deep analysis now, then encode.
+  const toAnalyze = pending.filter((p) => !p.analyzed && p.classification);
+  if (toAnalyze.length) {
+    const provenanceByBeat = new Map(toAnalyze.map((p) => [p.beatId, p] as const));
+    const analyzed = await analyze(toAnalyze.map((p) => p.classification!));
+    for (const a of analyzed) {
+      const src = provenanceByBeat.get(beatIdForChunk(a.result.chunk));
+      await encodeBeat(identityKey, a.result, a.analysis, src?.sourceType ?? "story", src?.sourceChatId);
+      migrated++;
+    }
   }
   return { migrated };
 }
@@ -246,6 +269,22 @@ export async function routeOrphans(
   return { autoRouted, held, pendingLabels: [...pendingLabels] };
 }
 
+// Cascade for a deleted character: move all of its (already-analyzed) beats back
+// into the holding pool under their original speaker labels so they can be
+// re-mapped, then clear its beat store and drop its alias record. Idempotent —
+// re-running on a character with no beats is a no-op. NOTE: companion ledger
+// entries for the character are not touched here; deleting the character's scope
+// dir is the caller's responsibility.
+export async function orphanCharacterBeats(identityKey: string): Promise<{ orphaned: number }> {
+  const beats = await readAllBeats(identityKey);
+  for (const b of beats) {
+    await addPending({ speaker: b.speaker, analyzed: b, sourceType: b.sourceType, sourceChatId: b.sourceChatId });
+  }
+  await clearBeats(identityKey);
+  await removeAliasRecord(identityKey);
+  return { orphaned: beats.length };
+}
+
 // ── Ignore bucket (30-day recoverable soft delete) ─────────────────────────────
 
 export async function ignoreSpeaker(normalizedLabel: string): Promise<{ ignored: number }> {
@@ -259,6 +298,14 @@ export async function ignoreSpeaker(normalizedLabel: string): Promise<{ ignored:
     });
   });
   return { ignored: pending.length };
+}
+
+// One row per ignored group, for an "undo" affordance in the UI.
+export async function listIgnoredSpeakers(): Promise<Array<{ label: string; count: number; ignoredAt: string }>> {
+  const bucket = (await readYamlFile<IgnoredBucket>(ignoredPath())) ?? { items: [] };
+  return bucket.items
+    .map((i) => ({ label: i.label, count: i.beats.length, ignoredAt: i.ignoredAt }))
+    .sort((a, b) => b.ignoredAt.localeCompare(a.ignoredAt));
 }
 
 // Restore an ignored group back into the pending pool (user changed their mind).

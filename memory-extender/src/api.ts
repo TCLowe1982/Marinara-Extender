@@ -33,7 +33,23 @@ import { runPromotion, runPromotionAll, recordRecitation } from "./promotion.js"
 import { runCleanup } from "./cleanup.js";
 import { updateSoftClock, makeTimeContext } from "./soft-clock.js";
 import { runSentimentPipeline, collectPassingClassifications, speakerMatches } from "./sentiment/pipeline.js";
-import { routeOrphans } from "./holding-pool.js";
+import {
+  routeOrphans,
+  listPendingSpeakers,
+  migratePendingBeats,
+  ignoreSpeaker,
+  restoreIgnored,
+  listIgnoredSpeakers,
+  purgeExpiredIgnored,
+  orphanCharacterBeats,
+} from "./holding-pool.js";
+import {
+  readAliasTable,
+  addAlias,
+  removeAlias,
+  findExactMatches,
+  normalizeLabel,
+} from "./aliases.js";
 import { chunkMessages } from "./sentiment/chunker.js";
 import { classifyChunks } from "./sentiment/classifier.js";
 import { analyzeChunks } from "./sentiment/analyzer.js";
@@ -1169,6 +1185,112 @@ export function registerApiRoutes(app: FastifyInstance): void {
     }
     console.info(`[ME] beats->entries — key:${identityKey} — ${created} entries created from ${beats.length} beats`);
     return reply.send({ ok: true, beats: beats.length, created });
+  });
+
+  // ── Speaker resolution (holding pool + alias table) ───────────────────────
+  // GET  /api/pending-speakers   — unresolved speaker labels + counts + suggestion
+  // POST /api/resolve-speaker    — map | create | ignore a pending speaker
+  // GET  /api/aliases            — the full alias table
+  // POST /api/aliases            — add an alias (collision-checked)
+  // DELETE /api/aliases          — remove an alias
+  // GET  /api/ignored-speakers   — ignored groups (undo affordance)
+  // POST /api/restore-speaker    — un-ignore a group back into the pool
+  // POST /api/orphan-character   — cascade a deleted character's beats back to pool
+
+  app.get("/api/pending-speakers", async (_req, reply) => {
+    // Opportunistically hard-delete ignored groups past the 30-day window.
+    await purgeExpiredIgnored().catch(() => {});
+    const speakers = await listPendingSpeakers();
+    return reply.send({ speakers });
+  });
+
+  app.post<{
+    Body: { label: string; action: "map" | "create" | "ignore"; characterId?: string; characterName?: string };
+  }>("/api/resolve-speaker", async (req, reply) => {
+    const { label, action, characterId, characterName } = req.body ?? {};
+    if (!label?.trim()) return reply.code(400).send({ error: "label is required" });
+    const normalized = normalizeLabel(label);
+
+    if (action === "ignore") {
+      const { ignored } = await ignoreSpeaker(normalized);
+      console.info(`[ME] speaker "${label}" ignored — ${ignored} beat(s) moved to recoverable bucket`);
+      return reply.send({ ok: true, action, ignored });
+    }
+
+    // map and create are identical server-side: the extension creates the
+    // Marinara card first (for "create") and passes the resulting characterId.
+    if (action === "map" || action === "create") {
+      if (!characterId || !characterName?.trim()) {
+        return reply.code(400).send({ error: "characterId and characterName are required to map/create" });
+      }
+      const identityKey = await resolveIdentity(characterId, characterName);
+      await addAlias(identityKey, characterName.trim(), label.trim());
+      const { migrated } = await migratePendingBeats(normalized, identityKey);
+      console.info(`[ME] speaker "${label}" ${action} → ${characterName} (${identityKey}) — ${migrated} beat(s) migrated`);
+      return reply.send({ ok: true, action, identityKey, migrated });
+    }
+
+    return reply.code(400).send({ error: `unknown action "${action}"` });
+  });
+
+  app.get("/api/aliases", async (_req, reply) => {
+    return reply.send({ aliases: await readAliasTable() });
+  });
+
+  app.post<{
+    Body: { label: string; characterId?: string; characterName?: string; identityKey?: string; force?: boolean };
+  }>("/api/aliases", async (req, reply) => {
+    const { label, characterId, characterName, identityKey: directKey, force } = req.body ?? {};
+    if (!label?.trim()) return reply.code(400).send({ error: "label is required" });
+    if (!directKey && (!characterId || !characterName?.trim())) {
+      return reply.code(400).send({ error: "identityKey, or characterId + characterName, is required" });
+    }
+    const identityKey = directKey ?? (await resolveIdentity(characterId!, characterName));
+
+    // Collision: label already maps to a DIFFERENT character. Refuse unless forced
+    // so the UI can prompt the user to pick an owner (spec §6).
+    const table = await readAliasTable();
+    const conflicts = findExactMatches(table, label).filter((m) => m.identityKey !== identityKey);
+    if (conflicts.length > 0 && !force) {
+      return reply.code(409).send({ error: "alias collision", collision: conflicts });
+    }
+    await addAlias(identityKey, characterName?.trim() || directKey || "", label.trim());
+    return reply.send({ ok: true, identityKey, label: label.trim() });
+  });
+
+  app.delete<{
+    Body: { identityKey: string; label: string };
+  }>("/api/aliases", async (req, reply) => {
+    const { identityKey, label } = req.body ?? {};
+    if (!identityKey?.trim() || !label?.trim()) {
+      return reply.code(400).send({ error: "identityKey and label are required" });
+    }
+    await removeAlias(identityKey.trim(), label.trim());
+    return reply.send({ ok: true });
+  });
+
+  app.get("/api/ignored-speakers", async (_req, reply) => {
+    return reply.send({ ignored: await listIgnoredSpeakers() });
+  });
+
+  app.post<{
+    Body: { label: string };
+  }>("/api/restore-speaker", async (req, reply) => {
+    const { label } = req.body ?? {};
+    if (!label?.trim()) return reply.code(400).send({ error: "label is required" });
+    const { restored } = await restoreIgnored(label.trim());
+    return reply.send({ ok: true, restored });
+  });
+
+  app.post<{
+    Body: { characterId: string; characterName?: string };
+  }>("/api/orphan-character", async (req, reply) => {
+    const { characterId, characterName } = req.body ?? {};
+    if (!characterId?.trim()) return reply.code(400).send({ error: "characterId is required" });
+    const identityKey = await resolveIdentity(characterId.trim(), characterName);
+    const { orphaned } = await orphanCharacterBeats(identityKey);
+    console.info(`[ME] character ${identityKey} orphaned — ${orphaned} beat(s) returned to holding pool`);
+    return reply.send({ ok: true, identityKey, orphaned });
   });
 
   // ── GET /api/identity ─────────────────────────────────────────────────────

@@ -26,9 +26,10 @@ import {
   restoreIgnored,
   purgeExpiredIgnored,
   readHoldingPool,
+  orphanCharacterBeats,
 } from "../holding-pool.js";
-import { readBeatIndex, readBeat } from "../sentiment/encoder.js";
-import type { ClassificationResult } from "../sentiment/types.js";
+import { readBeatIndex, readBeat, writeBeat } from "../sentiment/encoder.js";
+import type { ClassificationResult, EmotionalBeat } from "../sentiment/types.js";
 import type { AnalyzedBeat as AB } from "../sentiment/analyzer.js";
 
 let dir: string;
@@ -51,6 +52,15 @@ function classification(speaker: string, text: string, turn: number): Classifica
     salience: 0.7,
     structuralMatches: [],
     passesThreshold: true,
+  };
+}
+
+function beatFixture(speaker: string, id: string, turn: number): EmotionalBeat {
+  return {
+    id, speaker, emotion: "fear", text: "a line",
+    motivation: "m", relationalDynamics: "r", outcome: "o",
+    salience: 0.7, turnStart: turn, turnEnd: turn,
+    created: "2026-01-01", sourceType: "chat", sourceChatId: "chat-1",
   };
 }
 
@@ -225,6 +235,26 @@ describe("holding pool", () => {
     expect(summary.autoRouted).toBe(0);
     expect(summary.held).toBe(1);
     expect((await listPendingSpeakers())[0]?.suggestion).toBeUndefined(); // forced manual
+  });
+
+  it("cascades a deleted character's beats back to the pool and re-homes them without re-analysis", async () => {
+    await writeBeat("char-A", beatFixture("Mari", "beat-aaa", 1));
+    await addAlias("char-A", "Mari", "Mari");
+
+    const { orphaned } = await orphanCharacterBeats("char-A");
+    expect(orphaned).toBe(1);
+    expect((await readBeatIndex("char-A"))?.entries ?? []).toHaveLength(0); // beats cleared
+    expect((await readAliasTable())["char-A"]).toBeUndefined();             // alias record dropped
+    expect((await listPendingSpeakers()).find((r) => r.normalized === "mari")?.count).toBe(1);
+
+    // Re-home to a new character: the analyzer must NOT be called for an already-
+    // analyzed beat (it would throw if it were), and the beat id is preserved.
+    const throwAnalyze = (async () => { throw new Error("must not re-analyze a re-homed beat"); }) as unknown as typeof stubAnalyze;
+    const { migrated } = await migratePendingBeats("mari", "char-B", { analyze: throwAnalyze });
+    expect(migrated).toBe(1);
+    const idx = await readBeatIndex("char-B");
+    expect(idx?.entries).toHaveLength(1);
+    expect(idx?.entries[0]?.id).toBe("beat-aaa");
   });
 
   it("purges ignored groups older than the TTL only", async () => {

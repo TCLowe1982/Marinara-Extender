@@ -148,6 +148,17 @@ marinara.addStyle(`
   .me-onboard-bar-fill { height: 100%; background: #8b5cf6; transition: width 0.3s ease; }
   .me-onboard-check { font-size: 30px; color: #34d399; line-height: 1; }
   .me-onboard-payoff { font-size: 14px; font-weight: 600; color: #e8e5e0; line-height: 1.45; max-width: 250px; }
+  .me-onboard-scope { display: flex; gap: 0; border: 1px solid #3d3a36; border-radius: 6px; overflow: hidden; margin-top: 4px; }
+  .me-scope-btn { background: none; border: none; color: #8b8680; font-size: 11px; font-weight: 600; padding: 6px 12px; cursor: pointer; font-family: inherit; }
+  .me-scope-btn:hover { color: #e8e5e0; background: #211f1c; }
+  .me-scope-btn.active { background: #8b5cf6; color: #fff; }
+  .me-onboard-choosebar { display: flex; align-items: center; gap: 10px; width: 100%; justify-content: center; }
+  .me-onboard-list { width: 100%; max-height: 240px; overflow-y: auto; border: 1px solid #2e2b27; border-radius: 6px; text-align: left; }
+  .me-onboard-chatrow { display: flex; align-items: center; gap: 8px; padding: 5px 8px; cursor: pointer; border-bottom: 1px solid #211f1c; }
+  .me-onboard-chatrow:last-child { border-bottom: none; }
+  .me-onboard-chatrow:hover { background: #211f1c; }
+  .me-onboard-chatrow input { accent-color: #8b5cf6; cursor: pointer; flex-shrink: 0; }
+  .me-onboard-chatlabel { font-size: 11px; color: #d8d4cd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* Icon buttons in header */
   .me-icon-btn {
@@ -586,7 +597,11 @@ const panelState = {
   importResults: {},       // { [chatId]: { count } | { error } }
   importFilter: "",        // live search string
   // First-run onboarding import flow
-  importFlow: "intro",     // intro | estimating | ready | running | done
+  importFlow: "intro",     // intro | choosing | estimating | ready | running | done
+  importScope: "character",// "character" (open char) | "all" (every character)
+  importChatsAll: null,    // all chats w/ character info (for the "all" scope)
+  importChosen: null,      // Set<chatId> when picking a subset
+  importTargets: [],       // resolved chat list currently being imported
   importFlowStats: null,   // { chats, calls, tokens }
   importFlowProgress: null,// { current, total, startMs }
   importFlowResult: null,  // { moments, chats, failed }
@@ -1000,19 +1015,59 @@ function renderOnboarding(content) {
     return;
   }
 
+  if (flow === "choosing") {
+    const chats = panelState.importScope === "all"
+      ? (panelState.importChatsAll ?? [])
+      : (panelState.importChats ?? []);
+    const chosen = panelState.importChosen ?? new Set();
+    wrap.append(Object.assign(el("div", "me-onboard-head"), { textContent: "Choose chats to import" }));
+    const bar = el("div", "me-onboard-choosebar");
+    const selAll = el("a", "me-onboard-skip"); selAll.textContent = "Select all"; selAll.href = "#";
+    selAll.addEventListener("click", (e) => { e.preventDefault(); setAllChosen(true); });
+    const selNone = el("a", "me-onboard-skip"); selNone.textContent = "None"; selNone.href = "#";
+    selNone.addEventListener("click", (e) => { e.preventDefault(); setAllChosen(false); });
+    bar.append(selAll, Object.assign(el("span", "me-onboard-sub"), { textContent: `${chosen.size}/${chats.length} selected` }), selNone);
+    wrap.append(bar);
+
+    const list = el("div", "me-onboard-list");
+    for (const c of chats) {
+      const row = el("label", "me-onboard-chatrow");
+      const cb = el("input"); cb.type = "checkbox"; cb.checked = chosen.has(c.id);
+      cb.addEventListener("change", () => toggleChosen(c.id));
+      const lbl = el("span", "me-onboard-chatlabel");
+      lbl.textContent = panelState.importScope === "all" ? `${c.characterName} · ${c.name}` : c.name;
+      lbl.title = lbl.textContent;
+      row.append(cb, lbl);
+      list.append(row);
+    }
+    wrap.append(list);
+
+    const go = el("button", "me-btn-primary me-onboard-cta");
+    go.textContent = `Import selected (${chosen.size})`;
+    go.disabled = chosen.size === 0;
+    go.addEventListener("click", onboardScanChosen);
+    wrap.append(go);
+    const back = el("a", "me-onboard-skip"); back.textContent = "Back"; back.href = "#";
+    back.addEventListener("click", (e) => { e.preventDefault(); panelState.importFlow = "intro"; renderPanel(); });
+    wrap.append(back);
+    content.appendChild(wrap);
+    return;
+  }
+
   if (flow === "ready") {
-    const s = panelState.importFlowStats ?? { chats: 0, calls: 0, tokens: 0 };
+    const s = panelState.importFlowStats ?? { chats: 0, calls: 0, tokens: 0, characters: 0 };
     if (s.chats === 0) {
-      wrap.append(Object.assign(el("div", "me-onboard-head"), { textContent: "No past chats yet" }));
-      wrap.append(Object.assign(el("div", "me-onboard-copy"), { textContent: "This character has no other conversations to import. Come back once you've chatted more." }));
+      wrap.append(Object.assign(el("div", "me-onboard-head"), { textContent: "Nothing to import" }));
+      wrap.append(Object.assign(el("div", "me-onboard-copy"), { textContent: "No conversations found for this selection. Come back once you've chatted more." }));
       const ok = el("button", "me-btn-primary me-onboard-cta"); ok.textContent = "Got it"; ok.addEventListener("click", skipOnboarding);
       wrap.append(ok);
       content.appendChild(wrap);
       return;
     }
     wrap.append(Object.assign(el("div", "me-onboard-head"), { textContent: "Ready to import" }));
+    const charPart = s.characters > 1 ? ` across ${s.characters} characters` : "";
     wrap.append(Object.assign(el("div", "me-onboard-sub"), {
-      textContent: `${s.chats.toLocaleString()} conversation${s.chats === 1 ? "" : "s"} · ~${s.calls.toLocaleString()} analysis call${s.calls === 1 ? "" : "s"} (~${s.tokens.toLocaleString()} tokens)`,
+      textContent: `${s.chats.toLocaleString()} conversation${s.chats === 1 ? "" : "s"}${charPart} · ~${s.calls.toLocaleString()} analysis call${s.calls === 1 ? "" : "s"} (~${s.tokens.toLocaleString()} tokens)`,
     }));
     const start = el("button", "me-btn-primary me-onboard-cta"); start.textContent = "Start import"; start.addEventListener("click", onboardRun);
     wrap.append(start);
@@ -1026,8 +1081,25 @@ function renderOnboarding(content) {
   // intro (default)
   wrap.append(Object.assign(el("div", "me-onboard-head"), { textContent: "Give your characters their memory" }));
   wrap.append(Object.assign(el("div", "me-onboard-copy"), { textContent: "Import your past chats so your characters can remember them." }));
-  const btn = el("button", "me-btn-primary me-onboard-cta"); btn.textContent = "Import my past chats"; btn.addEventListener("click", onboardScan);
+
+  // Scope toggle: this character vs all characters.
+  const scopeRow = el("div", "me-onboard-scope");
+  for (const opt of [{ k: "character", t: "This character" }, { k: "all", t: "All characters" }]) {
+    const b = el("button", "me-scope-btn" + (panelState.importScope === opt.k ? " active" : ""));
+    b.textContent = opt.t;
+    b.addEventListener("click", () => setImportScope(opt.k));
+    scopeRow.append(b);
+  }
+  wrap.append(scopeRow);
+
+  const btn = el("button", "me-btn-primary me-onboard-cta");
+  btn.textContent = panelState.importScope === "all" ? "Import all chats — every character" : "Import all my past chats";
+  btn.addEventListener("click", onboardScanAll);
   wrap.append(btn);
+
+  const choose = el("a", "me-onboard-skip"); choose.textContent = "Choose which chats"; choose.href = "#";
+  choose.addEventListener("click", (e) => { e.preventDefault(); openChooser(); });
+  wrap.append(choose);
   const later = el("a", "me-onboard-skip"); later.textContent = "Not now"; later.href = "#";
   later.addEventListener("click", (e) => { e.preventDefault(); skipOnboarding(); });
   wrap.append(later);
@@ -2017,55 +2089,146 @@ function setOnboarded() { try { localStorage.setItem(ONBOARDED_KEY, "1"); } catc
 function skipOnboarding() { setOnboarded(); renderPanel(); }
 function finishOnboarding() { setOnboarded(); closePanel(); }
 
-// Step 1: load the chat list and run the free estimate across all of them.
-async function onboardScan() {
+function setImportScope(scope) {
+  if (panelState.importScope === scope) return;
+  panelState.importScope = scope;
+  panelState.importChosen = null; // selection is scope-specific
+  renderPanel();
+}
+
+// Load every chat (across all characters), each tagged with its character, for
+// the "all characters" scope. The "this character" scope reuses loadImportChats.
+async function loadAllChatsForImport() {
+  if (panelState.importChatsAll || !panelState.session) return;
+  await loadAllCharacters(); // populates panelState.allCharacters [{id,name}]
+  const nameById = new Map((panelState.allCharacters ?? []).map(c => [c.id, c.name]));
+  try {
+    const [chatsRes, foldersRes] = await Promise.all([
+      marinara.apiFetch("/chats"),
+      marinara.apiFetch("/chat-folders").catch(() => []),
+    ]);
+    const list    = Array.isArray(chatsRes)   ? chatsRes   : (chatsRes?.chats   ?? chatsRes?.data   ?? []);
+    const folders = Array.isArray(foldersRes) ? foldersRes : (foldersRes?.folders ?? foldersRes?.data ?? []);
+    const folderMap = new Map(folders.map(f => { const d = parseData(f); return [String(f.id ?? d.id), String(f.name ?? d.name ?? "")]; }));
+    const openChatId = String(panelState.session.chatId);
+    panelState.importChatsAll = list
+      .map(c => {
+        const d = parseData(c);
+        const id = String(c.id ?? d.id);
+        const characterId = getChatCharacterId(c);
+        return {
+          id,
+          name: String(c.name ?? c.title ?? d.name ?? d.title ?? `Chat ${shorten(id, 8)}`),
+          folderName: folderMap.get(String(c.folderId ?? d.folderId ?? "")) ?? "",
+          characterId,
+          characterName: nameById.get(characterId) ?? "Unknown",
+        };
+      })
+      .filter(c => c.id && c.characterId && c.id !== openChatId)
+      .sort((a, b) => a.characterName.localeCompare(b.characterName) || a.name.localeCompare(b.name));
+  } catch {
+    panelState.importChatsAll = [];
+  }
+}
+
+// The chat list for the current scope (loading as needed). Each chat carries its
+// characterId/characterName so import routes beats to the right character.
+async function getScopeChats() {
+  if (panelState.importScope === "all") {
+    await loadAllChatsForImport();
+    return panelState.importChatsAll ?? [];
+  }
+  if (panelState.importChats === null) await loadImportChats();
+  const { characterId, characterName } = panelState.session ?? {};
+  return (panelState.importChats ?? []).map(c => ({ ...c, characterId, characterName }));
+}
+
+// Open the per-chat chooser (all selected by default) for the current scope.
+async function openChooser() {
+  panelState.importFlow = "estimating"; // show a brief "scanning" while listing
+  renderPanel();
+  const chats = await getScopeChats();
+  panelState.importChosen = new Set(chats.map(c => c.id));
+  panelState.importFlow = "choosing";
+  renderPanel();
+}
+
+function toggleChosen(id) {
+  if (!panelState.importChosen) return;
+  if (panelState.importChosen.has(id)) panelState.importChosen.delete(id);
+  else panelState.importChosen.add(id);
+  renderPanel();
+}
+
+async function setAllChosen(on) {
+  const chats = await getScopeChats();
+  panelState.importChosen = on ? new Set(chats.map(c => c.id)) : new Set();
+  renderPanel();
+}
+
+// Estimate (free) over a target chat list, then move to the "ready" gate.
+async function onboardScan(targets) {
   if (!panelState.session) return;
+  panelState.importTargets = targets;
   panelState.importFlow = "estimating";
   panelState.importFlowStats = null;
   renderPanel();
 
-  if (panelState.importChats === null) await loadImportChats(); // populates panelState.importChats
-  const chats = panelState.importChats ?? [];
-  const { characterName } = panelState.session;
-
-  let calls = 0, tokens = 0, counted = 0;
+  let calls = 0, tokens = 0, counted = 0, characters = new Set();
   panelState._onboardMsgs = {};
-  for (const chat of chats) {
-    panelState.importFlowProgress = { current: ++counted, total: chats.length, startMs: 0 };
+  for (const chat of targets) {
+    panelState.importFlowProgress = { current: ++counted, total: targets.length, startMs: 0 };
     renderPanel();
+    characters.add(chat.characterId);
     try {
       const messages = await fetchChatMessages(chat.id);
       panelState._onboardMsgs[chat.id] = messages;
       if (!messages.length) continue;
       const est = await memFetch("/api/estimate-beats", {
         method: "POST",
-        body: JSON.stringify({ messages, characterName: characterName ?? "the character" }),
+        body: JSON.stringify({ messages, characterName: chat.characterName ?? "the character" }),
       });
       calls += est.analysisCalls ?? 0;
       tokens += est.estTokens ?? 0;
     } catch { /* uncountable — skip in estimate */ }
   }
 
-  panelState.importFlowStats = { chats: chats.length, calls, tokens };
+  panelState.importFlowStats = { chats: targets.length, calls, tokens, characters: characters.size };
   panelState.importFlowProgress = null;
   panelState.importFlow = "ready";
   renderPanel();
 }
 
-// Step 2: run the import, one chat at a time, skipping failures.
+// Begin with the full scope (the "Import all" button).
+async function onboardScanAll() {
+  const chats = await getScopeChats();
+  onboardScan(chats);
+}
+
+// Begin with the chosen subset (from the chooser).
+function onboardScanChosen() {
+  const chosen = panelState.importChosen ?? new Set();
+  // resolve chosen ids against the scope list we already loaded
+  const pool = panelState.importScope === "all"
+    ? (panelState.importChatsAll ?? [])
+    : (panelState.importChats ?? []).map(c => ({ ...c, characterId: panelState.session?.characterId, characterName: panelState.session?.characterName }));
+  onboardScan(pool.filter(c => chosen.has(c.id)));
+}
+
+// Run the import over importTargets, one chat at a time, skipping failures.
 async function onboardRun() {
   if (!panelState.session) return;
-  const chats = panelState.importChats ?? [];
+  const targets = panelState.importTargets ?? [];
   panelState.importCancel = false;
   panelState.importFlow = "running";
-  panelState.importFlowProgress = { current: 0, total: chats.length, startMs: Date.now() };
+  panelState.importFlowProgress = { current: 0, total: targets.length, startMs: Date.now() };
   renderPanel();
 
   let moments = 0, failed = 0, done = 0;
-  for (const chat of chats) {
+  for (const chat of targets) {
     if (panelState.importCancel) break;
     done++;
-    panelState.importFlowProgress = { current: done, total: chats.length, startMs: panelState.importFlowProgress.startMs };
+    panelState.importFlowProgress = { current: done, total: targets.length, startMs: panelState.importFlowProgress.startMs };
     renderPanel();
     try {
       await importOneChat(chat, panelState._onboardMsgs[chat.id]); // graceful: catches internally
@@ -2073,7 +2236,6 @@ async function onboardRun() {
       if (r?.error) failed++;
       else moments += r?.count ?? 0;
     } catch (err) {
-      // Defensive — importOneChat already catches, but never let one chat halt the batch.
       console.error("[ME] onboarding import skipped a chat:", chat.id, err);
       failed++;
     }
@@ -2162,7 +2324,11 @@ async function fetchChatMessages(chatId) {
 
 async function importOneChat(chat, preFetched) {
   if (!panelState.session) return;
-  const { characterId, characterName } = panelState.session;
+  // Use the chat's own character when present (all-characters import); otherwise
+  // the open session's character (single-character / Import tab).
+  const characterId = chat.characterId ?? panelState.session.characterId;
+  const characterName = chat.characterName ?? panelState.session.characterName;
+  if (!characterId) return;
   panelState.importingSet.add(chat.id);
   renderPanel();
 

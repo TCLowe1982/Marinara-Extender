@@ -118,19 +118,26 @@ export function isEideticMode(): boolean {
 // lane. Fill to budget. Core competes like everything else (recency-gated) but,
 // because it's never pruned, it resurfaces whenever its topic returns.
 
+// Minimum relevance for a load to count as "summoned" (topically pulled in)
+// rather than merely "around" (rode in on the recency fallback). Only summoned
+// loads earn exposure credit (retrievalCount), so the promotion signal tracks
+// being pulled in by the conversation, not passive presence.
+const RELEVANCE_CREDIT_THRESHOLD = 0.1;
+
 function selectEntries(
   index: ScopeIndex | null,
   budget: number,
   recentText: string,
-): { selected: IndexEntry[]; used: number } {
-  if (!index) return { selected: [], used: 0 };
+): { selected: IndexEntry[]; used: number; summoned: Set<string> } {
+  if (!index) return { selected: [], used: 0, summoned: new Set() };
 
   const candidates = [...index.entries].filter((e) => e.status !== "done");
 
-  // Eidetic mode: skip budgeting — treat every memory as Current.
+  // Eidetic mode: skip budgeting — treat every memory as Current. No exposure
+  // credit (it's an inspection mode, not real usage).
   if (isEideticMode()) {
     const used = candidates.reduce((sum, e) => sum + e.tokens, 0);
-    return { selected: candidates, used };
+    return { selected: candidates, used, summoned: new Set() };
   }
 
   const ranked = candidates
@@ -144,13 +151,15 @@ function selectEntries(
     });
 
   const selected: IndexEntry[] = [];
+  const summoned = new Set<string>();
   let used = 0;
-  for (const { e } of ranked) {
+  for (const { e, relevance } of ranked) {
     if (used + e.tokens > budget) continue; // greedy fill; skip oversized, keep packing
     selected.push(e);
+    if (relevance > RELEVANCE_CREDIT_THRESHOLD) summoned.add(e.id); // pulled in by topic, not just present
     used += e.tokens;
   }
-  return { selected, used };
+  return { selected, used, summoned };
 }
 
 async function loadSelectedEntries(
@@ -360,41 +369,28 @@ export async function loadContext(
   dbg(`contextBlock assembled — total length:${contextBlock.length} (memoryBlock:${memoryBlock.length})`);
   if (!memoryBlock) dbg("  ⚠ no memory content — only instructions will be injected");
 
-  // Background: stamp lastAccessed + increment retrievalCount on every entry surfaced.
+  // Background: stamp lastAccessed on every loaded entry; increment
+  // retrievalCount ONLY for entries that were summoned (pulled in by topical
+  // relevance), not those that merely rode in on the recency fallback. This is
+  // what keeps the promotion signal honest: "was SUMMONED" earns credit, "was
+  // AROUND" does not. As the Current cache improves, more loads are relevance-
+  // driven, so exposure-count becomes a better proxy for use on its own.
   // Fire-and-forget — don't block the response on file I/O.
-  const nowIso = new Date().toISOString();
-  const todayStr = nowIso.slice(0, 10);
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const stamp = (scope: Scope, scopeId: string, e: IndexEntry, summoned: boolean) =>
+    upsertIndexEntry(scope, scopeId, {
+      ...e,
+      lastAccessed: todayStr,
+      // Exposure credit is gated on relevance — see note above. lastRetrievedAt
+      // is NOT stamped here either way: being loaded (even when summoned) is not
+      // the same as being used. That's stamped in recordRecitation (promotion.ts)
+      // only when the model demonstrably uses the entry.
+      retrievalCount: (e.retrievalCount ?? 0) + (summoned ? 1 : 0),
+    });
   void Promise.all([
-    ...chatSelection.selected.map((e) =>
-      upsertIndexEntry("chat", session.chatId, {
-        ...e,
-        lastAccessed: todayStr,
-        retrievalCount: (e.retrievalCount ?? 0) + 1,
-        // NOTE: lastRetrievedAt is NOT stamped here. Being loaded into context is
-        // not the same as being used. It's stamped in recordRecitation (promotion.ts)
-        // only when the model demonstrably uses the entry — that's the honest signal.
-      }),
-    ),
-    ...charSelection.selected.map((e) =>
-      upsertIndexEntry("character", session.characterId, {
-        ...e,
-        lastAccessed: todayStr,
-        retrievalCount: (e.retrievalCount ?? 0) + 1,
-        // NOTE: lastRetrievedAt is NOT stamped here. Being loaded into context is
-        // not the same as being used. It's stamped in recordRecitation (promotion.ts)
-        // only when the model demonstrably uses the entry — that's the honest signal.
-      }),
-    ),
-    ...globalSelection.selected.map((e) =>
-      upsertIndexEntry("global", "global", {
-        ...e,
-        lastAccessed: todayStr,
-        retrievalCount: (e.retrievalCount ?? 0) + 1,
-        // NOTE: lastRetrievedAt is NOT stamped here. Being loaded into context is
-        // not the same as being used. It's stamped in recordRecitation (promotion.ts)
-        // only when the model demonstrably uses the entry — that's the honest signal.
-      }),
-    ),
+    ...chatSelection.selected.map((e) => stamp("chat", session.chatId, e, chatSelection.summoned.has(e.id))),
+    ...charSelection.selected.map((e) => stamp("character", session.characterId, e, charSelection.summoned.has(e.id))),
+    ...globalSelection.selected.map((e) => stamp("global", "global", e, globalSelection.summoned.has(e.id))),
   ]).catch(() => {});
 
   const indexTokensUsed =

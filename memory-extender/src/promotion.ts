@@ -60,8 +60,11 @@ function nextTier(entry: IndexEntry): {
     if (score >= TIER_SCORE_LONG) {
       return { tier: "long", cycleCount: cycles, prune: false };
     }
-    // Only prune if the entry has been retrieved at least once — brand-new
-    // entries that haven't been surfaced yet shouldn't be pruned immediately.
+    // Only prune if the entry has been SUMMONED at least once (retrievalCount is
+    // now relevance-gated in the loader — see loader.ts). This means an entry
+    // that was pulled in by topic, given its chance, and still went stale is
+    // prunable; an entry that was never once topically relevant is left alone
+    // rather than deleted (it may simply be waiting for its subject to come up).
     if (stale > TIER_DAYS_SHORT_PRUNES && (entry.retrievalCount ?? 0) > 0) {
       return { tier: "short", cycleCount: cycles, prune: true };
     }

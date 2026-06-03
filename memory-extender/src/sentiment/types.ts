@@ -100,4 +100,5 @@ export interface EmotionalBeat {
   turnEnd: number;
   created: string;               // ISO date
   sourceType: "chat" | "story";  // came from live chat or story import
+  sourceChatId?: string;         // provenance: the chat this beat was imported from
 }

@@ -236,6 +236,33 @@ export async function mutateIndex(
   });
 }
 
+// ── Generic standalone-file YAML I/O ──────────────────────────────────────────
+// For sidecar-owned files outside the scope/index model (alias table, holding
+// pool). Reuses the same atomic-write + per-file lock so they get the same
+// corruption-safety. Pass an absolute path (build it from getDataDir()).
+
+export async function readYamlFile<T>(filePath: string): Promise<T | null> {
+  return readYaml<T>(filePath);
+}
+
+// Serialized read-modify-write of a standalone YAML file. The file is created
+// from init() if absent. Returns the post-mutation data. Concurrent callers for
+// the same path are serialized; a half-written file is never observed.
+export async function mutateYamlFile<T>(
+  filePath: string,
+  init: () => T,
+  mutate: (data: T) => void | Promise<void>,
+): Promise<T> {
+  let out!: T;
+  await serializedWrite(filePath, async () => {
+    const data = (await readYaml<T>(filePath)) ?? init();
+    await mutate(data);
+    await writeYaml(filePath, data);
+    out = data;
+  });
+  return out;
+}
+
 export async function removeIndexEntry(
   scope: Scope,
   scopeId: string,

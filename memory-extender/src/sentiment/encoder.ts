@@ -86,6 +86,7 @@ export interface BeatIndexEntry {
   speaker: string;
   created: string;
   sourceType: "chat" | "story";
+  sourceChatId?: string;
   turnStart: number;
   turnEnd: number;
   tokens: number;
@@ -159,15 +160,16 @@ export async function writeBeat(
 ): Promise<void> {
   await writeYaml(beatFilePath(characterId, beat.id), beat);
   await upsertBeatIndex(characterId, {
-    id:         beat.id,
-    emotion:    beat.emotion,
-    subpattern: beat.subpattern,
-    salience:   beat.salience,
-    speaker:    beat.speaker,
-    created:    beat.created,
-    sourceType: beat.sourceType,
-    turnStart:  beat.turnStart,
-    turnEnd:    beat.turnEnd,
+    id:           beat.id,
+    emotion:      beat.emotion,
+    subpattern:   beat.subpattern,
+    salience:     beat.salience,
+    speaker:      beat.speaker,
+    created:      beat.created,
+    sourceType:   beat.sourceType,
+    sourceChatId: beat.sourceChatId,
+    turnStart:    beat.turnStart,
+    turnEnd:      beat.turnEnd,
     tokens:     estimateTokens(
       `${beat.motivation} ${beat.relationalDynamics} ${beat.outcome} ${beat.text}`,
     ),
@@ -181,6 +183,7 @@ export async function encodeBeat(
   result: ClassificationResult,
   analysis: BeatAnalysis,
   sourceType: "chat" | "story",
+  sourceChatId?: string,
 ): Promise<EmotionalBeat> {
   const beat: EmotionalBeat = {
     id:                beatIdForChunk(result.chunk),
@@ -198,6 +201,7 @@ export async function encodeBeat(
     turnEnd:           result.chunk.turnEnd,
     created:           new Date().toISOString().slice(0, 10),
     sourceType,
+    ...(sourceChatId ? { sourceChatId } : {}),
   };
 
   await writeBeat(characterId, beat);

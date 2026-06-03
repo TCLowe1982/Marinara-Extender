@@ -607,6 +607,7 @@ const panelState = {
   importFlowResult: null,  // { moments, chats, failed }
   importCancel: false,
   importAbort: null,       // AbortController for the in-flight chat
+  importChatProgress: null,// { current, total } within the chat being analyzed (streamed)
   _onboardMsgs: {},        // chatId -> messages, cached from the estimate scan
   // Story ingest section
   ingestExpanded: false,
@@ -982,6 +983,14 @@ function renderOnboarding(content) {
     const fill = el("div", "me-onboard-bar-fill"); fill.style.width = `${pct}%`; bar.appendChild(fill);
     wrap.append(bar);
     wrap.append(Object.assign(el("div", "me-onboard-line"), { textContent: `Analyzing chat ${current} of ${total}` }));
+    // Within-chat progress (streamed) — so a long chat doesn't look frozen.
+    const cp = panelState.importChatProgress;
+    if (cp && cp.total > 0) {
+      const sub = el("div", "me-onboard-bar"); sub.style.height = "5px";
+      const sf = el("div", "me-onboard-bar-fill"); sf.style.width = `${Math.round((cp.current / cp.total) * 100)}%`;
+      sub.appendChild(sf); wrap.append(sub);
+      wrap.append(Object.assign(el("div", "me-onboard-sub"), { textContent: `moment ${cp.current} of ${cp.total} in this chat` }));
+    }
     wrap.append(Object.assign(el("div", "me-onboard-sub"), { textContent: etaText(current, total, startMs) }));
     const cancel = el("button", "me-btn-danger");
     cancel.textContent = panelState.importCancel ? "Finishing current chat…" : "Cancel";
@@ -2036,7 +2045,10 @@ function renderImportSection() {
     const isImporting = panelState.importingSet.has(chat.id);
 
     if (isImporting) {
-      const spin = el("span", "me-chat-import-btn"); spin.textContent = "…"; spin.style.border = "none"; spin.style.cursor = "default";
+      const cp = panelState.importChatProgress;
+      const spin = el("span", "me-chat-import-btn");
+      spin.textContent = (cp && cp.total > 0) ? `${cp.current}/${cp.total}` : "…";
+      spin.style.border = "none"; spin.style.cursor = "default";
       row.appendChild(spin);
     } else if (result?.error) {
       const errEl = el("span", "me-import-err");
@@ -2343,11 +2355,13 @@ async function importOneChat(chat, preFetched) {
       panelState.importResults[chat.id] = { count: 0 };
     } else {
       // Granular import: run the full sentiment pipeline (beats + retrievable
-      // companion entries), the same depth a live chat builds — not the old
-      // shallow one-shot digest. Per-beat dedup makes re-running safe; the abort
-      // signal lets a long chat (100+ calls) be cancelled mid-run.
-      const result = await memFetch("/api/analyze-beats", {
+      // companion entries). The response streams NDJSON — per-chunk progress
+      // events, then a final result — so we can show within-chat progress and
+      // cancel a long chat (100+ calls) mid-run. Per-beat dedup makes re-running
+      // safe.
+      const resp = await fetch(`${MEMORY_EXTENDER}/api/analyze-beats`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         signal: ac.signal,
         body: JSON.stringify({
           characterId,
@@ -2358,10 +2372,37 @@ async function importOneChat(chat, preFetched) {
           chatId: chat.id, // tags entries for clean re-import
         }),
       });
-      if (result?.error) throw new Error(result.detail ?? result.error);
-      panelState.importResults[chat.id] = { count: result.beats?.length ?? 0, skipped: result.skipped ?? 0 };
+      if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "", result = null, cancelled = false, errMsg = null;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let evt; try { evt = JSON.parse(line); } catch { continue; }
+          if (evt.type === "progress") {
+            panelState.importChatProgress = { current: evt.current, total: evt.total };
+            renderPanel();
+          } else if (evt.type === "done") { result = evt.result; }
+          else if (evt.type === "cancelled") { cancelled = true; }
+          else if (evt.type === "error") { errMsg = evt.error; }
+        }
+      }
+      panelState.importChatProgress = null;
+      if (cancelled) panelState.importResults[chat.id] = { cancelled: true };
+      else if (errMsg) throw new Error(errMsg);
+      else if (result) panelState.importResults[chat.id] = { count: result.beats?.length ?? 0, skipped: result.skipped ?? 0 };
+      else throw new Error("no result returned");
     }
   } catch (err) {
+    panelState.importChatProgress = null;
     if (err?.name === "AbortError") {
       // Cancelled mid-chat — partial beats are saved server-side; resume later.
       panelState.importResults[chat.id] = { cancelled: true };

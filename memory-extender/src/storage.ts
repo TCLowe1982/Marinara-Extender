@@ -100,6 +100,17 @@ export function bookmarksPath(scope: Scope, scopeId: string): string {
   return join(scopeDir(scope, scopeId), "bookmarks.yaml");
 }
 
+// Remove unpaired UTF-16 surrogates. Truncating a string mid-emoji (our 120/140/
+// 600/700-char slices) can leave a lone surrogate, which is invalid Unicode and
+// makes the whole LLM request body fail to JSON-encode ("invalid high surrogate")
+// — silently breaking generations when the entry rides along in the prompt.
+export function stripLoneSurrogates(s: string): string {
+  if (!s) return s;
+  return s
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, "") // high not followed by low
+    .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, ""); // low not preceded by high
+}
+
 // ── YAML helpers ─────────────────────────────────────────────────────────────
 
 async function ensureDir(filePath: string): Promise<void> {
@@ -197,9 +208,10 @@ export async function upsertIndexEntry(
       throw new Error(`[storage] refusing to overwrite unreadable index ${p} — run scripts/repair-indexes.mjs`);
     }
     const index = existing ?? emptyIndex(scope, scopeId);
-    const i = index.entries.findIndex((e) => e.id === entry.id);
-    if (i >= 0) index.entries[i] = entry;
-    else index.entries.push(entry);
+    const clean: IndexEntry = { ...entry, summary: stripLoneSurrogates(entry.summary) };
+    const i = index.entries.findIndex((e) => e.id === clean.id);
+    if (i >= 0) index.entries[i] = clean;
+    else index.entries.push(clean);
     index.lastUpdated = new Date().toISOString();
     await writeYaml(p, index);
   });
@@ -289,7 +301,9 @@ export async function writeEntry(
     ? "user-topics"
     : "char-topics";
   const relative = `${laneDir}/${entry.id}.yaml`;
-  await writeYaml(entryPath(scope, scopeId, relative), entry);
+  // Sanitize text so a truncation-split emoji can't poison the prompt later.
+  const clean: Entry = { ...entry, summary: stripLoneSurrogates(entry.summary), content: stripLoneSurrogates(entry.content) };
+  await writeYaml(entryPath(scope, scopeId, relative), clean);
   return relative;
 }
 

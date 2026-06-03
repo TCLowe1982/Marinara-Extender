@@ -29,6 +29,9 @@ export interface PipelineOptions {
   // Tag companion ledger entries with the chat they came from, so a re-import
   // of that chat can cleanly replace them.
   sourceChatId?: string;
+  // Per-chunk progress sink (in addition to the console reporter) — used to
+  // stream within-chat progress to the browser.
+  onProgress?: (current: number, total: number) => void;
 }
 
 export interface PipelineResult {
@@ -114,6 +117,7 @@ export async function runSentimentPipeline(
   let skipped = 0;
   let failed = 0;
   const total = filtered.length;
+  const tick = (current: number) => { report.tick(current, total); options.onProgress?.(current, total); };
   for (let i = 0; i < filtered.length; i++) {
     if (options.signal?.aborted) {
       report.done(`cancelled — ${beats.length} new beats saved, resumable`);
@@ -134,7 +138,7 @@ export async function runSentimentPipeline(
         const { summary, content } = companionEntryFromBeat(existing);
         if (summary) await createEntryIfUnique("character", characterId, { lane: "character_topics", summary, content, sourceChatId: options.sourceChatId });
       }
-      report.tick(current, total);
+      tick(current);
       continue;
     }
 
@@ -149,13 +153,13 @@ export async function runSentimentPipeline(
     } catch (err) {
       failed++;
       report.error(current, err instanceof Error ? err.message : String(err));
-      report.tick(current, total);
+      tick(current);
       continue;
     }
     if (!analysis) {
       failed++;
       report.error(current, "model returned no parseable analysis");
-      report.tick(current, total);
+      tick(current);
       continue;
     }
 
@@ -172,7 +176,7 @@ export async function runSentimentPipeline(
     const { summary, content } = companionEntryFromBeat(beat);
     if (summary) await createEntryIfUnique("character", characterId, { lane: "character_topics", summary, content, sourceChatId: options.sourceChatId });
 
-    report.tick(current, total);
+    tick(current);
   }
 
   report.done(

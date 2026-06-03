@@ -844,6 +844,18 @@ export function registerApiRoutes(app: FastifyInstance): void {
     const ac = new AbortController();
     req.raw.once("close", () => { if (!reply.raw.writableEnded) ac.abort(); });
 
+    // Stream NDJSON: per-chunk {type:"progress"} events, then a final
+    // {type:"done"|"cancelled"|"error"}. Hijack so we control the raw response
+    // (CORS is added manually since the onSend hook is bypassed).
+    reply.hijack();
+    const res = reply.raw;
+    res.writeHead(200, {
+      "Content-Type": "application/x-ndjson",
+      "Cache-Control": "no-cache",
+      "Access-Control-Allow-Origin": "*",
+    });
+    const send = (obj: unknown) => { try { res.write(JSON.stringify(obj) + "\n"); } catch { /* socket closed */ } };
+
     try {
       // Clean re-import: drop this chat's prior companion entries first so a
       // re-run replaces rather than piles up. (Beats are idempotent by id.)
@@ -856,20 +868,18 @@ export function registerApiRoutes(app: FastifyInstance): void {
         progressLabel: title?.trim() || `${characterName} (chat history)`,
         sourceChatId: chatId,
         signal: ac.signal,
+        onProgress: (current, total) => send({ type: "progress", current, total }),
       });
       console.info(
         `[ME] sentiment pipeline — key:${identityKey} — ${result.beats.length} beats from ${result.chunksTotal} chunks`,
       );
-      return reply.send(result);
+      send({ type: "done", result });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (ac.signal.aborted || msg === "cancelled") {
-        // Partial beats are already saved (incremental encode); resume continues later.
-        if (!reply.raw.writableEnded) return reply.code(499).send({ cancelled: true });
-        return;
-      }
-      return reply.code(500).send({ error: msg || "Sentiment pipeline failed" });
+      if (ac.signal.aborted || msg === "cancelled") send({ type: "cancelled" }); // partial beats saved; resumable
+      else send({ type: "error", error: msg });
     }
+    try { res.end(); } catch { /* already closed */ }
   });
 
   // ── POST /api/estimate-beats ──────────────────────────────────────────────

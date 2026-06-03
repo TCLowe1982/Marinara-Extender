@@ -128,11 +128,23 @@ async function writeYaml(filePath: string, data: unknown): Promise<void> {
   await ensureDir(filePath);
   const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
   await writeFile(tmp, stringify(data), "utf8");
-  try {
-    await rename(tmp, filePath);
-  } catch (err) {
-    await unlink(tmp).catch(() => {});
-    throw err;
+  // rename is atomic, but on Windows it can transiently fail with EPERM/EBUSY/
+  // EACCES when the target is briefly held — antivirus, the search indexer, a
+  // reader, or another process writing the same file. Retry with backoff before
+  // giving up; a final failure leaves the real file intact (no corruption).
+  const transient = new Set(["EPERM", "EBUSY", "EACCES"]);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(tmp, filePath);
+      return;
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? "";
+      if (attempt >= 9 || !transient.has(code)) {
+        await unlink(tmp).catch(() => {});
+        throw err;
+      }
+      await new Promise((r) => setTimeout(r, 30 * (attempt + 1))); // 30,60,…,300ms
+    }
   }
 }
 

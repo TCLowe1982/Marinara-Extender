@@ -885,17 +885,43 @@ export function registerApiRoutes(app: FastifyInstance): void {
         const purged = await removeEntriesBySourceChat("character", identityKey, chatId);
         if (purged > 0) console.info(`[ME] re-import — cleared ${purged} prior entries for chat ${chatId}`);
       }
+      // Keep the primary character's own turns, the user, and narration with this
+      // character. Other NAMED speakers (group chat, or a side character voiced
+      // inline via a "Name:" prefix) are routed to the right character below
+      // rather than filed here.
+      const keep = [characterName, "user", "Narrator"];
       const result = await runSentimentPipeline(messages, identityKey, characterName, {
         sourceType,
+        characters: keep,
         progressLabel: title?.trim() || `${characterName} (chat history)`,
         sourceChatId: chatId,
         signal: ac.signal,
         onProgress: (current, total) => send({ type: "progress", current, total }),
       });
+
+      // Route the other named speakers via the alias table (auto-route known,
+      // hold unknown) — same as the story path. Best-effort; never fails import.
+      let pending = 0;
+      let autoRouted = 0;
+      try {
+        const { passing } = await collectPassingClassifications(messages, characterName, { sourceType });
+        const orphanItems = passing
+          .filter((c) => !keep.some((n) => speakerMatches(c.chunk.speaker, n)))
+          .map((c) => ({ classification: c, sourceType, sourceChatId: chatId }));
+        if (orphanItems.length) {
+          const routed = await routeOrphans(orphanItems);
+          pending = routed.held;
+          autoRouted = routed.autoRouted;
+        }
+      } catch (err) {
+        console.warn(`[ME] chat orphan routing skipped: ${err instanceof Error ? err.message : err}`);
+      }
+
       console.info(
-        `[ME] sentiment pipeline — key:${identityKey} — ${result.beats.length} beats from ${result.chunksTotal} chunks`,
+        `[ME] sentiment pipeline — key:${identityKey} — ${result.beats.length} beats from ${result.chunksTotal} chunks` +
+        `${autoRouted ? `, ${autoRouted} auto-routed via alias` : ""}${pending ? `, ${pending} held for resolution` : ""}`,
       );
-      send({ type: "done", result });
+      send({ type: "done", result: { ...result, pending, autoRouted } });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (ac.signal.aborted || msg === "cancelled") send({ type: "cancelled" }); // partial beats saved; resumable

@@ -29,6 +29,7 @@ import {
   orphanCharacterBeats,
 } from "../holding-pool.js";
 import { readBeatIndex, readBeat, writeBeat } from "../sentiment/encoder.js";
+import { readIndex } from "../storage.js";
 import type { ClassificationResult, EmotionalBeat } from "../sentiment/types.js";
 import type { AnalyzedBeat as AB } from "../sentiment/analyzer.js";
 
@@ -182,6 +183,10 @@ describe("holding pool", () => {
     expect(index?.entries).toHaveLength(2);
     const beat = await readBeat("priya-real-uuid", index!.entries[0]!.id);
     expect(beat?.sourceChatId).toBe("chat-xyz"); // provenance carried through
+
+    // Companion ledger entries must exist or the loader can't retrieve the beats.
+    const ledger = await readIndex("character", "priya-real-uuid");
+    expect((ledger?.entries ?? []).some((e) => e.lane === "character_topics")).toBe(true);
 
     // Pool is now empty for that label; re-migrating is a no-op.
     const pool = await readHoldingPool();

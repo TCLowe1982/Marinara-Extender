@@ -22,8 +22,9 @@ import {
   removeAliasRecord,
   USER_IDENTITY_KEY,
 } from "./aliases.js";
-import { beatIdForChunk, encodeBeat, writeBeat, readAllBeats, clearBeats } from "./sentiment/encoder.js";
+import { beatIdForChunk, encodeBeat, writeBeat, readAllBeats, clearBeats, companionEntryFromBeat } from "./sentiment/encoder.js";
 import { analyzeChunks } from "./sentiment/analyzer.js";
+import { createEntryIfUnique } from "./dedup.js";
 import type { ClassificationResult, EmotionalBeat } from "./sentiment/types.js";
 
 export const IGNORED_TTL_DAYS = 30;
@@ -171,11 +172,25 @@ export async function migratePendingBeats(
 
   let migrated = 0;
 
+  // Every encoded beat also needs a companion character_topics ledger entry —
+  // the loader reads entries, not the beats store, so without this a routed beat
+  // is stored but never retrievable. Mirrors what the pipeline does on encode.
+  const writeCompanion = async (beat: EmotionalBeat) => {
+    const { summary, content } = companionEntryFromBeat(beat);
+    if (summary) {
+      await createEntryIfUnique("character", identityKey, {
+        lane: "character_topics", summary, content, sourceChatId: beat.sourceChatId,
+      });
+    }
+  };
+
   // Already-analyzed beats (cascade re-home) are re-written under the new
   // character directly — no LLM. Beat ids are deterministic, so this is idempotent.
   for (const p of pending) {
     if (!p.analyzed) continue;
-    await writeBeat(identityKey, { ...p.analyzed, ...(p.sourceChatId ? { sourceChatId: p.sourceChatId } : {}) });
+    const beat: EmotionalBeat = { ...p.analyzed, ...(p.sourceChatId ? { sourceChatId: p.sourceChatId } : {}) };
+    await writeBeat(identityKey, beat);
+    await writeCompanion(beat);
     migrated++;
   }
 
@@ -186,7 +201,8 @@ export async function migratePendingBeats(
     const analyzed = await analyze(toAnalyze.map((p) => p.classification!));
     for (const a of analyzed) {
       const src = provenanceByBeat.get(beatIdForChunk(a.result.chunk));
-      await encodeBeat(identityKey, a.result, a.analysis, src?.sourceType ?? "story", src?.sourceChatId);
+      const beat = await encodeBeat(identityKey, a.result, a.analysis, src?.sourceType ?? "story", src?.sourceChatId);
+      await writeCompanion(beat);
       migrated++;
     }
   }

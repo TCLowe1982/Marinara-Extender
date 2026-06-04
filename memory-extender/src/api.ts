@@ -31,7 +31,7 @@ import { processResponse, extractRememberTags } from "./writer.js";
 import { loadContext } from "./loader.js";
 import { runPromotion, runPromotionAll, recordRecitation } from "./promotion.js";
 import { runCleanup } from "./cleanup.js";
-import { updateSoftClock, makeTimeContext } from "./soft-clock.js";
+import { updateSoftClock, makeTimeContext, timesenseEnabled } from "./soft-clock.js";
 import { runSentimentPipeline, collectPassingClassifications, speakerMatches } from "./sentiment/pipeline.js";
 import {
   routeOrphans,
@@ -427,9 +427,13 @@ export function registerApiRoutes(app: FastifyInstance): void {
     const identityKey = await resolveIdentity(characterId, characterName);
 
     // Update soft clock — AI text drives time-of-day; the user's message drives
-    // explicit presence ("I'm leaving" / "I'm back").
-    const clockState = await updateSoftClock(chatId, messageText, turnNumber, userMessageText).catch(() => null);
-    const timeCtx = makeTimeContext(clockState);
+    // explicit presence ("I'm leaving" / "I'm back"). Gated behind the time-sense
+    // flag (off for v1.0) so no clock state is maintained and no time context
+    // tags entries when the feature is disabled.
+    const clockState = timesenseEnabled()
+      ? await updateSoftClock(chatId, messageText, turnNumber, userMessageText).catch(() => null)
+      : null;
+    const timeCtx = timesenseEnabled() ? makeTimeContext(clockState) : undefined;
 
     // Extract <remember> tags and create permanent entries before bookmark processing.
     const remembers = extractRememberTags(messageText);

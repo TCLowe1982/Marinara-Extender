@@ -12,6 +12,16 @@ import { join, dirname } from "path";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 import { getDataDir } from "./storage.js";
 
+// Feature flag — the conversational time-sense (narrative time-of-day + presence
+// inference) is OFF by default for v1.0. It behaved well under Claude 4.6 but
+// became unreliable under 4.7; held pending multi-model evaluation + user
+// feedback. Set MARINARA_EXTENDER_TIMESENSE=1 to re-enable. Read at call time so
+// the .env loaded by index.ts is respected. All the logic below stays intact —
+// the flag only gates whether it runs and is injected.
+export function timesenseEnabled(): boolean {
+  return process.env.MARINARA_EXTENDER_TIMESENSE === "1";
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type TimeOfDay = "morning" | "afternoon" | "evening" | "night" | "late_night" | "unknown";

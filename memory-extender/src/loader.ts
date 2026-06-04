@@ -10,7 +10,7 @@ import {
   type Bookmark,
 } from "./storage.js";
 import { computeScore } from "./promotion.js";
-import { getSoftClock, formatClockContext } from "./soft-clock.js";
+import { getSoftClock, formatClockContext, timesenseEnabled } from "./soft-clock.js";
 
 // ── Budget config ─────────────────────────────────────────────────────────────
 
@@ -188,14 +188,20 @@ function surfaceBookmarks(bookmarks: Bookmark[], turnNumber: number): Bookmark[]
 // Characters that already have the snippet in their card get it twice, which is
 // harmless — the model ignores the redundancy.
 
-const MEMORY_SYSTEM_INSTRUCTIONS = `<memory_system>
+const MEMORY_INSTRUCTIONS_HEAD = `<memory_system>
 Your memory is stored externally. Each turn may start with a <memory> block.
 
 STRUCTURE:
   ### Global context       — rules that apply everywhere
   ### Character context    — your arc, voice, established lore
   ### Active threads       — things being tracked or worked on
-  ### Soft callbacks       — things worth revisiting if the moment fits
+  ### Soft callbacks       — things worth revisiting if the moment fits`;
+
+// Time-sense + presence + no-nag guidance. Injected ONLY when
+// MARINARA_EXTENDER_TIMESENSE=1 (see soft-clock.ts). Held for v1.0 — unreliable
+// under Claude 4.7. When off, none of this is in the prompt AND no "Session
+// context:" line is injected, so nothing references a feature that isn't there.
+const MEMORY_INSTRUCTIONS_TIMESENSE = `
 
 SESSION CONTEXT LINE:
 At the top of the block you'll see something like:
@@ -223,7 +229,9 @@ okay.
 The one exception: if they explicitly raise fatigue, distress, overwhelm, or
 ask for your input on their state, respond to what they actually raised. Match
 the scale of their concern — don't escalate, don't dismiss. Care responds to
-signals, not to assumptions.
+signals, not to assumptions.`;
+
+const MEMORY_INSTRUCTIONS_BODY = `
 
 USING MEMORY:
 - Let it inform you silently. Never say "according to my notes" or
@@ -265,6 +273,14 @@ For things that matter now but may fade — unresolved feelings, follow-ups, rec
 
 Commands are stripped from output. Use sparingly.
 </memory_system>`;
+
+// Assemble the injected instructions. The time-sense block is included only when
+// MARINARA_EXTENDER_TIMESENSE=1 (default off for v1.0).
+function memorySystemInstructions(): string {
+  return MEMORY_INSTRUCTIONS_HEAD
+    + (timesenseEnabled() ? MEMORY_INSTRUCTIONS_TIMESENSE : "")
+    + MEMORY_INSTRUCTIONS_BODY;
+}
 
 // ── Context assembly ──────────────────────────────────────────────────────────
 
@@ -354,7 +370,9 @@ export async function loadContext(
   ].filter(Boolean);
   dbg(`sections assembled: ${sections.length} non-empty section(s)`);
 
-  const clockLine = formatClockContext(clockState);
+  // Time-sense (the narrative "Session context:" line) is gated behind the flag.
+  // When off, no clock line is injected — matching the trimmed instructions.
+  const clockLine = timesenseEnabled() ? formatClockContext(clockState) : "";
   const memoryBlock = sections.length > 0
     ? `<memory>${clockLine ? `\n${clockLine}\n` : "\n"}${sections.join("\n\n")}\n</memory>`
     : clockLine
@@ -362,9 +380,10 @@ export async function loadContext(
       : "";
 
   // Instructions are always injected so characters need no card modification.
+  const instructions = memorySystemInstructions();
   const contextBlock = memoryBlock
-    ? `${MEMORY_SYSTEM_INSTRUCTIONS}\n\n${memoryBlock}`
-    : MEMORY_SYSTEM_INSTRUCTIONS;
+    ? `${instructions}\n\n${memoryBlock}`
+    : instructions;
 
   dbg(`contextBlock assembled — total length:${contextBlock.length} (memoryBlock:${memoryBlock.length})`);
   if (!memoryBlock) dbg("  ⚠ no memory content — only instructions will be injected");

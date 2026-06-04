@@ -468,6 +468,14 @@ marinara.addStyle(`
   #me-setup-banner code { background: #2d2a26; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
   #me-setup-banner button { background: none; border: none; color: #9ca3af; cursor: pointer; float: right; font-size: 16px; line-height: 1; margin: -2px -4px 0 8px; }
 
+  /* Toggle pulses while an import is running, so it's clear it's still going
+     after the panel is closed — click to jump back to the progress. */
+  @keyframes me-import-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.55); }
+    50%      { box-shadow: 0 0 0 5px rgba(249, 115, 22, 0); }
+  }
+  .me-toggle-btn.importing { animation: me-import-pulse 1.6s ease-in-out infinite; color: #f97316; }
+
   /* Generic small button */
   .me-btn {
     background: none; border: 1px solid #3d3a36; border-radius: 4px;
@@ -1112,6 +1120,10 @@ function setActiveTab(key) {
 
 function renderPanel() {
   if (!panel) return;
+
+  // Keep the toggle's "import running" cue in sync — renderPanel fires on every
+  // progress tick (even while the panel is closed), so this stays live.
+  document.getElementById("me-toggle")?.classList.toggle("importing", importInFlight());
 
   // Preserve scroll position across the full re-render (every action rebuilds
   // the DOM, which would otherwise jump the view back to the top). On a tab
@@ -2903,12 +2915,34 @@ async function removeBookmark(bm) {
 
 // ── Panel open / close ────────────────────────────────────────────────────────
 
+// True while any import is running, so reopening the panel can jump straight back
+// to its progress (and the toggle can show it's still going).
+function importInFlight() {
+  return panelState.ingestRunning
+    || panelState.importFlow === "running" || panelState.importFlow === "estimating"
+    || (panelState.importingSet && panelState.importingSet.size > 0);
+}
+
 async function openPanel() {
   if (!panel) return;
   panel.classList.add("open");
   clearIngestBadge();
   if (!currentSession) currentSession = await resolveSession();
   panelState.session = currentSession;
+
+  // If an import is running, show its live progress immediately. Don't wipe the
+  // view behind a "Loading…" data refetch — that round-trip competes with the
+  // busy sidecar and is exactly why the progress felt unreachable after closing.
+  // Route to the view that's actually showing the progress.
+  if (importInFlight()) {
+    panelState.loading = false;
+    if (panelState.ingestRunning) { panelState.activeTab = "import"; panelState.ingestExpanded = true; }
+    else if (panelState.importingSet && panelState.importingSet.size > 0) { panelState.activeTab = "import"; panelState.importExpanded = true; }
+    // The onboarding chat import renders its own progress when !isOnboarded().
+    renderPanel();
+    return;
+  }
+
   panelState.loading = true;
   renderPanel();
   if (panelState.session) await loadPanelData();

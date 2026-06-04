@@ -1034,6 +1034,17 @@ export function registerApiRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: "no valid character assignments" });
     }
 
+    // Remember each assignment as an alias so the same speaker labels auto-route
+    // on future imports (mirrors how Pending-tab resolution sticks). Best-effort.
+    try {
+      for (const t of targets) {
+        await addAlias(t.identityKey, t.characterName, t.characterName); // ensure canonical record
+        for (const n of t.names) await addAlias(t.identityKey, t.characterName, n);
+      }
+    } catch (err) {
+      console.warn(`[ME] alias recording skipped: ${err instanceof Error ? err.message : err}`);
+    }
+
     const label = title?.trim() || characterName;
     const primaryKey = targets[0]!.identityKey;
     // Attribution hint + cache key cover every assigned speaker name.

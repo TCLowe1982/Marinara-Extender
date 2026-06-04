@@ -127,6 +127,21 @@ export interface FuzzySuggestion extends AliasMatch {
   score: number;
 }
 
+// Significant-token containment: one label's meaningful tokens (length >= 3) are
+// a subset of the other's — e.g. "Chandrasekaran" ⊆ "Dr. Chandrasekaran". A
+// strong same-person signal (an honorific/title added) that jaro-winkler can
+// under-score on the length difference alone. Tokens of length < 3 ("dr", "p")
+// are ignored so a bare title never drives a match.
+export function tokenContainment(a: string, b: string): boolean {
+  const toks = (s: string) => new Set(s.split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 3));
+  const ta = toks(a);
+  const tb = toks(b);
+  if (ta.size === 0 || tb.size === 0) return false;
+  const [small, big] = ta.size <= tb.size ? [ta, tb] : [tb, ta];
+  for (const t of small) if (!big.has(t)) return false;
+  return true;
+}
+
 // Best jaro-winkler match at or above threshold, or null. Never auto-routes —
 // the caller surfaces this as a "suggested mapping" for the user to confirm.
 export function findFuzzySuggestion(
@@ -138,7 +153,10 @@ export function findFuzzySuggestion(
   let best: FuzzySuggestion | null = null;
   for (const [identityKey, rec] of Object.entries(table)) {
     for (const candidate of recordLabels(rec)) {
-      const score = jaroWinkler(norm, candidate);
+      // Token containment ("Dr. Chandrasekaran" ⊇ "Chandrasekaran") is a strong
+      // same-person signal; floor its score so it always clears the bar.
+      const jw = jaroWinkler(norm, candidate);
+      const score = tokenContainment(norm, candidate) ? Math.max(jw, 0.9) : jw;
       if (score >= threshold && (!best || score > best.score)) {
         best = { identityKey, canonicalName: rec.canonicalName, matchedAlias: candidate, score };
       }

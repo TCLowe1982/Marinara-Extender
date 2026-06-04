@@ -130,6 +130,16 @@ describe("alias table", () => {
     expect(findFuzzySuggestion(table, "Alejandra")).toBeNull();
   });
 
+  it("auto-suggests on token containment (honorific added to a known name)", async () => {
+    await addAlias("priya-uuid", "Dr. Priya Chandrasekaran", "Chandrasekaran");
+    const table = await readAliasTable();
+    // "Dr. Chandrasekaran" contains the known "Chandrasekaran" token → suggest.
+    const hit = findFuzzySuggestion(table, "Dr. Chandrasekaran");
+    expect(hit?.identityKey).toBe("priya-uuid");
+    // A distinct name shares no significant token → no false suggestion.
+    expect(findFuzzySuggestion(table, "Professor Bartholomew")).toBeNull();
+  });
+
   it("detects a collision when a label maps to two characters", async () => {
     await addAlias("a-uuid", "Alex Stone", "Alex");
     await addAlias("b-uuid", "Alexandra Reed", "Alex");

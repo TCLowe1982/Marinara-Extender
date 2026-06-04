@@ -2614,12 +2614,24 @@ async function fetchChatMessages(chatId) {
   try {
     const res = await marinara.apiFetch(`/chats/${chatId}/messages`);
     const list = Array.isArray(res) ? res : (res?.messages ?? res?.data ?? []);
+    // Map each message's characterId -> name so group-chat / multi-character
+    // messages carry their real speaker (the analyzer routes by speaker name).
+    await loadAllCharacters();
+    const nameById = new Map((panelState.allCharacters ?? []).map(c => [String(c.id), c.name]));
     return list
       .map(m => {
         const d = parseData(m);
         const role    = m.role    ?? d.role;
         const content = m.content ?? d.content;
-        return (role && content) ? { role: String(role), content: String(content) } : null;
+        if (!role || !content) return null;
+        const msg = { role: String(role), content: String(content) };
+        // Tag assistant messages with their sending character (Marinara stores
+        // it per-message as characterId). User messages stay "user".
+        if (msg.role !== "user") {
+          const name = nameById.get(String(m.characterId ?? d.characterId ?? ""));
+          if (name) msg.speaker = name;
+        }
+        return msg;
       })
       .filter(Boolean)
       .slice(-5000); // generous cap — long RP chats (1k+ messages) import in full

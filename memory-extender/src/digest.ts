@@ -19,6 +19,11 @@ const MAX_MESSAGES = 200;
 export interface DigestMessage {
   role: string;
   content: string;
+  // Optional per-message speaker name. Set by the client for group chats (from
+  // Marinara's per-message characterId) so the chunker can label each assistant
+  // message with the character that actually sent it, not the primary. Inline
+  // "Name:" prefixes within content still override per line.
+  speaker?: string;
 }
 
 interface ExtractedEntry {

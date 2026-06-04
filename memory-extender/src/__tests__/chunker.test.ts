@@ -30,6 +30,23 @@ describe("parseTurns", () => {
     expect(turns[0]?.speaker).toBe("Lara");
   });
 
+  it("uses a per-message speaker for assistant messages (group chat)", () => {
+    const msgs: DigestMessage[] = [
+      { role: "user", content: "Hi both." },
+      { role: "assistant", content: "Hello there.", speaker: "Dr. Priya Chandrasekaran" },
+      { role: "assistant", content: "And me.", speaker: "Mari" },
+    ];
+    const turns = parseTurns(msgs, "DefaultChar");
+    expect(turns[0]?.speaker).toBe("user");
+    expect(turns[1]?.speaker).toBe("Dr. Priya Chandrasekaran"); // periods/spaces survive (no regex)
+    expect(turns[2]?.speaker).toBe("Mari");
+  });
+
+  it("falls back to the primary character when no per-message speaker is set", () => {
+    const turns = parseTurns([{ role: "assistant", content: "Hello." }], "Mari");
+    expect(turns[0]?.speaker).toBe("Mari");
+  });
+
   it("detects 'Name: text' speaker prefix and overrides role speaker", () => {
     const msgs: DigestMessage[] = [
       { role: "assistant", content: "Marcus: Hey.\nLara: Hi back." },

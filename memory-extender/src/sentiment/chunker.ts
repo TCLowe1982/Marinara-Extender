@@ -25,7 +25,10 @@ export function parseTurns(messages: DigestMessage[], characterName: string): Di
   let index = 0;
 
   for (const msg of messages) {
-    const rawSpeaker = msg.role === "user" ? "user" : characterName;
+    // A per-message speaker (set by the client for group chats) labels the whole
+    // message; otherwise assistant turns default to the primary character. Inline
+    // "Name:" prefixes within the content still override this per line below.
+    const rawSpeaker = msg.role === "user" ? "user" : (msg.speaker?.trim() || characterName);
     const content = msg.content.trim();
     if (!content) continue;
 

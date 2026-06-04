@@ -467,6 +467,40 @@ marinara.addStyle(`
   }
   #me-setup-banner code { background: #2d2a26; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
   #me-setup-banner button { background: none; border: none; color: #9ca3af; cursor: pointer; float: right; font-size: 16px; line-height: 1; margin: -2px -4px 0 8px; }
+
+  /* Generic small button */
+  .me-btn {
+    background: none; border: 1px solid #3d3a36; border-radius: 4px;
+    color: #c9c5bf; font-size: 11px; cursor: pointer;
+    padding: 3px 8px; font-family: inherit;
+  }
+  .me-btn:hover:not(:disabled) { border-color: #f97316; color: #f5f3f0; }
+  .me-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Inline text link (e.g. "Resolve now") */
+  .me-link-btn {
+    background: none; border: none; padding: 0; cursor: pointer;
+    color: #f97316; font-family: inherit; font-size: inherit;
+    text-decoration: underline;
+  }
+  .me-link-btn:hover { color: #ea6a00; }
+
+  /* Pending speakers tab */
+  .me-pending-row { border: 1px solid #2e2b27; border-radius: 6px; padding: 8px; margin-bottom: 8px; }
+  .me-pending-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+  .me-pending-label { font-size: 12px; color: #f5f3f0; font-weight: 600; }
+  .me-pending-count { font-size: 10px; color: #8b8680; }
+  .me-pending-suggested {
+    font-size: 10px; color: #c4b5fd; background: #2e2440;
+    border: 1px solid #4c3a6b; border-radius: 10px; padding: 1px 7px;
+  }
+  .me-pending-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .me-pending-select {
+    background: #1a1815; border: 1px solid #3d3a36; border-radius: 4px;
+    color: #c9c5bf; font-size: 11px; font-family: inherit; padding: 3px 6px;
+    max-width: 160px;
+  }
+  .me-pending-select:disabled { opacity: 0.5; }
 `);
 
 // ── DOM helpers ───────────────────────────────────────────────────────────────
@@ -630,6 +664,12 @@ const panelState = {
   stripTagsEnabled: null,   // null = not yet loaded
   stripTagsScriptId: null,
   stripTagsLoading: false,
+  // Pending speakers tab (holding-pool resolution)
+  pendingSpeakers: null,    // null = not loaded; array of {label, normalized, count, suggestion}
+  pendingLoading: false,
+  pendingError: null,
+  pendingBusy: null,        // normalized label currently being resolved (disables its row)
+  pendingMapSel: {},        // normalized label -> selected characterId for "Map to existing"
   // Identity section
   identityExpanded: false,
   identityKey: null,       // loaded from /api/identity on expand
@@ -724,6 +764,169 @@ async function toggleStripTags() {
   }
   panelState.stripTagsLoading = false;
   renderPanel();
+}
+
+// ── Pending speakers (holding-pool resolution) ──────────────────────────────────
+
+async function loadPendingSpeakers() {
+  panelState.pendingLoading = true;
+  panelState.pendingError = null;
+  renderPanel();
+  try {
+    const res = await memFetch("/api/pending-speakers");
+    panelState.pendingSpeakers = res?.speakers ?? [];
+  } catch {
+    panelState.pendingSpeakers = [];
+    panelState.pendingError = "Could not reach the sidecar to load pending speakers.";
+  }
+  panelState.pendingLoading = false;
+  renderPanel();
+}
+
+// map | create | ignore one pending speaker, then refresh the list + count.
+async function resolveSpeaker(normalized, label, action, char) {
+  panelState.pendingBusy = normalized;
+  renderPanel();
+  try {
+    const body = { label, action };
+    if (action === "map" || action === "create") {
+      body.characterId = char.id;
+      body.characterName = char.name;
+    }
+    const res = await memFetch("/api/resolve-speaker", { method: "POST", body: JSON.stringify(body) });
+    if (res?.error) throw new Error(res.error);
+  } catch (err) {
+    panelState.pendingError = err.message ?? "Resolve failed";
+  }
+  panelState.pendingBusy = null;
+  delete panelState.pendingMapSel[normalized];
+  await loadPendingSpeakers();
+}
+
+// Create a minimal Marinara card named for the speaker, then map the held beats
+// to it. The user fleshes the card out later in Marinara — we just need its id.
+async function createCardForSpeaker(normalized, label) {
+  const name = (window.prompt("Create a new character card named:", label) || "").trim();
+  if (!name) return;
+  panelState.pendingBusy = normalized;
+  panelState.pendingError = null;
+  renderPanel();
+  try {
+    const created = await marinara.apiFetch("/characters", {
+      method: "POST",
+      body: JSON.stringify({ data: { name, description: "" } }),
+    });
+    const cd = parseData(created) ?? {};
+    const newId = String(created?.id ?? cd.id ?? created?.character?.id ?? "");
+    if (!newId) throw new Error("card created but no id was returned");
+    panelState.allCharacters = null; // new card should appear in dropdowns
+    loadAllCharacters();
+    await resolveSpeaker(normalized, label, "create", { id: newId, name });
+  } catch (err) {
+    panelState.pendingError = `Create card failed: ${err?.message ?? err}`;
+    panelState.pendingBusy = null;
+    renderPanel();
+  }
+}
+
+function renderPendingRow(sp) {
+  const row = el("div", "me-pending-row");
+  const busy = panelState.pendingBusy === sp.normalized;
+
+  const head = el("div", "me-pending-head");
+  const name = el("span", "me-pending-label");
+  name.textContent = sp.label;
+  const count = el("span", "me-pending-count");
+  count.textContent = `${sp.count} beat${sp.count === 1 ? "" : "s"} waiting`;
+  head.append(name, count);
+  if (sp.suggestion) {
+    const badge = el("span", "me-pending-suggested");
+    badge.textContent = `suggested: ${sp.suggestion.canonicalName}`;
+    badge.title = `Fuzzy match (${Math.round((sp.suggestion.score ?? 0) * 100)}%) — confirm before routing`;
+    head.appendChild(badge);
+  }
+  row.appendChild(head);
+
+  const actions = el("div", "me-pending-actions");
+
+  // Map to existing character
+  const sel = el("select", "me-pending-select");
+  const ph = el("option");
+  ph.value = "";
+  ph.textContent = panelState.allCharacters ? "Map to character…" : "Loading characters…";
+  sel.appendChild(ph);
+  for (const c of (panelState.allCharacters ?? [])) {
+    const o = el("option");
+    o.value = c.id;
+    o.textContent = c.name;
+    sel.appendChild(o);
+  }
+  // Pre-select: prior choice, else a character whose name matches the suggestion.
+  const suggestedId = sp.suggestion
+    ? (panelState.allCharacters ?? []).find(c => c.name.toLowerCase() === sp.suggestion.canonicalName.toLowerCase())?.id
+    : "";
+  const pre = panelState.pendingMapSel[sp.normalized] ?? suggestedId ?? "";
+  if (pre) sel.value = pre;
+  sel.disabled = busy;
+  sel.addEventListener("change", () => { panelState.pendingMapSel[sp.normalized] = sel.value; });
+
+  const mapBtn = el("button", "me-btn");
+  mapBtn.textContent = "Map";
+  mapBtn.disabled = busy;
+  mapBtn.addEventListener("click", () => {
+    const id = panelState.pendingMapSel[sp.normalized] || sel.value;
+    const c = (panelState.allCharacters ?? []).find(x => x.id === id);
+    if (!c) { panelState.pendingError = "Pick a character to map to first."; renderPanel(); return; }
+    resolveSpeaker(sp.normalized, sp.label, "map", c);
+  });
+
+  const createBtn = el("button", "me-btn");
+  createBtn.textContent = "Create card";
+  createBtn.disabled = busy;
+  createBtn.addEventListener("click", () => createCardForSpeaker(sp.normalized, sp.label));
+
+  const ignoreBtn = el("button", "me-btn-danger");
+  ignoreBtn.textContent = "Ignore";
+  ignoreBtn.disabled = busy;
+  ignoreBtn.addEventListener("click", () => {
+    if (!window.confirm(`Ignore ${sp.count} beat${sp.count === 1 ? "" : "s"} from "${sp.label}"? They move to a recoverable bucket (kept 30 days).`)) return;
+    resolveSpeaker(sp.normalized, sp.label, "ignore");
+  });
+
+  actions.append(sel, mapBtn, createBtn, ignoreBtn);
+  if (busy) {
+    const b = el("span");
+    b.style.cssText = "font-size:10px; color:#8b8680; margin-left:6px;";
+    b.textContent = "…working";
+    actions.appendChild(b);
+  }
+  row.appendChild(actions);
+  return row;
+}
+
+function renderPendingSection() {
+  const wrap = el("div", "me-pending-wrap");
+
+  if (panelState.pendingLoading && panelState.pendingSpeakers === null) {
+    wrap.appendChild(Object.assign(el("div", "me-loading"), { textContent: "Loading pending speakers…" }));
+    return wrap;
+  }
+  if (panelState.pendingError) {
+    wrap.appendChild(Object.assign(el("div", "me-error"), { textContent: panelState.pendingError }));
+  }
+
+  const speakers = panelState.pendingSpeakers ?? [];
+
+  const intro = el("div");
+  intro.style.cssText = "font-size:11px; color:#8b8680; margin: 4px 0 10px;";
+  intro.textContent = speakers.length
+    ? "Speakers from imports that didn't match a known character. Route each to a card or ignore it — once mapped, future imports route that name automatically."
+    : "No speakers waiting. When an import attributes beats to a name we don't recognize, they'll wait here for you to route — nothing is ever dropped.";
+  wrap.appendChild(intro);
+
+  for (const sp of speakers) wrap.appendChild(renderPendingRow(sp));
+
+  return wrap;
 }
 
 function renderSettingsSection() {
@@ -857,15 +1060,27 @@ const panel = marinara.addElement(document.body, "div", { id: "me-panel" });
 const PANEL_TABS = [
   { key: "memory",   label: "Memory" },
   { key: "import",   label: "Import" },
+  { key: "pending",  label: "Pending" },
   { key: "settings", label: "Settings" },
 ];
 
+// Tab label, with a live count badge on Pending when speakers are waiting.
+function tabLabel(t) {
+  if (t.key !== "pending") return t.label;
+  const n = (panelState.pendingSpeakers ?? []).length;
+  return n > 0 ? `${t.label} (${n})` : t.label;
+}
+
 function setActiveTab(key) {
-  if (panelState.activeTab === key) return;
+  if (panelState.activeTab === key) { renderPanel(); return; }
   panelState.activeTab = key;
   // Entering a tab opens its sections so controls are visible without a second click.
   if (key === "import")   { panelState.importExpanded = true; panelState.ingestExpanded = true; }
   if (key === "settings") { panelState.settingsExpanded = true; panelState.identityExpanded = true; }
+  if (key === "pending") {
+    loadAllCharacters();                       // for the "Map to existing" dropdown
+    if (panelState.pendingSpeakers === null) loadPendingSpeakers();
+  }
   renderPanel();
 }
 
@@ -920,7 +1135,7 @@ function renderPanel() {
   const tabBar = el("div", "me-tabbar");
   for (const t of PANEL_TABS) {
     const tabBtn = el("button", "me-tab" + (tabs === t.key ? " active" : ""));
-    tabBtn.textContent = t.label;
+    tabBtn.textContent = tabLabel(t);
     tabBtn.addEventListener("click", () => setActiveTab(t.key));
     tabBar.appendChild(tabBtn);
   }
@@ -948,6 +1163,8 @@ function renderPanel() {
   } else if (tabs === "import") {
     content.appendChild(renderImportSection());
     content.appendChild(renderStoryIngestSection());
+  } else if (tabs === "pending") {
+    content.appendChild(renderPendingSection());
   } else if (tabs === "settings") {
     content.appendChild(renderIdentitySection());
     content.appendChild(renderSettingsSection());
@@ -1598,7 +1815,12 @@ async function doStoryIngest() {
       parseMethod:    res.parseMethod,
       speakers:       res.speakers ?? [],
       perCharacter:   res.perCharacter ?? [],
+      pending:        res.pending ?? 0,       // beats held for speaker resolution
+      autoRouted:     res.autoRouted ?? 0,    // beats routed via an existing alias
     };
+    // A fresh batch may have created pending speakers — invalidate the cache so
+    // the Pending tab (and its count) reload on next view.
+    panelState.pendingSpeakers = null;
     notifyIngestDone(characterName, res.beats ?? 0);
   } catch (err) {
     if (err?.name === "AbortError") {
@@ -1883,6 +2105,24 @@ function renderStoryIngestSection() {
         speakerEl.style.cssText = "margin-top:4px; font-size:10px; color:#6b7280;";
         speakerEl.textContent = "Speakers: " + speakers.join(", ");
         resultEl.appendChild(speakerEl);
+      }
+      if (panelState.ingestResult.autoRouted > 0) {
+        const ar = el("div");
+        ar.style.cssText = "margin-top:3px; font-size:10px; color:#8b8680;";
+        ar.textContent = `${panelState.ingestResult.autoRouted} auto-routed via a known alias`;
+        resultEl.appendChild(ar);
+      }
+      const pend = panelState.ingestResult.pending ?? 0;
+      if (pend > 0) {
+        const pe = el("div");
+        pe.style.cssText = "margin-top:6px; font-size:11px;";
+        const txt = el("span");
+        txt.textContent = `${pend} beat${pend === 1 ? "" : "s"} waiting for speaker resolution — `;
+        const link = el("button", "me-link-btn");
+        link.textContent = "Resolve now";
+        link.addEventListener("click", () => setActiveTab("pending"));
+        pe.append(txt, link);
+        resultEl.appendChild(pe);
       }
     }
     body.appendChild(resultEl);
@@ -2539,6 +2779,12 @@ async function loadPanelData() {
 
   panelState.loading = false;
   renderPanel();
+
+  // Refresh the Pending count in the background so the tab badge is live without
+  // having to open the tab. Cheap, non-blocking, never throws into the UI.
+  memFetch("/api/pending-speakers")
+    .then((res) => { panelState.pendingSpeakers = res?.speakers ?? []; renderPanel(); })
+    .catch(() => {});
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────

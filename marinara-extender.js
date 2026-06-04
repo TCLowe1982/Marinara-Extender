@@ -805,6 +805,20 @@ async function resolveSpeaker(normalized, label, action, char) {
 
 // Create a minimal Marinara card named for the speaker, then map the held beats
 // to it. The user fleshes the card out later in Marinara — we just need its id.
+// Create a minimal Marinara character card and return { id, name }. The user
+// fleshes it out later in Marinara — we just need its id to route beats. Shared
+// by the import assignment picker and the Pending tab's "Create card".
+async function createCharacterCard(name) {
+  const created = await marinara.apiFetch("/characters", {
+    method: "POST",
+    body: JSON.stringify({ data: { name, description: "" } }),
+  });
+  const cd = parseData(created) ?? {};
+  const newId = String(created?.id ?? cd.id ?? created?.character?.id ?? "");
+  if (!newId) throw new Error("card created but no id was returned");
+  return { id: newId, name };
+}
+
 async function createCardForSpeaker(normalized, label) {
   const name = (window.prompt("Create a new character card named:", label) || "").trim();
   if (!name) return;
@@ -812,16 +826,10 @@ async function createCardForSpeaker(normalized, label) {
   panelState.pendingError = null;
   renderPanel();
   try {
-    const created = await marinara.apiFetch("/characters", {
-      method: "POST",
-      body: JSON.stringify({ data: { name, description: "" } }),
-    });
-    const cd = parseData(created) ?? {};
-    const newId = String(created?.id ?? cd.id ?? created?.character?.id ?? "");
-    if (!newId) throw new Error("card created but no id was returned");
+    const c = await createCharacterCard(name);
     panelState.allCharacters = null; // new card should appear in dropdowns
     loadAllCharacters();
-    await resolveSpeaker(normalized, label, "create", { id: newId, name });
+    await resolveSpeaker(normalized, label, "create", c);
   } catch (err) {
     panelState.pendingError = `Create card failed: ${err?.message ?? err}`;
     panelState.pendingBusy = null;
@@ -1956,10 +1964,35 @@ function renderStoryIngestSection() {
       if (c.id === asg.characterId) o.selected = true;
       sel.appendChild(o);
     }
+    // Create a brand-new character inline, so a story can be imported to a card
+    // that doesn't exist yet without round-tripping through the Pending tab.
+    const newOpt = el("option");
+    newOpt.value = "__new__";
+    newOpt.textContent = "+ New character…";
+    sel.appendChild(newOpt);
     sel.value = asg.characterId || "";
-    sel.addEventListener("change", e => {
-      const c = (panelState.allCharacters ?? []).find(x => x.id === e.target.value);
-      asg.characterId = e.target.value;
+    sel.addEventListener("change", async e => {
+      const val = e.target.value;
+      if (val === "__new__") {
+        const nm = (window.prompt("New character name:", asg.names || "") || "").trim();
+        if (!nm) { sel.value = asg.characterId || ""; return; } // cancelled — revert
+        sel.disabled = true;
+        try {
+          const c = await createCharacterCard(nm);
+          asg.characterId = c.id;
+          asg.characterName = c.name;
+          if (!asg.names) { asg.names = nm; setSavedCharNames(c.id, nm); }
+          panelState.allCharacters = null;   // pull the new card into the list
+          await loadAllCharacters();          // repopulates + re-renders with asg set
+        } catch (err) {
+          window.alert(`Create character failed: ${err?.message ?? err}`);
+          sel.value = asg.characterId || "";
+          sel.disabled = false;
+        }
+        return;
+      }
+      const c = (panelState.allCharacters ?? []).find(x => x.id === val);
+      asg.characterId = val;
       asg.characterName = c?.name ?? "";
       asg.names = getSavedCharNames(asg.characterId); // load this character's remembered names
       renderPanel();

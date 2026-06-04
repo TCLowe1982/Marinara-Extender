@@ -1239,8 +1239,23 @@ export function registerApiRoutes(app: FastifyInstance): void {
         return reply.code(400).send({ error: "characterId and characterName are required to map/create" });
       }
       const identityKey = await resolveIdentity(characterId, characterName);
-      await addAlias(identityKey, characterName.trim(), label.trim());
+
+      // The user has chosen to route THESE held beats to this character — always
+      // migrate them. The alias (future auto-routing) is separate: if the label
+      // already belongs to a different character, adding it here would silently
+      // create an ambiguous mapping that gets held-for-manual forever. So on a
+      // collision we migrate the beats but DON'T touch aliases — we report the
+      // conflict and let the UI decide future routing (reassign / leave / both).
+      const table = await readAliasTable();
+      const conflicts = findExactMatches(table, label).filter((m) => m.identityKey !== identityKey);
       const { migrated } = await migratePendingBeats(normalized, identityKey);
+
+      if (conflicts.length > 0) {
+        console.info(`[ME] speaker "${label}" ${action} → ${characterName} — ${migrated} migrated; alias collision with ${conflicts.map((c) => c.canonicalName).join(", ")} (not auto-set)`);
+        return reply.send({ ok: true, action, identityKey, migrated, collision: conflicts });
+      }
+
+      await addAlias(identityKey, characterName.trim(), label.trim());
       console.info(`[ME] speaker "${label}" ${action} → ${characterName} (${identityKey}) — ${migrated} beat(s) migrated`);
       return reply.send({ ok: true, action, identityKey, migrated });
     }

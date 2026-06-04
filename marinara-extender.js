@@ -795,6 +795,24 @@ async function resolveSpeaker(normalized, label, action, char) {
     }
     const res = await memFetch("/api/resolve-speaker", { method: "POST", body: JSON.stringify(body) });
     if (res?.error) throw new Error(res.error);
+
+    // Alias collision: the beats were routed to the chosen character, but the
+    // label already belongs to another. Ask what should happen for FUTURE
+    // imports — reassign the label, or leave it with the existing owner.
+    if (res?.collision?.length && (action === "map" || action === "create")) {
+      const others = res.collision.map(c => c.canonicalName).join(", ");
+      const reassign = window.confirm(
+        `"${label}" is already mapped to ${others}. Its waiting beats were routed to ${char.name}.\n\n` +
+        `For future imports, reassign "${label}" to ${char.name}?\n\n` +
+        `OK = reassign to ${char.name}   ·   Cancel = leave it with ${others}`
+      );
+      if (reassign) {
+        for (const c of res.collision) {
+          await memFetch("/api/aliases", { method: "DELETE", body: JSON.stringify({ identityKey: c.identityKey, label }) }).catch(() => {});
+        }
+        await memFetch("/api/aliases", { method: "POST", body: JSON.stringify({ identityKey: res.identityKey, characterName: char.name, label, force: true }) }).catch(() => {});
+      }
+    }
   } catch (err) {
     panelState.pendingError = err.message ?? "Resolve failed";
   }

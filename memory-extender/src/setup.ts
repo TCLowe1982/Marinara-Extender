@@ -46,18 +46,31 @@ async function saveApiKeyToEnv(key: string): Promise<void> {
 // baked in so a copied loader always points at the right server. Uses string
 // concatenation (no inner template literals) so it survives templating cleanly.
 function buildLoaderJs(port: number): string {
-  return `/* Marinara Extender — loader. Paste this ONCE into Marinara → Settings →
+  return `/* Marinara Extender — loader. Install ONCE into Marinara → Settings →
    Extensions (name it "Marinara Extender"). It loads the live extension from your
-   local Memory Extender every time, so updates never need re-pasting — just
-   reload Marinara after updating the server. */
+   local Memory Extender every time Marinara loads, so updates never need
+   re-importing — just reload Marinara after updating the server.
+   CSP note: Marinara's CSP allows blob: scripts but NOT eval/new Function, so the
+   fetched code is run via a blob <script>, with the scoped 'marinara' API bridged
+   in through a temporary global. */
 (async () => {
   const SIDECAR = "http://127.0.0.1:${port}";
   try {
     const res = await fetch(SIDECAR + "/marinara-extender.js?ts=" + Date.now());
     if (!res.ok) throw new Error("HTTP " + res.status);
-    new Function("marinara", await res.text())(marinara);
+    const code = await res.text();
+    window.__marinaraExtender = marinara;
+    // Wrap so the fetched code sees 'marinara'; leading newline guards against the
+    // file starting with a // comment swallowing the wrapper line.
+    const wrapped = "(function(marinara){\\n" + code + "\\n})(window.__marinaraExtender);";
+    const url = URL.createObjectURL(new Blob([wrapped], { type: "text/javascript" }));
+    const s = document.createElement("script");
+    s.src = url;
+    s.onload = function () { URL.revokeObjectURL(url); };
+    document.head.appendChild(s);
+    if (marinara.onCleanup) marinara.onCleanup(function () { s.remove(); });
   } catch (err) {
-    console.error("[Marinara Extender] Memory Extender server not reachable at " + SIDECAR + " — is it running? (start.ps1 / Extender_start.bat)", err);
+    console.error("[Marinara Extender] Could not load from " + SIDECAR + " — is the Memory Extender running? (start.ps1 / Extender_start.bat)", err);
   }
 })();`;
 }

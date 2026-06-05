@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Rebuild corrupt scope index.yaml files from their (intact) entry files.
 //
 // A torn/interleaved write can leave index.yaml unparseable; the server then

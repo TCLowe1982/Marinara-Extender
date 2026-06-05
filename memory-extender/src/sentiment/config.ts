@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Reads sentiment-config.yaml and emotional_keywords.yaml at call time.
 // No caching — edits to either file take effect on the next pipeline call.
 

@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Unit tests for Stage 0: Chunker pure functions
 //
 // parseTurns, cosine, and mergeByTurnOnly are pure/sync — no sidecar needed.

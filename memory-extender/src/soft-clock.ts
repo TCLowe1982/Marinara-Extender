@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Conversational Soft Clock
 //
 // Infers time-of-day and day-of-week from conversational signals ("good morning",

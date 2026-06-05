@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Backup & snapshot — full data-dir copy and pre-destructive index snapshots.
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";

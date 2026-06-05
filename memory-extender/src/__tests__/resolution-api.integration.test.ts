@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // End-to-end integration of the speaker-resolution HTTP surface.
 //
 // Drives the REAL Fastify routes (registerApiRoutes + app.inject) against a temp

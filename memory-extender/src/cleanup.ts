@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // One-time memory pool cleanup.
 // Runs three passes across every scope:
 //   1. Ghost prune    — delete entries with empty summary or zero content

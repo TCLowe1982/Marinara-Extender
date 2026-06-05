@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Shared types for the sentiment analysis pipeline (Stages 0-3).
 
 export type Emotion =

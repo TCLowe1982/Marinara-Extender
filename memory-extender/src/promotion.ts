@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Memory Tier Promotion / Demotion Engine
 //
 // Runs periodically (every 20 turns) during process-turn to keep memory tiers

@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Setup page — served at GET /setup and GET /marinara-extender.js.
 // Gives users a one-stop browser page for completing installation without
 // hunting through the file system.

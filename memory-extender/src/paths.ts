@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Install-relative paths.
 //
 // Resolve the sidecar's own locations relative to THIS module rather than

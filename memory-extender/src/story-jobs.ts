@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Resumable story-import jobs.
 //
 // A job is keyed by a hash of the source text + the options that affect parsing

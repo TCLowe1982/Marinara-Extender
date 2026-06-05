@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 import Fastify from "fastify";
 import { readFile } from "fs/promises";
 import { allowedCorsOrigin } from "./cors.js";

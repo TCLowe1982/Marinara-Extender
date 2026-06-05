@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Sentiment Analysis Pipeline — public entry point.
 // Runs Stages 0–3 in sequence on a list of chat messages.
 

@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Tiered cold storage: archival (not deletion) of stale entries + rehydration.
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";

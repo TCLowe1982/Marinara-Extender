@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Character Identity System (Phase 3)
 //
 // Translates ephemeral Marinara card instance IDs to stable slugs so memories

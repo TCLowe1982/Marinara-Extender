@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Stage 2: Deep Sentiment Analysis
 //
 // For each ClassificationResult that passes the salience threshold, calls the

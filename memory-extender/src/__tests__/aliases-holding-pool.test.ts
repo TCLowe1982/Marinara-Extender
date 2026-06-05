@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Unit tests for the speaker alias table + orphan-beat holding pool (P1 backbone).
 //
 // These touch the filesystem, so each test runs against a fresh temp data dir

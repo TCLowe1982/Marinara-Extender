@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // fetch with retry/backoff for transient upstream failures — used for external
 // LLM calls so a bulk import (many sequential calls) survives provider rate
 // limits and brief overloads instead of failing the whole run.

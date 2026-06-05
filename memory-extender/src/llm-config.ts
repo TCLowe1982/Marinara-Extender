@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // LLM provider configuration — single source of truth for endpoint/model
 // defaults, so a fresh install works with no .env in the common case.
 //

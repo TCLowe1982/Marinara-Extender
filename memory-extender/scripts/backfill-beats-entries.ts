@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // One-time backfill: create retrievable character_topics ledger entries from
 // every character's stored beats. Needed for beats imported before the pipeline
 // wrote companion entries — the loader reads entries, not beats, so those beats

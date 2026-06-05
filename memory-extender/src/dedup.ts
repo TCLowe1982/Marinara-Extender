@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Shared deduplicated entry creation.
 //
 // Every automatic capture path (Tier 1 digest/snapshot, Tier 2 sentiment,

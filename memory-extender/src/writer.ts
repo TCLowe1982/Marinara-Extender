@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Post-processes a completed LLM response:
 //   1. Extracts <remember> tags → persistent ledger entries (returned to caller)
 //   2. Extracts <bookmark> tags → decaying bookmark signals

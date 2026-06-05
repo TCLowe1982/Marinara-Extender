@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Holds the API key used for digest (past-chat import) operations.
 // Priority: MARINARA_EXTENDER_API_KEY env var → in-memory cache (unused without proxy).
 

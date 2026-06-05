@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Tier 3: Ambient detail classifier
 //
 // Finds throwaway sentences that reveal who someone IS — preferences, history,

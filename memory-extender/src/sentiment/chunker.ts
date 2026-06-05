@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Stage 0: Chunking
 //
 // Splits a list of chat messages into dialogue turns, then merges consecutive

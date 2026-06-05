@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Digest a batch of chat messages into persistent memory entries.
 // Tries the local Ollama model first; falls back to an external
 // OpenAI-compatible API if Ollama is unavailable.

@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Console progress reporting for long sidecar operations (story import and
 // chat-history sentiment analysis). Output goes to the sidecar's console — the
 // npm window — where the rest of the [ME:...] logs live.

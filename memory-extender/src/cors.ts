@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // CORS origin policy.
 //
 // The sidecar binds to 127.0.0.1, but any web page the user visits can still

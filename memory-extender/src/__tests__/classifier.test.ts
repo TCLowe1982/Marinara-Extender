@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Unit tests for Stage 1: Emotional Classifier
 //
 // Tests use real config/emotional_keywords.yaml and config/sentiment-config.yaml

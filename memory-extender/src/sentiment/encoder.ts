@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Stage 3: Memory Encoding
 //
 // Writes analyzed emotional beats to disk as YAML under:

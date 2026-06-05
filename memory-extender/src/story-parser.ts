@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Story-to-Memory Parser
 //
 // Converts raw prose or RP text into DigestMessage[] for the sentiment pipeline.

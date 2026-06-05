@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 import { randomBytes } from "crypto";
 
 const CHARS = "abcdefghijklmnopqrstuvwxyz0123456789";

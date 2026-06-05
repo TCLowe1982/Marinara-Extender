@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 import { readFile, writeFile, mkdir, access, unlink, readdir, rename } from "fs/promises";
 import { join, dirname } from "path";
 import { parse, stringify } from "yaml";

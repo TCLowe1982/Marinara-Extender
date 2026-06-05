@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Speaker Alias Table
 //
 // Maps the speaker labels that show up in imports ("Priya", "Dr. Chandrasekaran")

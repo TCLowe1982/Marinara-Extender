@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Management API — lets the ledger panel (and any other client) create, read,
 // update, and delete entries and bookmarks across all three scopes.
 //

@@ -1,3 +1,7 @@
+# Marinara Extender
+# Copyright (C) 2026 TC Lowe
+# Licensed under AGPL-3.0-only. See LICENSE.
+
 # Marinara Extender - Startup Script
 # Starts Ollama and the Memory Extender sidecar, then shows live progress
 # until both services are ready.

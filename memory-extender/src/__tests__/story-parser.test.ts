@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Unit tests for pre-attribution detection.
 //
 // The risk this guards against: prose with incidental colons (date headers,

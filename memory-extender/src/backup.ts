@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Backup & snapshot — protect the one thing that can't be regenerated: the YAML
 // memory store. Two layers:
 //   1. backupDataDir() — a full, on-demand copy of the data dir to a timestamped

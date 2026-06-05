@@ -1,3 +1,7 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
 // Orphan-Beat Holding Pool
 //
 // When an import attributes a chunk to a speaker label that doesn't resolve to a

@@ -15,6 +15,9 @@ $script:SidecarProc = $null
 # How to launch the sidecar: "start" runs the built output (node dist); falls
 # back to "run dev" (tsx) only if the build fails.
 $script:RunCmd = "start"
+# Opt-in auto-start: a launcher dropped in the user's Startup folder.
+$startupDir    = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup"
+$autostartFile = Join-Path $startupDir "Marinara Extender.cmd"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -301,7 +304,8 @@ if ($ollamaOk) { Initialize-Model; Write-Host "" }
 
 # ── Command console ─────────────────────────────────────────────────────────
 
-Write-Host "  Commands:  [R] Restart Memory Extender server     [Q] Quit (services keep running)" -ForegroundColor Cyan
+$autoState = if (Test-Path $autostartFile) { "ON" } else { "off" }
+Write-Host "  Commands:  [R] Restart server   [A] Auto-start on login ($autoState)   [Q] Quit (services keep running)" -ForegroundColor Cyan
 Write-Host ""
 
 while ($true) {
@@ -313,7 +317,21 @@ while ($true) {
         break
     } elseif ($cmd -eq 'r') {
         Restart-Sidecar
+    } elseif ($cmd -eq 'a') {
+        if (Test-Path $autostartFile) {
+            Remove-Item $autostartFile -Force -ErrorAction SilentlyContinue
+            Write-Host "  [OK] Auto-start on login DISABLED." -ForegroundColor Green
+        } else {
+            try {
+                if (-not (Test-Path $startupDir)) { New-Item -ItemType Directory -Force -Path $startupDir | Out-Null }
+                $launcher = "@echo off`r`nstart `"`" /min powershell -ExecutionPolicy Bypass -NoExit -File `"$(Join-Path $scriptDir 'start.ps1')`""
+                Set-Content -Path $autostartFile -Value $launcher -Encoding ASCII
+                Write-Host "  [OK] Auto-start on login ENABLED (launches minimized). Press A again to disable." -ForegroundColor Green
+            } catch {
+                Write-Host "  [!!] Could not write the startup launcher: $_" -ForegroundColor Red
+            }
+        }
     } else {
-        Write-Host "  Unknown command. Press R to restart the server, or Q to quit." -ForegroundColor DarkGray
+        Write-Host "  Unknown command. [R] restart  [A] auto-start  [Q] quit." -ForegroundColor DarkGray
     }
 }

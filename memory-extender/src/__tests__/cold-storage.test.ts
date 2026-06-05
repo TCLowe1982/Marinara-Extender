@@ -6,13 +6,16 @@ import { tmpdir } from "os";
 import { join } from "path";
 import {
   upsertIndexEntry,
+  writeEntry,
   readIndex,
   readColdIndex,
   moveToCold,
   promoteFromCold,
   type IndexEntry,
+  type Entry,
 } from "../storage.js";
 import { runPromotion, recordRecitation } from "../promotion.js";
+import { loadContext } from "../loader.js";
 
 let dir: string;
 beforeEach(async () => {
@@ -70,6 +73,32 @@ describe("runPromotion archival", () => {
     await runPromotion("character", "c2b");
     expect((await readIndex("character", "c2b"))!.entries.map((e) => e.id)).toContain("fresh");
     expect((await readColdIndex("character", "c2b"))?.entries ?? []).toHaveLength(0);
+  });
+});
+
+describe("loader cold recall", () => {
+  async function archiveEntry(charId: string, id: string, summary: string, content: string) {
+    const entry: Entry = { id, lane: "character_topics", summary, status: "open", created: "2026-01-01", lastAccessed: "2026-01-01", content, tokens: 20 };
+    const path = await writeEntry("character", charId, entry);
+    await upsertIndexEntry("character", charId, { id, path, summary, tokens: 20, lane: "character_topics", status: "open", lastAccessed: "2026-01-01" });
+    await moveToCold("character", charId, [id]);
+  }
+
+  it("surfaces + rehydrates an archived entry when the conversation matches it", async () => {
+    await archiveEntry("char-recall", "ctopic-hargrove", "The Hargrove case verdict", "Details of the Hargrove case and its verdict.");
+    expect((await readIndex("character", "char-recall"))?.entries ?? []).toHaveLength(0); // cold
+
+    const res = await loadContext({ characterId: "char-recall", chatId: "chat-r", turnNumber: 1, recentText: "what finally happened with the hargrove case verdict?" });
+
+    expect(res.surfaced.some((s) => s.id === "ctopic-hargrove")).toBe(true);              // recalled this turn
+    expect((await readIndex("character", "char-recall"))!.entries.map((e) => e.id)).toContain("ctopic-hargrove"); // rehydrated to hot
+  });
+
+  it("does NOT recall cold when the conversation is unrelated", async () => {
+    await archiveEntry("char-recall2", "ctopic-hargrove", "The Hargrove case verdict", "Details of the Hargrove case.");
+    const res = await loadContext({ characterId: "char-recall2", chatId: "chat-r2", turnNumber: 1, recentText: "let's talk about pizza toppings tonight" });
+    expect(res.surfaced.some((s) => s.id === "ctopic-hargrove")).toBe(false);
+    expect((await readColdIndex("character", "char-recall2"))!.entries).toHaveLength(1); // still archived
   });
 });
 

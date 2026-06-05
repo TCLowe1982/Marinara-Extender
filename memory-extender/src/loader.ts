@@ -1,5 +1,7 @@
 import {
   readIndex,
+  readColdIndex,
+  promoteFromCold,
   readEntry,
   readBookmarks,
   upsertIndexEntry,
@@ -128,8 +130,8 @@ function selectEntries(
   index: ScopeIndex | null,
   budget: number,
   recentText: string,
-): { selected: IndexEntry[]; used: number; summoned: Set<string> } {
-  if (!index) return { selected: [], used: 0, summoned: new Set() };
+): { selected: IndexEntry[]; used: number; summoned: Set<string>; bestRelevance: number } {
+  if (!index) return { selected: [], used: 0, summoned: new Set(), bestRelevance: 0 };
 
   const candidates = [...index.entries].filter((e) => e.status !== "done");
 
@@ -137,7 +139,7 @@ function selectEntries(
   // credit (it's an inspection mode, not real usage).
   if (isEideticMode()) {
     const used = candidates.reduce((sum, e) => sum + e.tokens, 0);
-    return { selected: candidates, used, summoned: new Set() };
+    return { selected: candidates, used, summoned: new Set(), bestRelevance: 1 };
   }
 
   const ranked = candidates
@@ -159,7 +161,42 @@ function selectEntries(
     if (relevance > RELEVANCE_CREDIT_THRESHOLD) summoned.add(e.id); // pulled in by topic, not just present
     used += e.tokens;
   }
-  return { selected, used, summoned };
+  // Highest hot relevance — drives the cold-recall miss decision in loadContext.
+  const bestRelevance = ranked.length ? ranked[0]!.relevance : 0;
+  return { selected, used, summoned, bestRelevance };
+}
+
+// ── Cold recall (miss path) ─────────────────────────────────────────────────────
+// When the recent conversation has real topical keywords but nothing in the hot
+// set matched them, consult the cold archive once. The best-matching cold entry
+// (if any clears the relevance bar) is surfaced this turn and rehydrated to hot —
+// reaching for an old memory brings it back. Cheap (string scan, only on a miss).
+
+function hasTopicalKeywords(recentText: string): boolean {
+  if (!recentText) return false;
+  return recentText
+    .toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/)
+    .some((w) => w.length > 2 && !RELEVANCE_STOPWORDS.has(w));
+}
+
+async function coldRecall(
+  scope: Scope,
+  scopeId: string,
+  recentText: string,
+): Promise<IndexEntry | null> {
+  const cold = await readColdIndex(scope, scopeId);
+  if (!cold || cold.entries.length === 0) return null;
+  let best: { e: IndexEntry; r: number } | null = null;
+  for (const e of cold.entries) {
+    if (e.status === "done") continue;
+    const r = relevanceScore(e.summary, recentText);
+    if (r > RELEVANCE_CREDIT_THRESHOLD && (!best || r > best.r)) best = { e, r };
+  }
+  if (!best) return null;
+  // Rehydrate: a recalled cold memory rejoins the hot working set.
+  await promoteFromCold(scope, scopeId, best.e.id).catch(() => {});
+  dbg(`cold recall — ${scope}:${scopeId} surfaced ${best.e.id} (relevance ${best.r.toFixed(2)}) and rehydrated to hot`);
+  return best.e;
 }
 
 async function loadSelectedEntries(
@@ -357,6 +394,29 @@ export async function loadContext(
     getSoftClock(session.chatId),
   ]);
   dbg(`entries loaded — chat:${chatEntries.length} char:${charEntries.length} global:${globalEntries.length} bookmarks:${chatBookmarks.length}`);
+
+  // Cold recall — only on a relevance MISS (the conversation has topical keywords
+  // but nothing in the hot set matched). Surfaces + rehydrates the best cold match
+  // per scope so archived memories resurface when their subject returns. Cheap:
+  // one string scan of the cold index, only when we actually missed.
+  if (hasTopicalKeywords(recentText)) {
+    const miss = (s: { bestRelevance: number }) => s.bestRelevance < RELEVANCE_CREDIT_THRESHOLD;
+    const [cChat, cChar, cGlobal] = await Promise.all([
+      miss(chatSelection)   ? coldRecall("chat", session.chatId, recentText)            : Promise.resolve(null),
+      miss(charSelection)   ? coldRecall("character", session.characterId, recentText)  : Promise.resolve(null),
+      miss(globalSelection) ? coldRecall("global", "global", recentText)                : Promise.resolve(null),
+    ]);
+    const adopt = async (hit: IndexEntry | null, scope: Scope, scopeId: string, into: Entry[], sel: { selected: IndexEntry[]; summoned: Set<string> }) => {
+      if (!hit) return;
+      const e = await readEntry(scope, scopeId, hit.path);
+      if (e) { into.push(e); sel.selected.push(hit); sel.summoned.add(hit.id); } // counts as a summon
+    };
+    await Promise.all([
+      adopt(cChat,   "chat",      session.chatId,      chatEntries,   chatSelection),
+      adopt(cChar,   "character", session.characterId, charEntries,   charSelection),
+      adopt(cGlobal, "global",    "global",            globalEntries, globalSelection),
+    ]);
+  }
 
   const surfaced = surfaceBookmarks(chatBookmarks, session.turnNumber);
   dbg(`bookmarks surfaced: ${surfaced.length}/${chatBookmarks.length} passed weight roll`);

@@ -278,3 +278,9 @@ data/
 ```
 
 Indexes update automatically on every create/patch/delete; don't hand-edit them — edit the entry YAML files directly if needed. Full backups land in a sibling `marinara-extender-backups/` folder (via the Settings "Back up my memories" button or `POST /api/backup`).
+
+---
+
+## License
+
+[AGPL-3.0-only](./LICENSE) — the same license as Marinara Engine. If you run a modified version (including as a network service), you must make your changes available under the same terms.

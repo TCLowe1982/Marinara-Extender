@@ -1,7 +1,8 @@
 {
   "name": "marinara-extender-memory",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Memory server that gives Marinara Engine characters persistent scoped memory",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "main": "dist/index.js",
   "bin": {

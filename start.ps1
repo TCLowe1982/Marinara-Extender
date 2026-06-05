@@ -9,6 +9,8 @@ $OLLAMA_URL   = "http://127.0.0.1:11434"
 $SIDECAR_URL  = "http://127.0.0.1:3001"
 $SIDECAR_PORT = 3001
 $TIMEOUT_SEC  = 90
+# Default local model — must match the sidecar default (llm-config.ts).
+$MODEL        = "dolphin3:8b"
 $script:SidecarProc = $null
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -16,6 +18,46 @@ $script:SidecarProc = $null
 function Test-Ollama {
     try { ((Invoke-WebRequest -Uri $OLLAMA_URL -TimeoutSec 2 -UseBasicParsing).StatusCode) -lt 300 }
     catch { $false }
+}
+
+function Get-OllamaExe {
+    $exe = @(
+        "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe",
+        "$env:PROGRAMFILES\Ollama\ollama.exe"
+    ) | Where-Object { Test-Path $_ -ErrorAction SilentlyContinue } | Select-Object -First 1
+    if (-not $exe) { $exe = "ollama" }
+    return $exe
+}
+
+function Test-Model {
+    try {
+        $tags = Invoke-RestMethod -Uri "$OLLAMA_URL/api/tags" -TimeoutSec 5
+        return (@($tags.models | Where-Object { $_.name -eq $MODEL -or $_.name -like "$MODEL*" }).Count -gt 0)
+    } catch { return $false }
+}
+
+function Initialize-Model {
+    if (Test-Model) {
+        Write-Host "  [OK] Local model $MODEL is available" -ForegroundColor Green
+        return
+    }
+    Write-Host ""
+    Write-Host "  [!!] Local model '$MODEL' is not pulled yet." -ForegroundColor Yellow
+    Write-Host "       It powers memory analysis and imports (a few GB download)." -ForegroundColor DarkGray
+    Write-Host -NoNewline "       Pull it now? [Y/n] " -ForegroundColor Cyan
+    $k = [Console]::ReadKey($true)
+    Write-Host $k.KeyChar
+    if ($k.KeyChar -eq 'n' -or $k.KeyChar -eq 'N') {
+        Write-Host "  Skipped. Pull it later with:  ollama pull $MODEL" -ForegroundColor DarkGray
+        return
+    }
+    Write-Host "  [..] Pulling $MODEL (this can take a while)..." -ForegroundColor Yellow
+    & (Get-OllamaExe) pull $MODEL
+    if (Test-Model) {
+        Write-Host "  [OK] $MODEL pulled and ready" -ForegroundColor Green
+    } else {
+        Write-Host "  [!!] Pull did not complete. Retry later with:  ollama pull $MODEL" -ForegroundColor Red
+    }
 }
 
 function Test-Sidecar {
@@ -120,13 +162,7 @@ if (Test-Ollama) {
     Write-Host "  [OK] Ollama is already running" -ForegroundColor Green
 } else {
     Write-Host "  [..] Starting Ollama..." -ForegroundColor Yellow
-    $ollamaExe = @(
-        "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe",
-        "$env:PROGRAMFILES\Ollama\ollama.exe",
-        "ollama"
-    ) | Where-Object { Test-Path $_ -ErrorAction SilentlyContinue } | Select-Object -First 1
-    if (-not $ollamaExe) { $ollamaExe = "ollama" }
-    Start-Process $ollamaExe -WindowStyle Minimized
+    Start-Process (Get-OllamaExe) -WindowStyle Minimized
 }
 
 # ── Start Memory Extender ─────────────────────────────────────────────────────
@@ -200,6 +236,10 @@ while ($true) {
 
     Start-Sleep -Milliseconds 300
 }
+
+# ── Ensure the local model is pulled ──────────────────────────────────────────
+
+if ($ollamaOk) { Initialize-Model; Write-Host "" }
 
 # ── Command console ─────────────────────────────────────────────────────────
 

@@ -67,6 +67,19 @@ function buildLoaderJs(port: number): string {
     if (marinara.onCleanup) marinara.onCleanup(function () { s.remove(); });
   } catch (err) {
     console.error("[Marinara Extender] Could not load from " + SIDECAR + " — is the Memory Extender running? (start.ps1 / Extender_start.bat)", err);
+    // Non-technical users never open the console, so surface it on the page.
+    try {
+      var id = "marinara-extender-offline";
+      if (!document.getElementById(id)) {
+        var b = document.createElement("div");
+        b.id = id;
+        b.textContent = "Marinara Extender: memory server not running. Start it (start.ps1 / Extender_start.bat), then reload.";
+        b.style.cssText = "position:fixed;bottom:12px;right:12px;z-index:2147483647;max-width:340px;background:#3f1414;color:#fecaca;border:1px solid #f87171;border-radius:8px;padding:10px 14px;font:13px system-ui,-apple-system,sans-serif;line-height:1.4;box-shadow:0 2px 12px rgba(0,0,0,.4)";
+        document.body.appendChild(b);
+        if (marinara && marinara.onCleanup) marinara.onCleanup(function () { b.remove(); });
+        setTimeout(function () { b.remove(); }, 15000);
+      }
+    } catch (e) {}
   }
 })();`;
 }

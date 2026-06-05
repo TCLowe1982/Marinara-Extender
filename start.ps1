@@ -12,6 +12,9 @@ $TIMEOUT_SEC  = 90
 # Default local model — must match the sidecar default (llm-config.ts).
 $MODEL        = "dolphin3:8b"
 $script:SidecarProc = $null
+# How to launch the sidecar: "start" runs the built output (node dist); falls
+# back to "run dev" (tsx) only if the build fails.
+$script:RunCmd = "start"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -67,9 +70,38 @@ function Test-Sidecar {
 
 function Start-Sidecar {
     $script:SidecarProc = Start-Process "cmd.exe" `
-        -ArgumentList "/c npm.cmd run dev" `
+        -ArgumentList "/c npm.cmd $script:RunCmd" `
         -WorkingDirectory $sidecarDir `
         -WindowStyle Normal -PassThru
+}
+
+function Update-SidecarBuild {
+    # Build the compiled output when dist is missing or older than src.
+    # Returns $true if a usable dist exists afterward.
+    $dist = Join-Path $sidecarDir "dist\index.js"
+    $srcDir = Join-Path $sidecarDir "src"
+    $needBuild = $true
+    if (Test-Path $dist) {
+        $distTime = (Get-Item $dist).LastWriteTime
+        $newest = Get-ChildItem $srcDir -Recurse -Filter *.ts -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($newest -and $newest.LastWriteTime -le $distTime) { $needBuild = $false }
+    }
+    if (-not $needBuild) {
+        Write-Host "  [OK] Build up to date" -ForegroundColor Green
+        return $true
+    }
+    Write-Host "  [..] Building Memory Extender..." -ForegroundColor Yellow
+    Push-Location $sidecarDir
+    & npm.cmd run build
+    $code = $LASTEXITCODE
+    Pop-Location
+    if ($code -eq 0 -and (Test-Path $dist)) {
+        Write-Host "  [OK] Build complete" -ForegroundColor Green
+        return $true
+    }
+    Write-Host "  [!!] Build failed (see output above)." -ForegroundColor Red
+    return $false
 }
 
 function Stop-Sidecar {
@@ -90,6 +122,8 @@ function Restart-Sidecar {
     Write-Host "  [..] Stopping Memory Extender..." -ForegroundColor Yellow
     Stop-Sidecar
     Start-Sleep -Milliseconds 800
+    # Rebuild so a restart picks up code changes (e.g. after a git pull).
+    if (Update-SidecarBuild) { $script:RunCmd = "start" } else { $script:RunCmd = "run dev" }
     Write-Host "  [..] Starting Memory Extender..." -ForegroundColor Yellow
     Start-Sidecar
     Write-Host -NoNewline "  [..] Waiting for it to come back "
@@ -124,6 +158,22 @@ Write-Host "  |      Marinara Extender -- Startup        |" -ForegroundColor Cya
 Write-Host "  +------------------------------------------+" -ForegroundColor Cyan
 Write-Host ""
 
+# ── Node.js preflight ─────────────────────────────────────────────────────────
+
+$nodeOk = $false
+try {
+    $nodeVer = (& node --version) 2>$null
+    if ($nodeVer -match '^v(\d+)\.') { if ([int]$Matches[1] -ge 20) { $nodeOk = $true } }
+} catch {}
+if (-not $nodeOk) {
+    Write-Host "  [!!] Node.js 20 or newer is required and was not found on PATH." -ForegroundColor Red
+    Write-Host "       Install it from https://nodejs.org/ then run this again." -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host -NoNewline "  Press any key to exit..." -ForegroundColor Cyan
+    [Console]::ReadKey($true) | Out-Null
+    exit 1
+}
+
 # ── Install deps if needed ────────────────────────────────────────────────────
 
 $nodeModules = Join-Path $sidecarDir "node_modules"
@@ -135,6 +185,14 @@ if (-not (Test-Path $nodeModules)) {
     Write-Host "  [OK] Dependencies installed" -ForegroundColor Green
     Write-Host ""
 }
+
+# ── Build (run the compiled output, not the dev watcher) ──────────────────────
+
+if (-not (Update-SidecarBuild)) {
+    Write-Host "  Falling back to dev mode (tsx) for this run." -ForegroundColor DarkGray
+    $script:RunCmd = "run dev"
+}
+Write-Host ""
 
 # ── Check for Ollama update in progress ──────────────────────────────────────
 

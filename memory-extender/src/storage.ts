@@ -81,9 +81,22 @@ export function getDataDir(): string {
 
 // ── Path helpers ─────────────────────────────────────────────────────────────
 
+// Reject ids that would escape the data dir when joined into a path. Ids come
+// from request input (scopeId/characterId/chatId) and are interpolated into
+// filesystem paths, so an unsanitized "../.." traverses out. Legit ids are
+// nanoid/uuid-style (letters, digits, _ and -); anything with a separator, "..",
+// or a null byte is rejected. Throwing rejects the request rather than touching
+// an out-of-bounds path.
+export function assertSafeId(id: string): void {
+  if (!id || /[/\\]|\.\.|\0/.test(id)) {
+    throw new Error(`unsafe id: ${JSON.stringify(String(id)).slice(0, 48)}`);
+  }
+}
+
 export function scopeDir(scope: Scope, scopeId: string): string {
   const base = getDataDir();
   if (scope === "global") return join(base, "global");
+  assertSafeId(scopeId);
   if (scope === "character") return join(base, "characters", scopeId);
   return join(base, "chats", scopeId);
 }

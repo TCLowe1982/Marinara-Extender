@@ -104,6 +104,11 @@ describe("speaker-resolution API (integration)", () => {
     expect((await get("/api/pending-speakers")).json().speakers.find((s: any) => s.normalized === "walk-on")?.count).toBe(1);
   });
 
+  it("rejects a path-traversal scopeId on the entries route", async () => {
+    const r = await app.inject({ method: "GET", url: "/api/entries?scope=character&scopeId=" + encodeURIComponent("../../escape") });
+    expect(r.statusCode).toBeGreaterThanOrEqual(400); // not silently read out-of-bounds
+  });
+
   it("orphan-character cascades a character's beats back into the pool", async () => {
     // Route a held speaker to a character first.
     await addPending({ speaker: "Aurora", analyzed: beatFixture("Aurora", "beat-aaa"), sourceType: "chat", sourceChatId: "chat-1" });

@@ -10,7 +10,7 @@
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { join, dirname } from "path";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
-import { getDataDir } from "./storage.js";
+import { getDataDir, assertSafeId } from "./storage.js";
 
 // Feature flag — the conversational time-sense (narrative time-of-day + presence
 // inference) is OFF by default for v1.0. It behaved well under Claude 4.6 but
@@ -110,6 +110,7 @@ const EVENING_OR_LATER: TimeOfDay[] = ["evening", "night", "late_night"];
 // ── Path helper ───────────────────────────────────────────────────────────────
 
 function clockPath(chatId: string): string {
+  assertSafeId(chatId); // chatId comes from request input — keep it inside the data dir
   return join(getDataDir(), "chats", chatId, "soft-clock.yaml");
 }
 

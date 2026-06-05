@@ -11,7 +11,7 @@ import { readFile, writeFile, mkdir, access, rm } from "fs/promises";
 import { join, dirname } from "path";
 import { createHash } from "crypto";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
-import { getDataDir } from "../storage.js";
+import { getDataDir, assertSafeId } from "../storage.js";
 import type { Emotion } from "./types.js";
 import type { EmotionalBeat, ClassificationResult, BeatAnalysis, Chunk } from "./types.js";
 import type { AnalyzedBeat } from "./analyzer.js";
@@ -45,6 +45,7 @@ export function companionEntryFromBeat(beat: EmotionalBeat): { summary: string; 
 // ── Path helpers ───────────────────────────────────────────────────────────
 
 function beatsDir(characterId: string): string {
+  assertSafeId(characterId); // characterId originates from request input
   return join(getDataDir(), "characters", characterId, "beats");
 }
 

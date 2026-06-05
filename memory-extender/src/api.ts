@@ -26,6 +26,7 @@ import {
   type Bookmark,
 } from "./storage.js";
 import { nanoid } from "./nanoid.js";
+import { allowedCorsOrigin } from "./cors.js";
 import { digestMessages, snapshotSession, type DigestMessage } from "./digest.js";
 import { processResponse, extractRememberTags } from "./writer.js";
 import { loadContext } from "./loader.js";
@@ -871,10 +872,11 @@ export function registerApiRoutes(app: FastifyInstance): void {
     // (CORS is added manually since the onSend hook is bypassed).
     reply.hijack();
     const res = reply.raw;
+    const allowOrigin = allowedCorsOrigin(req.headers.origin); // onSend hook is bypassed when hijacked
     res.writeHead(200, {
       "Content-Type": "application/x-ndjson",
       "Cache-Control": "no-cache",
-      "Access-Control-Allow-Origin": "*",
+      ...(allowOrigin ? { "Access-Control-Allow-Origin": allowOrigin, "Vary": "Origin" } : {}),
     });
     const send = (obj: unknown) => { try { res.write(JSON.stringify(obj) + "\n"); } catch { /* socket closed */ } };
 

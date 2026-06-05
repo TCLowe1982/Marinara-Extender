@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import { readFile } from "fs/promises";
 import { join } from "path";
+import { allowedCorsOrigin } from "./cors.js";
 import { registerApiRoutes } from "./api.js";
 import { registerSetupRoutes } from "./setup.js";
 import { isEideticMode } from "./loader.js";
@@ -45,8 +46,14 @@ const app = Fastify({
 
 // ── CORS (for extension fetch() calls to /api/*) ──────────────────────────────
 
-app.addHook("onSend", async (_req, reply) => {
-  void reply.header("Access-Control-Allow-Origin", "*");
+app.addHook("onSend", async (req, reply) => {
+  // Only allow loopback (or explicitly-configured) origins to read responses, so
+  // a random site the user visits can't read their memory store. See cors.ts.
+  const allowed = allowedCorsOrigin(req.headers.origin);
+  if (allowed) {
+    void reply.header("Access-Control-Allow-Origin", allowed);
+    void reply.header("Vary", "Origin");
+  }
   void reply.header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
   void reply.header("Access-Control-Allow-Headers", "Content-Type,Authorization");
 });
@@ -93,7 +100,7 @@ app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
   console.log(`Data dir:     ${process.env.MARINARA_EXTENDER_DATA ?? "./data"}`);
   console.log(`Digest URL:   ${process.env.MARINARA_EXTENDER_DIGEST_UPSTREAM ?? "https://api.openai.com"}/v1/chat/completions`);
   console.log(`Digest model: ${process.env.MARINARA_EXTENDER_DIGEST_MODEL ?? "gpt-4o-mini"}`);
-  console.log(`API key:      ${apiKey ? `${apiKey.slice(0, 8)}…` : "NOT SET — imports will fail"}`);
+  console.log(`API key:      ${apiKey ? "set" : "NOT SET — external imports will fall back to local"}`);
   const localUrl = process.env.MARINARA_EXTENDER_LOCAL_URL;
   const localModel = process.env.MARINARA_EXTENDER_LOCAL_MODEL ?? "phi3:mini";
   console.log(`Local model:  ${localUrl ? `${localModel} @ ${localUrl}` : "not configured"}`);

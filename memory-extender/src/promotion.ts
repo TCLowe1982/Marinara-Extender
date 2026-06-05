@@ -8,7 +8,10 @@
 
 import {
   mutateIndex,
+  readIndex,
   deleteEntryFile,
+  moveToCold,
+  promoteFromCold,
   listScopeIds,
   type Scope,
   type IndexEntry,
@@ -17,6 +20,7 @@ import {
   TIER_SCORE_CORE,
   TIER_DAYS_LONG_DEMOTES,
   TIER_DAYS_SHORT_PRUNES,
+  TIER_DAYS_COLD,
   TIER_SECONDARY_CORE_CYCLES,
 } from "./storage.js";
 
@@ -92,7 +96,7 @@ function nextTier(entry: IndexEntry): {
 // ── Public: run promotion pass for one scope ──────────────────────────────────
 
 export async function runPromotion(scope: Scope, scopeId: string): Promise<void> {
-  const toRemove: IndexEntry[] = [];
+  const coldIds: string[] = [];
 
   // Serialized read-modify-write so the promotion pass can't collide with the
   // Tier-2/Tier-3/retrieval writes that run concurrently on the same index.
@@ -102,12 +106,14 @@ export async function runPromotion(scope: Scope, scopeId: string): Promise<void>
 
     for (const entry of index.entries) {
       if (entry.status === "done") continue;
-      const { tier, cycleCount, prune } = nextTier(entry);
+      const { tier, cycleCount } = nextTier(entry);
 
-      if (prune) {
-        toRemove.push(entry);
-        changed = true;
-        continue;
+      // Archive (don't delete) stale, non-permanent entries to the cold tier.
+      // This bounds the hot index without losing anything — a recall miss brings
+      // them back. Core/secondary_core stay hot forever.
+      if (tier !== "core" && tier !== "secondary_core" && daysSinceRetrieval(entry) > TIER_DAYS_COLD) {
+        coldIds.push(entry.id);
+        continue; // leave the row in place; moveToCold relocates it after the write
       }
 
       if (tier !== (entry.tier ?? "short") || cycleCount !== (entry.cycleCount ?? 0)) {
@@ -123,14 +129,13 @@ export async function runPromotion(scope: Scope, scopeId: string): Promise<void>
     }
 
     if (!changed) return false;
-    const removeIds = new Set(toRemove.map((e) => e.id));
-    index.entries = index.entries.filter((e) => !removeIds.has(e.id));
   });
 
-  // Delete pruned entry files after the index no longer references them.
-  for (const entry of toRemove) {
-    await deleteEntryFile(scope, scopeId, entry.path).catch(() => {});
-    console.info(`[promotion] pruned stale entry ${entry.id} (${entry.summary.slice(0, 50)})`);
+  if (coldIds.length > 0) {
+    const moved = await moveToCold(scope, scopeId, coldIds);
+    if (moved > 0) {
+      console.info(`[promotion] ${scope}:${scopeId} — archived ${moved} stale entr${moved === 1 ? "y" : "ies"} to cold storage`);
+    }
   }
 }
 
@@ -151,9 +156,11 @@ export async function runPromotionAll(): Promise<{ scopes: number; promoted: num
 
   let promoted = 0;
   let pruned = 0;
+  let archived = 0;
 
   for (const { scope, id } of scopes) {
     const toRemove: IndexEntry[] = [];
+    const coldIds: string[] = [];
 
     await mutateIndex(scope, id, (index) => {
       if (index.entries.length === 0) return false;
@@ -162,20 +169,19 @@ export async function runPromotionAll(): Promise<{ scopes: number; promoted: num
 
       for (const entry of index.entries) {
         if (entry.status === "done") continue;
-        // Prune ghost entries — empty summary or suspiciously tiny content.
+        // Delete only ghost entries — empty summary (junk, not real memory).
         if (!entry.summary?.trim()) {
           toRemove.push(entry);
           changed = true;
           pruned++;
-          console.info(`[promotion:backfill] pruned ghost entry ${entry.id} (empty summary, retrievalCount=${entry.retrievalCount ?? 0})`);
+          console.info(`[promotion:backfill] deleted ghost entry ${entry.id} (empty summary)`);
           continue;
         }
-        const { tier, cycleCount, prune } = nextTier(entry);
+        const { tier, cycleCount } = nextTier(entry);
 
-        if (prune) {
-          toRemove.push(entry);
-          changed = true;
-          pruned++;
+        // Stale, non-permanent → cold archive (retained, not deleted).
+        if (tier !== "core" && tier !== "secondary_core" && daysSinceRetrieval(entry) > TIER_DAYS_COLD) {
+          coldIds.push(entry.id);
           continue;
         }
 
@@ -189,7 +195,7 @@ export async function runPromotionAll(): Promise<{ scopes: number; promoted: num
         }
       }
 
-      if (!changed) return false;
+      if (!changed && toRemove.length === 0) return false;
       const removeIds = new Set(toRemove.map((e) => e.id));
       index.entries = index.entries.filter((e) => !removeIds.has(e.id));
     });
@@ -197,9 +203,10 @@ export async function runPromotionAll(): Promise<{ scopes: number; promoted: num
     for (const entry of toRemove) {
       await deleteEntryFile(scope, id, entry.path).catch(() => {});
     }
+    if (coldIds.length > 0) archived += await moveToCold(scope, id, coldIds);
   }
 
-  console.info(`[promotion:backfill] done — ${scopes.length} scopes, ${promoted} promoted, ${pruned} pruned`);
+  console.info(`[promotion:backfill] done — ${scopes.length} scopes, ${promoted} promoted, ${archived} archived, ${pruned} ghosts deleted`);
   return { scopes: scopes.length, promoted, pruned };
 }
 
@@ -210,6 +217,14 @@ export async function recordRecitation(
   scopeId: string,
   entryId: string,
 ): Promise<void> {
+  // If the entry was archived to cold, demonstrable use brings it back to the
+  // hot set first (reaching for a memory strengthens it). Safety net — the loader
+  // already rehydrates on a cold recall hit; this covers any other recital path.
+  const hot = await readIndex(scope, scopeId);
+  if (hot && !hot.entries.some((e) => e.id === entryId)) {
+    await promoteFromCold(scope, scopeId, entryId);
+  }
+
   // Serialized read-modify-write so this can't clobber the retrieval-count
   // stamping that process-turn fires for the same (sticky) entries.
   await mutateIndex(scope, scopeId, (index) => {

@@ -18,6 +18,10 @@ export const TIER_DAYS_LONG_DEMOTES = 30;
 export const TIER_DAYS_SHORT_PRUNES = 14;
 // Cycles before a memory becomes secondary_core (never pruned)
 export const TIER_SECONDARY_CORE_CYCLES = 3;
+// Days without retrieval before a non-core entry is moved to the COLD archive
+// (out of the hot index the loader scans every turn). Not deleted — retained at
+// full fidelity and brought back on a recall miss. "Haven't touched it in months."
+export const TIER_DAYS_COLD = 90;
 
 export interface IndexEntry {
   id: string;
@@ -250,6 +254,66 @@ export async function mutateIndex(
     index.lastUpdated = new Date().toISOString();
     await writeYaml(p, index);
   });
+}
+
+// ── Cold archive index ────────────────────────────────────────────────────────
+// A second per-scope index (index.cold.yaml) holding entries demoted out of the
+// hot working set. The loader does NOT read it each turn — only on a recall miss
+// — so the hot index (and the per-turn scan) stays bounded. Entry files are never
+// moved or deleted; only the index ROW moves between hot and cold.
+
+export function coldIndexPath(scope: Scope, scopeId: string): string {
+  return join(scopeDir(scope, scopeId), "index.cold.yaml");
+}
+
+export async function readColdIndex(scope: Scope, scopeId: string): Promise<ScopeIndex | null> {
+  return readYaml<ScopeIndex>(coldIndexPath(scope, scopeId));
+}
+
+// Move entries hot → cold. Adds to cold FIRST (a crash can never lose the row —
+// at worst it's briefly in both, and the loader reads hot so it's still visible),
+// then removes from hot. Entry files untouched. Returns how many moved.
+export async function moveToCold(scope: Scope, scopeId: string, ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  const idset = new Set(ids);
+  const hot = await readIndex(scope, scopeId);
+  if (!hot) return 0;
+  const moving = hot.entries.filter((e) => idset.has(e.id));
+  if (moving.length === 0) return 0;
+
+  const coldPath = coldIndexPath(scope, scopeId);
+  await serializedWrite(coldPath, async () => {
+    const cold = (await readYaml<ScopeIndex>(coldPath)) ?? emptyIndex(scope, scopeId);
+    const have = new Set(cold.entries.map((e) => e.id));
+    for (const e of moving) if (!have.has(e.id)) cold.entries.push(e);
+    cold.lastUpdated = new Date().toISOString();
+    await writeYaml(coldPath, cold);
+  });
+  await serializedWrite(indexPath(scope, scopeId), async () => {
+    const h = await readIndex(scope, scopeId);
+    if (!h) return;
+    h.entries = h.entries.filter((e) => !idset.has(e.id));
+    h.lastUpdated = new Date().toISOString();
+    await writeYaml(indexPath(scope, scopeId), h);
+  });
+  return moving.length;
+}
+
+// Bring one entry back from cold → hot (rehydrate on recall). Returns its row.
+export async function promoteFromCold(scope: Scope, scopeId: string, id: string): Promise<IndexEntry | null> {
+  const coldPath = coldIndexPath(scope, scopeId);
+  let row: IndexEntry | null = null;
+  await serializedWrite(coldPath, async () => {
+    const cold = await readYaml<ScopeIndex>(coldPath);
+    if (!cold) return;
+    row = cold.entries.find((e) => e.id === id) ?? null;
+    if (!row) return;
+    cold.entries = cold.entries.filter((e) => e.id !== id);
+    cold.lastUpdated = new Date().toISOString();
+    await writeYaml(coldPath, cold);
+  });
+  if (row) await upsertIndexEntry(scope, scopeId, row);
+  return row;
 }
 
 // ── Generic standalone-file YAML I/O ──────────────────────────────────────────

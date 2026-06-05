@@ -10,25 +10,27 @@ Characters forget. Marinara Extender gives them a filing cabinet — YAML files 
 
 Marinara Extender is two components:
 
-**Memory Extender server** — a local Node.js server that stores your memory data as YAML files and handles all the logic: loading relevant entries, building the memory block, extracting bookmarks, and running decay. It exposes a REST API that the extension calls.
+**Memory Extender server (the sidecar)** — a local Node.js server that owns all the logic and stores memory as plain YAML files. Each turn it: extracts `[remember:]` / `[bookmark:]` commands from the AI's reply, analyzes the exchange into emotional beats and ambient facts (via a local model), promotes/demotes memories across tiers (including cold-archiving stale ones), and assembles the memory block to inject next turn. It exposes a REST API the extension calls.
 
-**Extension** — client-side JS installed in Marinara. After each AI response it sends the message text to the memory server, which extracts any bookmarks and returns an updated memory block. The extension writes that block into a lorebook entry so Marinara injects it automatically on the next turn.
+**Extension** — client-side JS installed in Marinara. After each AI response it sends the turn to the sidecar, gets back the assembled block, and writes it into the character's lorebook as **two always-on system entries** — *Memory System — Instructions* (how to use memory) and *Memory System — Active Context* (what's relevant right now) — which Marinara injects on every generation. The bracket commands are stripped from visible chat by a regex script the extension installs automatically.
 
 ```text
-                         ┌─── Memory Extender (localhost:3001) ───┐
-Extension (post-turn) ──▶│  extract bookmarks · run decay         │
-                         │  build memory block                     │
-                         └──────────────────┬────────────────────-┘
-                                            │ memoryBlock
-                         ┌──────────────────▼─────────────────────┐
-                         │  Lorebook entry (updated by extension)  │
-                         └──────────────────┬────────────────────-┘
-                                            │ injected by Marinara
-                                            ▼
-                                   Next generation turn
+                          ┌── Memory Extender sidecar (localhost:3001) ──┐
+ Extension (post-turn) ──▶│  parse [remember:]/[bookmark:] commands       │
+   sends the AI turn      │  analyze beats + ambient facts (local model)  │
+                          │  promote / demote tiers · cold-archive stale  │
+                          │  assemble <memory_system> + <memory> block    │
+                          └───────────────────────┬──────────────────────┘
+                                                  │ block
+                          ┌───────────────────────▼──────────────────────┐
+                          │  2 constant system lorebook entries (per char)│
+                          └───────────────────────┬──────────────────────┘
+                                                  │ injected by Marinara every turn
+                                                  ▼
+                                         Next generation turn
 ```
 
-No proxy. No special connection. Your LLM calls go straight from Marinara to your provider as normal.
+Analysis runs on your **local model** (Ollama by default) — no key, nothing leaves your machine; an external OpenAI-compatible API is an optional fallback. Your normal chat LLM calls still go straight from Marinara to your provider; the sidecar never proxies them.
 
 ---
 
@@ -131,43 +133,47 @@ The loader prioritizes `open_threads` first, then `user_topics`, then `character
 
 ### Bookmarks
 
-The character can bookmark mid-reply by writing a tag anywhere in its response:
+The character can bookmark mid-reply by writing a bracket command anywhere in its response:
 
-```xml
-<bookmark topic="sister-situation" weight="0.8" why="unresolved">User's sister going through a rough patch — they cut the topic short.</bookmark>
+```text
+[bookmark: topic="sister-situation", weight=0.8, why="unresolved", summary="User's sister going through a rough patch — they cut the topic short."]
 ```
 
-| Attribute | Required | Notes |
+| Field | Required | Notes |
 | --- | --- | --- |
 | `topic` | Yes | kebab-case identifier |
-| `weight` | No | 0.1–1.0, defaults to 0.5 |
+| `weight` | No | 0.1–0.9, defaults to 0.5 |
 | `why` | No | `unresolved`, `important`, `emotional`, `promised`, `curious`, `follow-up` |
+| `summary` | No | one-line description shown when it resurfaces |
+
+The character also saves durable facts the same way: `[remember: lane="user_topics", content="..."]` (lanes: `user_topics`, `open_threads`, `character_topics`; add `scope="chat"` to keep it to one conversation).
 
 Each turn, all bookmark weights decay by ×0.97. On turns where a bookmark's weight passes a random roll, it surfaces as a soft callback in the memory block — the character may weave it in naturally. Bookmarks below weight 0.1 are pruned automatically.
 
-The bookmark tags are stripped from visible output by a regex script the extension installs automatically.
+These bracket commands (and any legacy `<bookmark>`/`<remember>` XML) are stripped from visible chat by a regex script the extension installs automatically.
 
 ---
 
 ## Ledger panel
 
-Click the `≡` button in the chat header to open the ledger panel. It shows the active chat's threads, topics, agenda items, and bookmarks. You can:
+Click the `≡` button in the chat header to open the ledger panel. It has four tabs:
 
-- **Create** threads, topics, and agenda items with a summary
-- **Mark threads done** — done entries are hidden from the loader and the panel by default
-- **Delete** any entry or bookmark
-- **Refresh** to sync with the current YAML state
+- **Memory** — the active chat's threads, topics, agenda items, and bookmarks. Create entries, mark threads done (hidden from the loader once done), delete, and refresh.
+- **Import** — pull memory out of past conversations (see below) and analyze pasted prose/story text into emotional beats.
+- **Pending** — speakers from imports that didn't match a known character. Route each to a card (or create one) so its memories file correctly; once mapped, future imports route that name automatically.
+- **Settings** — toggles, identity/relink tools, and maintenance (cleanup, etc.).
 
-The panel only shows chat-scope data. Character-scope and global entries can be managed via the management API directly (see below).
+The Memory tab shows chat-scope data; character-scope and global entries can be managed via the API (see below).
 
 ---
 
 ## Importing past chats
 
-The ledger panel has an **Import from past chats** section at the bottom. It lists all other chats for the current character and lets you extract persistent memories from them using an LLM.
+The **Import** tab lists the character's other chats and turns them into persistent memory at the same granularity as a live conversation — running the full sentiment pipeline to extract emotional beats (with their motivations and relational dynamics), not just a shallow summary.
 
-- **Import** — digest a single chat. The LLM reads the conversation and extracts threads, topics, and agenda items worth remembering.
-- **Import all** — digest every listed chat sequentially. Each chat is processed one at a time; progress is shown inline.
+- **Import one** — analyze a single chat into beats + retrievable entries.
+- **Import all** — analyze every listed chat sequentially, with honest progress and a cost estimate up front. Long runs are resumable, and re-importing a chat cleanly replaces its prior entries.
+- **Story / prose** — paste narrative text and assign its speakers to characters; unrecognized speakers land in the **Pending** tab rather than being dropped.
 
 Imported entries go into the **character scope**, so they're available across all future chats with that character.
 

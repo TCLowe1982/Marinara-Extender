@@ -11,6 +11,7 @@
 import type { DigestMessage } from "../digest.js";
 import type { Chunk, DialogueTurn } from "./types.js";
 import { loadSentimentConfig } from "./config.js";
+import { localUrl } from "../llm-config.js";
 
 // ── Turn detection ────────────────────────────────────────────────────────────
 
@@ -80,9 +81,9 @@ type EmbeddingResponse = {
 };
 
 async function fetchEmbeddings(texts: string[]): Promise<number[][] | null> {
-  const base = (process.env.MARINARA_EXTENDER_LOCAL_URL ?? "").replace(/\/$/, "");
+  const base = localUrl();
   const model = process.env.MARINARA_EXTENDER_EMBED_MODEL;
-  if (!base || !model) return null; // embeddings opt-in; otherwise turn-only grouping
+  if (!base || !model) return null; // embeddings opt-in (EMBED_MODEL); otherwise turn-only grouping
 
   try {
     const res = await fetch(`${base}/embeddings`, {

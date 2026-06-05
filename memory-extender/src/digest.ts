@@ -3,6 +3,7 @@
 // OpenAI-compatible API if Ollama is unavailable.
 
 import { getCachedAuth } from "./auth-cache.js";
+import { localUrl, localEnabled, localModel, externalUpstream, externalModel } from "./llm-config.js";
 import {
   type Entry,
   type Lane,
@@ -72,9 +73,9 @@ function buildUserPrompt(messages: DigestMessage[], characterName: string): stri
 // ── Local model call (Ollama or any OpenAI-compatible local server) ──────────
 
 async function callLocalLlm(systemPrompt: string, userPrompt: string): Promise<string | null> {
-  const base = (process.env.MARINARA_EXTENDER_LOCAL_URL ?? "").replace(/\/$/, "");
-  if (!base) return null;
-  const model = process.env.MARINARA_EXTENDER_LOCAL_MODEL ?? "phi3:mini";
+  if (!localEnabled()) return null;
+  const base = localUrl();
+  const model = localModel();
 
   try {
     const res = await fetch(`${base}/chat/completions`, {
@@ -110,8 +111,7 @@ async function callExternalLlm(systemPrompt: string, userPrompt: string, model: 
     );
   }
 
-  const upstream = (process.env.MARINARA_EXTENDER_DIGEST_UPSTREAM ?? "https://api.openai.com")
-    .replace(/\/$/, "");
+  const upstream = externalUpstream();
 
   const res = await fetch(`${upstream}/v1/chat/completions`, {
     method: "POST",
@@ -156,7 +156,7 @@ async function callLlm(systemPrompt: string, userPrompt: string, model: string):
       return local;
     }
     console.warn("[digest] local model returned prose instead of JSON — falling back to external API");
-  } else if (process.env.MARINARA_EXTENDER_LOCAL_URL) {
+  } else if (localEnabled()) {
     console.log("[digest] local model unavailable — falling back to external API");
   }
   return callExternalLlm(systemPrompt, userPrompt, model);
@@ -245,7 +245,7 @@ export async function snapshotSession(
   characterId: string,
   characterName: string,
 ): Promise<DigestResult> {
-  const model = process.env.MARINARA_EXTENDER_DIGEST_MODEL ?? "gpt-4o-mini";
+  const model = externalModel();
   const raw = await callLlm(
     buildSnapshotSystemPrompt(characterName),
     buildSnapshotUserPrompt(messages, characterName),
@@ -274,7 +274,7 @@ export async function digestMessages(
   characterName: string,
   model?: string,
 ): Promise<DigestResult> {
-  const usedModel = model ?? process.env.MARINARA_EXTENDER_DIGEST_MODEL ?? "gpt-4o-mini";
+  const usedModel = model ?? externalModel();
   const raw = await callLlm(
     buildSystemPrompt(characterName),
     buildUserPrompt(messages, characterName),

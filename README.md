@@ -36,6 +36,7 @@ No proxy. No special connection. Your LLM calls go straight from Marinara to you
 
 - [Marinara Engine](https://github.com/Pasta-Devs/Marinara-Engine) installed and running
 - Node.js 20+
+- [Ollama](https://ollama.com) with the default model pulled (`ollama pull dolphin3:8b`) — this is what powers analysis and imports locally. (`start.ps1` will offer to pull it for you.) An external OpenAI-compatible API key is an optional fallback.
 
 ---
 
@@ -69,15 +70,35 @@ That's it. The extension detects the active character and chat automatically and
 
 ## Environment variables
 
-All optional. Set them in `memory-extender/.env` or as system environment variables.
+**All optional** — a local Ollama running the default model works with **no `.env` at all**. Set values in `memory-extender/.env` or as system environment variables. Paths (`.env`, data dir) resolve relative to the install, so it doesn't matter where you launch from.
+
+**Local inference (the primary path):**
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `MARINARA_EXTENDER_PORT` | `3001` | Port the server listens on |
-| `MARINARA_EXTENDER_DATA` | `./data` | Where YAML files are stored |
-| `MARINARA_EXTENDER_API_KEY` | — | API key used for past-chat imports (see below) |
-| `MARINARA_EXTENDER_DIGEST_UPSTREAM` | `https://api.openai.com` | LLM base URL used for past-chat imports |
-| `MARINARA_EXTENDER_DIGEST_MODEL` | `gpt-4o-mini` | Model used for past-chat imports |
+| `MARINARA_EXTENDER_LOCAL_URL` | `http://127.0.0.1:11434/v1` | OpenAI-compatible local endpoint (Ollama by default; any compatible server works). Set it **empty** to disable local and use the external API only. |
+| `MARINARA_EXTENDER_LOCAL_MODEL` | `dolphin3:8b` | Local model for analysis/imports. Uncensored on purpose — an alignment-tuned model refuses to classify adult roleplay content, which breaks the pipeline. |
+| `MARINARA_EXTENDER_EMBED_MODEL` | — | Optional Ollama embedding model for semantic chunk merging (e.g. `nomic-embed-text`). Unset = turn-based grouping. |
+
+**External API (optional fallback — only used when local is unavailable):**
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MARINARA_EXTENDER_API_KEY` | — | API key for the external fallback. |
+| `MARINARA_EXTENDER_DIGEST_UPSTREAM` | `https://api.openai.com` | OpenAI-compatible base URL for the fallback. |
+| `MARINARA_EXTENDER_DIGEST_MODEL` | `gpt-4o-mini` | Fallback model. |
+
+**Server & behavior:**
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MARINARA_EXTENDER_PORT` | `3001` | Port the server listens on (binds `127.0.0.1` only). |
+| `MARINARA_EXTENDER_DATA` | `<install>/data` | Where YAML files are stored (resolved relative to the install). |
+| `MARINARA_EXTENDER_ALLOWED_ORIGIN` | — | Extra CORS origin to allow, if you run Marinara on a non-loopback URL. |
+| `MARINARA_EXTENDER_TIMESENSE` | `0` | Conversational time-sense (narrative time + presence). Off for v1.0. |
+| `MARINARA_EXTENDER_PROGRESS` | `1` | Console progress bar during imports. |
+| `MARINARA_EXTENDER_BUDGET_CHAT` / `_CHARACTER` / `_GLOBAL` | `4000` / `2000` / `1000` | Per-scope token budgets for the memory loaded each turn. |
+| `MARINARA_EXTENDER_EIDETIC` | `0` | Inject every entry regardless of budget (testing only). |
 
 ---
 
@@ -150,7 +171,7 @@ The ledger panel has an **Import from past chats** section at the bottom. It lis
 
 Imported entries go into the **character scope**, so they're available across all future chats with that character.
 
-The import calls an LLM directly and requires an API key. Set `MARINARA_EXTENDER_API_KEY` in `memory-extender/.env` before using this feature. The model is configurable via `MARINARA_EXTENDER_DIGEST_MODEL` (default: `gpt-4o-mini`).
+The import calls an LLM to analyze each conversation. By default it uses your **local model** (Ollama, `dolphin3:8b`) — no API key needed. If local inference is unavailable, it falls back to the external API, which requires `MARINARA_EXTENDER_API_KEY`. See [Environment variables](#environment-variables).
 
 > **Note:** Because imports write to the character scope, they can't easily be undone in bulk. Individual entries can always be deleted via the management API.
 

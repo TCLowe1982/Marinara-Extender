@@ -12,6 +12,7 @@
 // Priority: local Ollama → external API → paragraph split.
 
 import { getCachedAuth } from "./auth-cache.js";
+import { localUrl, localEnabled, localModel, externalUpstream, externalModel } from "./llm-config.js";
 import type { DigestMessage } from "./digest.js";
 
 // ── Format detection ──────────────────────────────────────────────────────────
@@ -104,9 +105,9 @@ Output ONLY the reformatted passage. No commentary, no explanation, no markdown 
 // ── LLM calls ─────────────────────────────────────────────────────────────────
 
 async function callLocal(text: string, characters: string[]): Promise<string | null> {
-  const base = (process.env.MARINARA_EXTENDER_LOCAL_URL ?? "").replace(/\/$/, "");
-  if (!base) return null;
-  const model = process.env.MARINARA_EXTENDER_LOCAL_MODEL ?? "phi3:mini";
+  if (!localEnabled()) return null;
+  const base = localUrl();
+  const model = localModel();
 
   try {
     const res = await fetch(`${base}/chat/completions`, {
@@ -135,9 +136,8 @@ async function callExternal(text: string, characters: string[]): Promise<string 
   const auth = getCachedAuth();
   if (!auth) return null;
 
-  const upstream = (process.env.MARINARA_EXTENDER_DIGEST_UPSTREAM ?? "https://api.openai.com")
-    .replace(/\/$/, "");
-  const model = process.env.MARINARA_EXTENDER_DIGEST_MODEL ?? "gpt-4o-mini";
+  const upstream = externalUpstream();
+  const model = externalModel();
 
   try {
     const res = await fetch(`${upstream}/v1/chat/completions`, {

@@ -2,6 +2,8 @@ import Fastify from "fastify";
 import { readFile } from "fs/promises";
 import { allowedCorsOrigin } from "./cors.js";
 import { defaultEnvPath } from "./paths.js";
+import { getDataDir } from "./storage.js";
+import { localUrl, localEnabled, localModel, externalUpstream, externalModel } from "./llm-config.js";
 import { registerApiRoutes } from "./api.js";
 import { registerSetupRoutes } from "./setup.js";
 import { isEideticMode } from "./loader.js";
@@ -63,12 +65,12 @@ app.options("*", { logLevel: "silent" }, async (_req, reply) => reply.send());
 // ── Health ────────────────────────────────────────────────────────────────────
 
 app.get("/api/health", { logLevel: "silent" }, async (_req, reply) => {
-  // Check Ollama — strip the /v1 suffix from LOCAL_URL to get the base Ollama URL.
-  const localUrl = (process.env.MARINARA_EXTENDER_LOCAL_URL ?? "").replace(/\/v1\/?$/, "");
+  // Check the local provider — strip the /v1 suffix to ping the server root.
+  const root = localUrl().replace(/\/v1\/?$/, "");
   let ollama: "ok" | "unavailable" | "not_configured" = "not_configured";
-  if (localUrl) {
+  if (localEnabled()) {
     try {
-      const r = await fetch(localUrl, { signal: AbortSignal.timeout(1000) });
+      const r = await fetch(root, { signal: AbortSignal.timeout(1000) });
       ollama = r.ok ? "ok" : "unavailable";
     } catch {
       ollama = "unavailable";
@@ -97,13 +99,9 @@ app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
   const apiKey = process.env.MARINARA_EXTENDER_API_KEY;
   console.log(`\nMarinara Extender memory server running on http://127.0.0.1:${PORT}`);
   console.log(`Setup page:   http://127.0.0.1:${PORT}/setup`);
-  console.log(`Data dir:     ${process.env.MARINARA_EXTENDER_DATA ?? "./data"}`);
-  console.log(`Digest URL:   ${process.env.MARINARA_EXTENDER_DIGEST_UPSTREAM ?? "https://api.openai.com"}/v1/chat/completions`);
-  console.log(`Digest model: ${process.env.MARINARA_EXTENDER_DIGEST_MODEL ?? "gpt-4o-mini"}`);
-  console.log(`API key:      ${apiKey ? "set" : "NOT SET — external imports will fall back to local"}`);
-  const localUrl = process.env.MARINARA_EXTENDER_LOCAL_URL;
-  const localModel = process.env.MARINARA_EXTENDER_LOCAL_MODEL ?? "phi3:mini";
-  console.log(`Local model:  ${localUrl ? `${localModel} @ ${localUrl}` : "not configured"}`);
+  console.log(`Data dir:     ${getDataDir()}`);
+  console.log(`Local model:  ${localEnabled() ? `${localModel()} @ ${localUrl()}` : "disabled (external only)"}`);
+  console.log(`External API: ${apiKey ? `${externalModel()} @ ${externalUpstream()}` : "no key — local only"}`);
   console.log(`Eidetic mode: ${isEideticMode() ? "ON — all entries injected (no budget limit)" : "off"}`);
   console.log(`Progress:     ${process.env.MARINARA_EXTENDER_PROGRESS !== "0" ? "on (story-import console bar)" : "off"}`);
 });

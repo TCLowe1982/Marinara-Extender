@@ -6,6 +6,7 @@
 // Fires async from process-turn, never blocks the lorebook update.
 
 import type { Lane } from "./storage.js";
+import { localUrl, localEnabled, localModel, externalUpstream, externalModel } from "./llm-config.js";
 
 // ── Candidate extraction ──────────────────────────────────────────────────────
 
@@ -55,9 +56,9 @@ Return a JSON object of this exact shape:
 Return {"facts":[]} if nothing qualifies. Raw JSON only — no explanation, no markdown.`;
 
 async function callLocal(prompt: string): Promise<string | null> {
-  const base = (process.env.MARINARA_EXTENDER_LOCAL_URL ?? "").replace(/\/$/, "");
-  if (!base) return null;
-  const model = process.env.MARINARA_EXTENDER_LOCAL_MODEL ?? "phi3:mini";
+  if (!localEnabled()) return null;
+  const base = localUrl();
+  const model = localModel();
 
   try {
     const res = await fetch(`${base}/chat/completions`, {
@@ -122,8 +123,8 @@ async function callExternal(prompt: string): Promise<string | null> {
   const { getCachedAuth } = await import("./auth-cache.js");
   const auth = getCachedAuth();
   if (!auth) return null;
-  const upstream = (process.env.MARINARA_EXTENDER_DIGEST_UPSTREAM ?? "https://api.openai.com").replace(/\/$/, "");
-  const model = process.env.MARINARA_EXTENDER_DIGEST_MODEL ?? "gpt-4o-mini";
+  const upstream = externalUpstream();
+  const model = externalModel();
   try {
     const res = await fetch(`${upstream}/v1/chat/completions`, {
       method: "POST",

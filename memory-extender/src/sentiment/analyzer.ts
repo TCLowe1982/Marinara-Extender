@@ -15,6 +15,7 @@
 
 import { getCachedAuth } from "../auth-cache.js";
 import { fetchWithBackoff } from "../http.js";
+import { localUrl, localEnabled, localModel, externalUpstream, externalModel } from "../llm-config.js";
 import type { BeatAnalysis, ClassificationResult, Emotion, EmotionWeight } from "./types.js";
 
 // ── JSON extraction (handles markdown-fenced responses) ────────────────────
@@ -70,9 +71,9 @@ function parseAnalysisJson(raw: string): BeatAnalysis | null {
 // ── Local model (Ollama or any OpenAI-compatible local server) ────────────
 
 async function callLocal(systemPrompt: string, userPrompt: string): Promise<string | null> {
-  const base = (process.env.MARINARA_EXTENDER_LOCAL_URL ?? "").replace(/\/$/, "");
-  if (!base) return null;  // not configured — skip
-  const model = process.env.MARINARA_EXTENDER_LOCAL_MODEL ?? "phi3:mini";
+  if (!localEnabled()) return null;  // explicitly disabled — skip
+  const base = localUrl();
+  const model = localModel();
 
   try {
     const res = await fetch(`${base}/chat/completions`, {
@@ -107,9 +108,8 @@ async function callExternal(systemPrompt: string, userPrompt: string): Promise<s
       "Analyzer: local Ollama model unavailable and no API key set. Run Ollama (MARINARA_EXTENDER_LOCAL_URL/LOCAL_MODEL) or set MARINARA_EXTENDER_API_KEY.",
     );
   }
-  const upstream = (process.env.MARINARA_EXTENDER_DIGEST_UPSTREAM ?? "https://api.openai.com")
-    .replace(/\/$/, "");
-  const model = process.env.MARINARA_EXTENDER_DIGEST_MODEL ?? "gpt-4o-mini";
+  const upstream = externalUpstream();
+  const model = externalModel();
 
   const res = await fetchWithBackoff(`${upstream}/v1/chat/completions`, {
     method: "POST",

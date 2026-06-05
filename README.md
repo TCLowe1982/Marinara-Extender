@@ -57,9 +57,9 @@ npm start            # production (compiled)
 
 ### 2. Install the extension — once
 
-Open **[http://127.0.0.1:3001/setup](http://127.0.0.1:3001/setup)**. In Marinara → Settings → Extensions, add a new extension named **Marinara Extender** and paste the **loader** shown on that page as its JavaScript.
+Open **[http://127.0.0.1:3001/setup](http://127.0.0.1:3001/setup)** and **download the loader**. In Marinara → Settings → Extensions, add a new extension named **Marinara Extender** and **upload that file**.
 
-You only paste it once. The loader pulls the live extension from your running server every time Marinara loads, so future updates just need a Marinara reload — never another paste. (Prefer the whole file? The setup page also offers a direct download as an offline fallback.)
+You only do this once. The loader pulls the live extension from your running server every time Marinara loads, so future updates just need a Marinara reload — never another upload. (Prefer the whole file? The setup page also offers the full extension as an offline fallback, but you'd re-upload it on every update.)
 
 ### 3. Open any character chat
 

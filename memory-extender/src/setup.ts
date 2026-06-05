@@ -137,23 +137,33 @@ function buildSetupHtml(port: number): string {
       <div class="step-num">2</div>
       <div class="step-body">
         <h2>Install the extension &#8212; once</h2>
-        <p>In Marinara &#8594; Settings &#8594; Extensions, add a new extension named
-           <strong>Marinara Extender</strong> and paste this loader as its JavaScript:</p>
-        <textarea id="loader" readonly rows="6"
-          style="width:100%;background:#0d0c0a;border:1px solid #3d3a36;border-radius:6px;color:#c9c5bf;font-family:monospace;font-size:11px;line-height:1.45;padding:10px;resize:vertical;white-space:pre;overflow:auto">${escapeHtml(buildLoaderJs(port))}</textarea>
+        <p>Download the <strong>loader</strong>, then in Marinara &#8594; Settings &#8594;
+           Extensions add a new extension named <strong>Marinara Extender</strong> and
+           <strong>upload this file</strong> when it asks:</p>
         <div class="row" style="margin-top:8px">
-          <button class="btn-primary" id="copyLoader" type="button">Copy loader</button>
-          <span id="copied" style="color:#4ade80;font-size:12px;display:none">Copied &#8212; paste it into the extension.</span>
+          <a class="btn-primary" href="/loader.js" download="Marinara Extender.js">
+            Download loader (Marinara Extender.js)
+          </a>
         </div>
         <p style="margin-top:10px;color:#6b7280;font-size:12px">
-          Paste it <strong>once</strong>. It pulls the latest extension from this server
-          every time, so future updates just need a Marinara reload &#8212; never another paste.
+          Upload it <strong>once</strong>. The loader pulls the latest extension from this
+          server every time Marinara loads, so future updates just need a Marinara reload
+          &#8212; never another upload.
         </p>
         <details style="margin-top:8px">
-          <summary style="cursor:pointer;color:#6b7280;font-size:12px">Prefer the whole file? (offline / no auto-update)</summary>
+          <summary style="cursor:pointer;color:#6b7280;font-size:12px">If your Marinara lets you paste JS instead of uploading a file</summary>
+          <textarea id="loader" readonly rows="6"
+            style="width:100%;margin-top:8px;background:#0d0c0a;border:1px solid #3d3a36;border-radius:6px;color:#c9c5bf;font-family:monospace;font-size:11px;line-height:1.45;padding:10px;resize:vertical;white-space:pre;overflow:auto">${escapeHtml(buildLoaderJs(port))}</textarea>
           <div class="row" style="margin-top:8px">
-            <a class="btn-primary" href="/marinara-extender.js" download="Marinara Extender.js">
-              Download Marinara Extender.js
+            <button class="btn-primary" id="copyLoader" type="button">Copy loader</button>
+            <span id="copied" style="color:#4ade80;font-size:12px;display:none">Copied.</span>
+          </div>
+        </details>
+        <details style="margin-top:8px">
+          <summary style="cursor:pointer;color:#6b7280;font-size:12px">Prefer the whole file? (offline / no auto-update &#8212; re-upload on each update)</summary>
+          <div class="row" style="margin-top:8px">
+            <a class="btn-primary" href="/marinara-extender.js" download="Marinara Extender (full).js">
+              Download full extension
             </a>
           </div>
         </details>
@@ -208,10 +218,12 @@ export function registerSetupRoutes(
     return reply.send(buildSetupHtml(port));
   });
 
-  // The paste-once loader (port baked in). Handy for reference/automation; the
-  // setup page also shows it inline with a copy button.
+  // The install-once loader (port baked in). Served as a downloadable file since
+  // Marinara's extension import is file-upload, not paste. Upload this once; it
+  // pulls the live extension from the server thereafter.
   app.get("/loader.js", async (_req, reply) => {
-    reply.header("Content-Type", "text/plain; charset=utf-8");
+    reply.header("Content-Type", "text/javascript; charset=utf-8");
+    reply.header("Content-Disposition", 'attachment; filename="Marinara Extender.js"');
     return reply.send(buildLoaderJs(port));
   });
 

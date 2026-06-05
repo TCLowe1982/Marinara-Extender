@@ -4,16 +4,12 @@
 
 import type { FastifyInstance } from "fastify";
 import { readFile, writeFile } from "fs/promises";
-import { join } from "path";
+import { defaultEnvPath, extensionJsCandidates } from "./paths.js";
 
 // ── Extension file lookup ─────────────────────────────────────────────────────
 
 async function readExtensionJs(): Promise<string | null> {
-  const candidates = [
-    join(process.cwd(), "..", "marinara-extender.js"),
-    join(process.cwd(), "marinara-extender.js"),
-  ];
-  for (const p of candidates) {
+  for (const p of extensionJsCandidates()) {
     try {
       return await readFile(p, "utf8");
     } catch {
@@ -26,7 +22,7 @@ async function readExtensionJs(): Promise<string | null> {
 // ── .env key persistence ──────────────────────────────────────────────────────
 
 async function saveApiKeyToEnv(key: string): Promise<void> {
-  const envPath = join(process.cwd(), ".env");
+  const envPath = defaultEnvPath();
   let existing = "";
   try { existing = await readFile(envPath, "utf8"); } catch { /* new file */ }
 

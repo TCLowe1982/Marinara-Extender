@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir, access, unlink, readdir, rename } from "fs/promises";
 import { join, dirname } from "path";
 import { parse, stringify } from "yaml";
+import { defaultDataDir } from "./paths.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -76,7 +77,9 @@ export interface Bookmark {
 // ── Data directory ───────────────────────────────────────────────────────────
 
 export function getDataDir(): string {
-  return process.env.MARINARA_EXTENDER_DATA ?? join(process.cwd(), "data");
+  // Explicit override wins; otherwise resolve relative to the install (not cwd)
+  // so the data dir is found no matter where the server was launched from.
+  return process.env.MARINARA_EXTENDER_DATA ?? defaultDataDir();
 }
 
 // ── Path helpers ─────────────────────────────────────────────────────────────

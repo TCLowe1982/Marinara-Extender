@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import { readFile } from "fs/promises";
-import { join } from "path";
 import { allowedCorsOrigin } from "./cors.js";
+import { defaultEnvPath } from "./paths.js";
 import { registerApiRoutes } from "./api.js";
 import { registerSetupRoutes } from "./setup.js";
 import { isEideticMode } from "./loader.js";
@@ -12,7 +12,7 @@ import { isEideticMode } from "./loader.js";
 
 async function loadDotEnv(): Promise<void> {
   try {
-    const raw = await readFile(join(process.cwd(), ".env"), "utf8");
+    const raw = await readFile(defaultEnvPath(), "utf8");
     for (const line of raw.split("\n")) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith("#")) continue;

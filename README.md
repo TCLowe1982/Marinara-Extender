@@ -41,11 +41,11 @@ No proxy. No special connection. Your LLM calls go straight from Marinara to you
 
 ## Installation
 
-### 1. Install the extension
+### 1. Start the Memory Extender server
 
-Download [marinara-extender.js](./marinara-extender.js) from this repo. In Marinara → Settings → Extensions, add a new extension named **Marinara Extender** and upload the file.
+On Windows, double-click **`Extender_start.bat`** (or run `start.ps1`) — it installs dependencies on first run, starts Ollama and the server, and shows a live status bar.
 
-### 2. Start the Memory Extender server
+Or start it manually:
 
 ```bash
 cd memory-extender
@@ -55,11 +55,15 @@ npm run dev          # development (tsx watch)
 npm start            # production (compiled)
 ```
 
-Then open **[http://127.0.0.1:3001/setup](http://127.0.0.1:3001/setup)** to confirm everything is running.
+### 2. Install the extension — once
+
+Open **[http://127.0.0.1:3001/setup](http://127.0.0.1:3001/setup)**. In Marinara → Settings → Extensions, add a new extension named **Marinara Extender** and paste the **loader** shown on that page as its JavaScript.
+
+You only paste it once. The loader pulls the live extension from your running server every time Marinara loads, so future updates just need a Marinara reload — never another paste. (Prefer the whole file? The setup page also offers a direct download as an offline fallback.)
 
 ### 3. Open any character chat
 
-That's it. The extension detects the active character and chat automatically, keeps the lorebook entry up to date, and starts tracking bookmarks from the first response.
+That's it. The extension detects the active character and chat automatically and starts working from the first response. (If the panel button doesn't appear, the server isn't running — start it and reload Marinara.)
 
 ---
 

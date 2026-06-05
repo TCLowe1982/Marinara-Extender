@@ -38,6 +38,34 @@ async function saveApiKeyToEnv(key: string): Promise<void> {
   process.env.MARINARA_EXTENDER_API_KEY = key;
 }
 
+// ── Loader stub ─────────────────────────────────────────────────────────────
+// Pasted ONCE into Marinara → Settings → Extensions. On every Marinara load it
+// pulls the live extension from this server and runs it the same way Marinara
+// would (new Function("marinara", code)). So updating the extension never needs
+// a re-paste — just update the server file and reload Marinara. The port is
+// baked in so a copied loader always points at the right server. Uses string
+// concatenation (no inner template literals) so it survives templating cleanly.
+function buildLoaderJs(port: number): string {
+  return `/* Marinara Extender — loader. Paste this ONCE into Marinara → Settings →
+   Extensions (name it "Marinara Extender"). It loads the live extension from your
+   local Memory Extender every time, so updates never need re-pasting — just
+   reload Marinara after updating the server. */
+(async () => {
+  const SIDECAR = "http://127.0.0.1:${port}";
+  try {
+    const res = await fetch(SIDECAR + "/marinara-extender.js?ts=" + Date.now());
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    new Function("marinara", await res.text())(marinara);
+  } catch (err) {
+    console.error("[Marinara Extender] Memory Extender server not reachable at " + SIDECAR + " — is it running? (start.ps1 / Extender_start.bat)", err);
+  }
+})();`;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 // ── Setup page HTML ───────────────────────────────────────────────────────────
 
 function buildSetupHtml(port: number): string {
@@ -108,14 +136,27 @@ function buildSetupHtml(port: number): string {
     <div class="step">
       <div class="step-num">2</div>
       <div class="step-body">
-        <h2>Install the extension</h2>
-        <p>In Marinara &#8594; Settings &#8594; Extensions, add a new extension
-           named <strong>Marinara Extender</strong> and upload this file.</p>
+        <h2>Install the extension &#8212; once</h2>
+        <p>In Marinara &#8594; Settings &#8594; Extensions, add a new extension named
+           <strong>Marinara Extender</strong> and paste this loader as its JavaScript:</p>
+        <textarea id="loader" readonly rows="6"
+          style="width:100%;background:#0d0c0a;border:1px solid #3d3a36;border-radius:6px;color:#c9c5bf;font-family:monospace;font-size:11px;line-height:1.45;padding:10px;resize:vertical;white-space:pre;overflow:auto">${escapeHtml(buildLoaderJs(port))}</textarea>
         <div class="row" style="margin-top:8px">
-          <a class="btn-primary" href="/marinara-extender.js" download="Marinara Extender.js">
-            Download Marinara Extender.js
-          </a>
+          <button class="btn-primary" id="copyLoader" type="button">Copy loader</button>
+          <span id="copied" style="color:#4ade80;font-size:12px;display:none">Copied &#8212; paste it into the extension.</span>
         </div>
+        <p style="margin-top:10px;color:#6b7280;font-size:12px">
+          Paste it <strong>once</strong>. It pulls the latest extension from this server
+          every time, so future updates just need a Marinara reload &#8212; never another paste.
+        </p>
+        <details style="margin-top:8px">
+          <summary style="cursor:pointer;color:#6b7280;font-size:12px">Prefer the whole file? (offline / no auto-update)</summary>
+          <div class="row" style="margin-top:8px">
+            <a class="btn-primary" href="/marinara-extender.js" download="Marinara Extender.js">
+              Download Marinara Extender.js
+            </a>
+          </div>
+        </details>
       </div>
     </div>
 
@@ -142,6 +183,14 @@ function buildSetupHtml(port: number): string {
     </a>
   </div>
 </div>
+<script>
+  document.getElementById("copyLoader").addEventListener("click", async function () {
+    var ta = document.getElementById("loader");
+    try { await navigator.clipboard.writeText(ta.value); }
+    catch (e) { ta.focus(); ta.select(); try { document.execCommand("copy"); } catch (e2) {} }
+    document.getElementById("copied").style.display = "inline";
+  });
+</script>
 </body>
 </html>`;
 }
@@ -157,6 +206,13 @@ export function registerSetupRoutes(
   app.get("/setup", async (_req, reply) => {
     reply.header("Content-Type", "text/html; charset=utf-8");
     return reply.send(buildSetupHtml(port));
+  });
+
+  // The paste-once loader (port baked in). Handy for reference/automation; the
+  // setup page also shows it inline with a copy button.
+  app.get("/loader.js", async (_req, reply) => {
+    reply.header("Content-Type", "text/plain; charset=utf-8");
+    return reply.send(buildLoaderJs(port));
   });
 
   app.get("/marinara-extender.js", async (_req, reply) => {

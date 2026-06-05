@@ -27,6 +27,7 @@ import {
 } from "./storage.js";
 import { nanoid } from "./nanoid.js";
 import { allowedCorsOrigin } from "./cors.js";
+import { backupDataDir, snapshotScope } from "./backup.js";
 import { digestMessages, snapshotSession, type DigestMessage } from "./digest.js";
 import { processResponse, extractRememberTags } from "./writer.js";
 import { loadContext } from "./loader.js";
@@ -884,6 +885,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
       // Clean re-import: drop this chat's prior companion entries first so a
       // re-run replaces rather than piles up. (Beats are idempotent by id.)
       if (chatId) {
+        await snapshotScope("character", identityKey); // recover point before a destructive index change
         const purged = await removeEntriesBySourceChat("character", identityKey, chatId);
         if (purged > 0) console.info(`[ME] re-import — cleared ${purged} prior entries for chat ${chatId}`);
       }
@@ -1197,6 +1199,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
     const { characterId } = req.params;
     if (!characterId) return reply.code(400).send({ error: "characterId is required" });
     const identityKey = await resolveIdentity(characterId);
+    await snapshotScope("character", identityKey); // recover point before wiping beats
     const deleted = await clearBeats(identityKey);
     const jobs = await clearJobs(identityKey); // also drop cached import progress
     console.info(`[ME] beats cleared — key:${identityKey} — ${deleted} beats removed, ${jobs} import job(s) cleared`);
@@ -1289,6 +1292,19 @@ export function registerApiRoutes(app: FastifyInstance): void {
     }
 
     return reply.code(400).send({ error: `unknown action "${action}"` });
+  });
+
+  // ── POST /api/backup ──────────────────────────────────────────────────────
+  // Full copy of the YAML memory store to a timestamped sibling folder. The one
+  // irreplaceable thing — run before anything risky, or whenever.
+  app.post("/api/backup", async (_req, reply) => {
+    try {
+      const { dir, files } = await backupDataDir();
+      console.info(`[ME] backup — ${files} files → ${dir}`);
+      return reply.send({ ok: true, dir, files });
+    } catch (err) {
+      return reply.code(500).send({ error: "backup failed", detail: String(err) });
+    }
   });
 
   app.get("/api/aliases", async (_req, reply) => {

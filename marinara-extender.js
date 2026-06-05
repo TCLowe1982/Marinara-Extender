@@ -1039,6 +1039,36 @@ function renderSettingsSection() {
   cleanupRow.append(cleanupLbl, cleanupBtn);
   body.appendChild(cleanupRow);
 
+  // Back up memories — full copy of the data dir to a timestamped folder.
+  const backupRow = el("div", "me-settings-row");
+  const backupLbl = el("div", "me-settings-lbl");
+  backupLbl.textContent = "Back up my memories";
+  const backupSmall = el("small");
+  backupSmall.textContent = "Copy all memory data to a timestamped folder you can keep";
+  backupLbl.appendChild(backupSmall);
+  const backupBtn = el("button", "me-btn");
+  backupBtn.textContent = "Back up now";
+  backupBtn.style.fontSize = "10px";
+  backupBtn.style.padding = "2px 8px";
+  backupBtn.addEventListener("click", async () => {
+    backupBtn.disabled = true;
+    backupBtn.textContent = "Backing up…";
+    try {
+      const res = await memFetch("/api/backup", { method: "POST", body: JSON.stringify({}) });
+      if (res?.ok) {
+        backupBtn.textContent = `Backed up ${res.files} files`;
+        backupSmall.textContent = res.dir;
+        backupSmall.title = res.dir;
+      } else {
+        backupBtn.textContent = "Failed";
+      }
+    } catch {
+      backupBtn.textContent = "Failed — is the server running?";
+    }
+  });
+  backupRow.append(backupLbl, backupBtn);
+  body.appendChild(backupRow);
+
   // Backfill memory tiers
   const backfillRow = el("div", "me-settings-row");
   const backfillLbl = el("div", "me-settings-lbl");

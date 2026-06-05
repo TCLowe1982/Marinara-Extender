@@ -211,9 +211,47 @@ DELETE /api/bookmarks/:id?scope=&scopeId=
 
 ```http
 GET    /api/scopes            # lists all scopes that have data, with counts
-GET    /api/health            # { ok: true }
+GET    /api/health            # { ok: true, ollama: "ok" | "unavailable" | "not_configured" }
 GET    /api/memory-block?characterId=&chatId=   # current memory block (read-only)
 POST   /api/process-turn      { characterId, chatId, turnNumber, messageText }
+```
+
+### Beats & imports
+
+```http
+POST   /api/estimate-beats    # pre-flight cost estimate (chunk + classify, no LLM)
+POST   /api/analyze-beats     # analyze a chat into emotional beats (NDJSON progress stream)
+POST   /api/ingest-story      # analyze pasted prose, with per-speaker assignment
+GET    /api/beats?characterId=&full=
+DELETE /api/beats/:characterId
+POST   /api/beats-to-entries  # backfill retrievable entries from stored beats
+```
+
+### Speaker resolution (holding pool + alias table)
+
+```http
+GET    /api/pending-speakers          # unresolved speaker labels + counts + suggestion
+POST   /api/resolve-speaker           { label, action: "map"|"create"|"ignore", characterId?, characterName? }
+GET|POST|DELETE /api/aliases          # alias table read / add (409 on collision) / remove
+GET    /api/ignored-speakers          # + POST /api/restore-speaker { label }
+POST   /api/orphan-character          { characterId } — return a deleted character's beats to the pool
+```
+
+### Maintenance
+
+```http
+POST   /api/cleanup           # prune ghosts, dedupe, mark transients done
+POST   /api/backup            # full copy of the data dir to a timestamped folder
+GET    /api/identity          # + POST /api/identity/relink, PATCH /api/identity/name
+```
+
+### Setup (browser-facing)
+
+```http
+GET    /setup                 # one-stop install page
+GET    /loader.js             # the paste-once extension loader
+GET    /marinara-extender.js  # the full extension file
+POST   /api/save-key          { apiKey } — store the optional external API key in .env
 ```
 
 ---
@@ -223,15 +261,20 @@ POST   /api/process-turn      { characterId, chatId, turnNumber, messageText }
 All data lives under the configured `data/` directory as plain YAML — diffable, inspectable with any text editor, and easy to back up.
 
 ```text
-data/chats/<chatId>/
-├── index.yaml          # flat lookup table: id → path, summary, tokens, lane, status
-├── threads/
-│   └── thread-<id>.yaml
-├── user-topics/
-│   └── utopic-<id>.yaml
-├── char-topics/
-│   └── ctopic-<id>.yaml
-└── bookmarks.yaml      # decaying bookmark list
+data/
+├── chats/<chatId>/              # one conversation's scratchpad
+│   ├── index.yaml               # hot lookup table: id → path, summary, tokens, lane, tier, status
+│   ├── index.cold.yaml          # cold archive: stale entries, retained but out of the hot scan
+│   ├── threads/ user-topics/ char-topics/   # the entry files (thread-/utopic-/ctopic-<id>.yaml)
+│   ├── bookmarks.yaml           # decaying bookmark list
+│   └── soft-clock.yaml          # conversational time-of-day state (when time-sense is on)
+├── characters/<id>/             # a character's persistent memory (same layout) plus:
+│   └── beats/                   # emotional beats from imports/live chat (index.yaml + beat-<id>.yaml)
+├── global/                      # conventions that apply to every character
+├── aliases.yaml                 # speaker-label → character map
+├── holding-pool.yaml            # orphan beats awaiting speaker resolution
+├── identity-map.yaml            # characterId → stable identity key
+└── .snapshots/                  # automatic index snapshots taken before destructive ops
 ```
 
-Indexes are updated automatically whenever an entry is created, patched, or deleted. You should not edit index files by hand; edit the entry YAML files directly if you need to make manual changes.
+Indexes update automatically on every create/patch/delete; don't hand-edit them — edit the entry YAML files directly if needed. Full backups land in a sibling `marinara-extender-backups/` folder (via the Settings "Back up my memories" button or `POST /api/backup`).

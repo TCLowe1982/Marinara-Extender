@@ -176,3 +176,17 @@ loader gates recap injection on the linked `Arc.status === "dormant"` (the arc l
 the entry status). This converts a fan-out across every consumer into ONE deliberate new
 consumer in the loader's recap path. Do NOT later "simplify" `dormant` onto `EntryStatus`
 — this is a decision with evidence, not a preference.
+
+**Invariant: the two type systems meet only at the loader, on purpose.** Anyone who
+wants to merge `ArcStatus` into `EntryStatus` later has to break this invariant
+explicitly — i.e. argue against it on the record, not just quietly do it.
+
+How the three risk spots were found, and why that matters: they are empirical, not
+reasoning-derived. You cannot deduce that `VALID_STATUSES` (api.ts:102) rejects unknown
+values while the LLM digest coerces them to "open" (digest.ts:207) — it only surfaces
+with a real codebase grep. Workflow rule when adding a value to a type that crosses a
+serialization boundary (persisted YAML/JSON, an API field, or LLM-validated output): the
+compiler will NOT find every consumer (no exhaustiveness guarantee; storage does
+`parse(raw) as T` with no runtime check). Do a two-pass grep — (1) the TYPE NAME, then
+(2) the existing VALUES as STRING LITERALS. Allow-lists, default filters, and coercions
+hide in the second pass.

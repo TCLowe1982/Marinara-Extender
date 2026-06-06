@@ -74,7 +74,7 @@ export interface Arc {
 
   // Watermark: the arc's recap is canonical for beats up to here; newer beats ride
   // hot until the next promotion advances it. resolved/dormant => pinned.
-  watermark: { coveredThrough: string /* ISO of last covered beat */ ; version: number };
+  watermark: { coveredThroughSeq: number /* per-character beat seq, NOT ISO — see Resolved #1 */ ; version: number };
 
   // Periods of no activity, fed to the renderer as INPUT (not just metadata) so the
   // recap can say "went quiet for three weeks, reopened when...". Derivable from
@@ -122,18 +122,57 @@ branching on `arc.lane`:
 - **Recap-aware recitation:** a cold beat cited by a recap does NOT auto-rehydrate on
   the recap's recall; only a precise query the recap does not cover cracks it open.
 
-## Open type-level questions (for review)
+## Resolved decisions (review complete — TC, 2026-06-05)
 
-1. **Watermark ordering key.** `coveredThrough` as ISO of last covered beat assumes
-   beat timestamps are monotonic per arc. Beats have `created` + `turnStart`; is a
-   per-character monotonic beat sequence number safer than ISO time for ordering?
-2. **Edge home.** `ArcMembership` as a separate join collection (queryable both
-   directions) vs embedded `Arc.members[]`. Sketch embeds for render-locality; a beat
-   -> arcs reverse lookup (for "which arcs does this new beat extend?") may want the
-   standalone collection.
-3. **Salience source (v1.1).** Edge `salience` heuristic = `recency * entityProminence
-   * beat.salience`, normalized. `beat.salience` and `created` exist; entityProminence
-   needs a per-arc entity-frequency count. Confirm the three factors and weighting.
-4. **Centroid storage cost.** Storing `centroid: number[]` per arc (nomic-embed-text =
-   768-dim) across hundreds of arcs — acceptable inline, or store a beat-id list and
-   recompute on demand?
+1. **Watermark ordering = per-character monotonic sequence, not ISO time.** There is
+   NO sequence today; beat ids are content hashes (`beat-<sha1>`, encoder.ts:26), not
+   ordinal. ISO is unusable: `EmotionalBeat.created` is `new Date().toISOString().slice(0,10)`
+   (encoder.ts:207) — date only, no time-of-day, so all beats in a session share one
+   value and cannot be ordered intra-day. `turnStart` is monotonic only WITHIN a source
+   chat (resets per import), so not a global per-character order either.
+
+   Implementation: add `nextSeq: number` to `BeatIndex` and `seq: number` to
+   `BeatIndexEntry`. Assign inside `upsertBeatIndex` under the EXISTING per-character
+   `serializeBeatWrite` lock (encoder.ts:115), which already makes the index
+   read-modify-write atomic; the counter persists durably in `beats/index.yaml`. Assign
+   ONCE on first insert (the `i < 0` branch, encoder.ts:132) and NEVER reassign on
+   re-encode — beat ids are idempotent, so a resumed import must not renumber history;
+   `seq` is write-once, immutable. Caveat: the lock is in-memory / single-process — fine
+   for today's single-process sidecar, not a cross-process guarantee.
+
+2. **Edges = standalone `ArcMembership` collection** with bidirectional indexes built
+   at load. Both directions are needed: beat to arcs at promotion time ("what arcs does
+   this new beat extend?") and arc to beats at render time. Embedded edges force a full
+   arc scan for the first query — dies past ~100 arcs.
+
+3. **Edge salience = recency x entityProminence x beat.salience, normalized, WITH a
+   high-salience floor.** Raw recency-as-multiplier crushes founding / turning-point
+   beats to zero over time, so recaps lose their own origin stories. Floor: a beat with
+   intrinsic `beat.salience > 0.8` loses no more than X% of its arc-edge salience to
+   recency decay (X is a tuning knob). Keeps turning points visible regardless of age.
+
+4. **Centroid = inline + cached, recomputed ONCE per promotion pass (batched), not per
+   added beat.** Per-beat recompute makes a pass O(N^2); end-of-pass recompute is O(N).
+   768-dim x hundreds of arcs is sub-MB inline.
+
+## EntryStatus consumer audit (why ArcStatus stays separate)
+
+`dormant` lives on `ArcStatus`, NOT `EntryStatus` — by decision, with evidence. Adding
+it to `EntryStatus` was audited against every consumer:
+
+- **No exhaustive switch / `assertNever` exists.** All matches are `status === "done"`
+  skip-guards (cleanup.ts:131/134/162, loader.ts:195, promotion.ts:112/175), which treat
+  an unknown value gracefully as "not done." So there is no catastrophic fall-through.
+- **Allow-lists would drop it silently.** `VALID_STATUSES` (api.ts:102, digest.ts:197)
+  rejects a new value via the API and coerces it to "open" via the LLM digest (digest.ts:207).
+- **Default list filter excludes it.** api.ts:137 is `["open","in_progress","deferred"]`;
+  a new value vanishes from default listings.
+- **Prompt leak.** loader.ts:332 renders a `[status]` tag (space-prefixed) into the injected context verbatim.
+- **Storage does not validate.** Load is `parse(raw) as T` (storage.ts:152) — unknown
+  values round-trip silently.
+
+Resolution: keep `dormant` off `EntryStatus`. `RecapEntry.status` stays `"open"`; the
+loader gates recap injection on the linked `Arc.status === "dormant"` (the arc link, not
+the entry status). This converts a fan-out across every consumer into ONE deliberate new
+consumer in the loader's recap path. Do NOT later "simplify" `dormant` onto `EntryStatus`
+— this is a decision with evidence, not a preference.

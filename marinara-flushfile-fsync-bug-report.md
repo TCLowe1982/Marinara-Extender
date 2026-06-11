@@ -3,6 +3,30 @@
 > Drafted for Discord verification first, then GitHub issue on Pasta-Devs/Marinara-Engine.
 > Everything below was verified live on the affected machine — repro snippets included so anyone can confirm.
 
+## Discord version (copy-paste, fits one message)
+
+**Bug: table durability is a silent no-op on Windows — a hard crash can zero tables AND their .bak files**
+
+`flushFile()` in `packages/server/src/db/file-backed-store.ts` opens files **read-only** (`openSync(path,"r")`) before `fsyncSync()`. On Windows, FlushFileBuffers requires a writable handle, so fsync fails with EPERM — and the empty `catch {}` swallows it. Every fsync in `atomicWriteFile()` (bak refresh, tmp write, dir flush) is therefore a no-op on Windows. Data reaches disk only when the OS lazy writer gets to it; a BSOD/power cut discards the cache and NTFS recovery leaves the files NUL-filled — **including the .bak**, the exact double-loss the fsync was added to prevent.
+
+**30s repro, any Windows box, no crash needed:**
+
+```
+node -e "const fs=require('fs');fs.writeFileSync('t','x');for(const m of['r','r+']){const fd=fs.openSync('t',m);try{fs.fsyncSync(fd);console.log(m,'fsync OK')}catch(e){console.log(m,'fsync FAILED',e.code)}fs.closeSync(fd)}fs.unlinkSync('t')"
+```
+
+Output (Node 24, Win11): `r fsync FAILED EPERM` / `r+ fsync OK`
+
+**Real incident (2026-06-10):** unrelated GPU BSOD while the server ran → `lorebook_entries.json` (429KB), `memory_chunks.json` (22MB) **and both .baks** came back 100% NUL bytes. The .baks were 1.5–6 min older than the mains — minutes passed without those "fsynced" bytes ever reaching disk. A VSS shadow copy from 2 days earlier showed the same files already mostly NUL: the data rode the write cache for **days**. Two user-authored lorebooks permanently lost.
+
+**Suggested fix:** open `"r+"` instead of `"r"` (verified working on Windows); log fsync failures instead of silently swallowing; skip the directory fsync on Windows (it can never succeed there).
+
+Impact: every Windows install. Until fixed, periodic profile exports are the only safety net.
+
+---
+
+## Full version (for the GitHub issue)
+
 ## TL;DR
 
 `flushFile()` in `packages/server/src/db/file-backed-store.ts` opens files **read-only** (`openSync(path, "r")`) before calling `fsyncSync()`. On Windows, `FlushFileBuffers` requires a writable handle, so fsync fails with `EPERM` — and the empty `catch {}` swallows it. Result: the entire crash-durability chain in `atomicWriteFile()` (bak refresh fsync, tmp-file fsync, directory fsync) **never actually flushes anything on Windows**. Data only reaches disk whenever the OS lazy writer gets around to it. A hard crash (BSOD/power loss) discards the cache, and NTFS journal recovery presents the allocated-but-unwritten files as NUL-filled — **including the `.bak`**, which is exactly the double-loss scenario the code's own comments say the fsync exists to prevent.

@@ -11,10 +11,10 @@
 // The "morning-after" logic: if a previous session ended in evening/night and the
 // new one opens with a morning signal, a day is inferred to have passed.
 
-import { readFile, writeFile, mkdir } from "fs/promises";
-import { join, dirname } from "path";
+import { readFile } from "fs/promises";
+import { join } from "path";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
-import { getDataDir, assertSafeId } from "./storage.js";
+import { getDataDir, assertSafeId, atomicWriteFile } from "./storage.js";
 
 // Feature flag — the conversational time-sense (narrative time-of-day + presence
 // inference) is OFF by default for v1.0. It behaved well under Claude 4.6 but
@@ -130,9 +130,7 @@ async function readClock(chatId: string): Promise<SoftClockState | null> {
 }
 
 async function writeClock(chatId: string, state: SoftClockState): Promise<void> {
-  const p = clockPath(chatId);
-  await mkdir(dirname(p), { recursive: true });
-  await writeFile(p, toYaml(state), "utf8");
+  await atomicWriteFile(clockPath(chatId), toYaml(state));
 }
 
 function defaultClock(): SoftClockState {

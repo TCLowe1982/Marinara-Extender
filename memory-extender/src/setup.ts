@@ -7,8 +7,9 @@
 // hunting through the file system.
 
 import type { FastifyInstance } from "fastify";
-import { readFile, writeFile } from "fs/promises";
+import { readFile } from "fs/promises";
 import { defaultEnvPath, extensionJsCandidates } from "./paths.js";
+import { atomicWriteFile } from "./storage.js";
 
 // ── Extension file lookup ─────────────────────────────────────────────────────
 
@@ -32,7 +33,7 @@ async function saveApiKeyToEnv(key: string): Promise<void> {
 
   const lines = existing.split("\n").filter((l) => !l.startsWith("MARINARA_EXTENDER_API_KEY="));
   lines.push(`MARINARA_EXTENDER_API_KEY=${key}`);
-  await writeFile(envPath, lines.filter(Boolean).join("\n") + "\n", "utf8");
+  await atomicWriteFile(envPath, lines.filter(Boolean).join("\n") + "\n");
 
   // Take effect immediately without restart
   process.env.MARINARA_EXTENDER_API_KEY = key;

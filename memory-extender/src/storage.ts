@@ -2,7 +2,7 @@
 // Copyright (C) 2026 TC Lowe
 // Licensed under AGPL-3.0-only. See LICENSE.
 
-import { readFile, writeFile, mkdir, access, unlink, readdir, rename } from "fs/promises";
+import { readFile, mkdir, access, unlink, readdir, rename, open } from "fs/promises";
 import { join, dirname } from "path";
 import { parse, stringify } from "yaml";
 import { defaultDataDir } from "./paths.js";
@@ -156,15 +156,33 @@ async function readYaml<T>(filePath: string): Promise<T | null> {
   }
 }
 
-// Atomic write: serialize to a temp file, then rename over the target. rename is
-// atomic, so a concurrent reader (or a writer that lost the race) never sees a
-// half-written / interleaved file — the file is always a complete prior or new
-// version. Also protects against a process kill mid-write (the temp is orphaned,
-// the real file stays intact). rename replaces an existing file on Windows too.
-async function writeYaml(filePath: string, data: unknown): Promise<void> {
+// Atomic + durable write: serialize to a temp file, fsync it, then rename over
+// the target. rename is atomic, so a concurrent reader (or a writer that lost
+// the race) never sees a half-written / interleaved file — the file is always a
+// complete prior or new version. Also protects against a process kill mid-write
+// (the temp is orphaned, the real file stays intact). rename replaces an
+// existing file on Windows too.
+//
+// The fsync is what protects against a HARD crash (BSOD, power cut): without it
+// NTFS journals the rename metadata but not the data, and the file comes back
+// NUL-filled under its new name. The fsync must happen on the writable handle
+// we wrote through — fsync on a handle opened "r" fails with EPERM on Windows
+// (FlushFileBuffers needs write access), which is exactly how the engine's own
+// flushFile() silently no-opped and lost tables in the 2026-06-10 incident.
+export async function atomicWriteFile(filePath: string, content: string): Promise<void> {
   await ensureDir(filePath);
   const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
-  await writeFile(tmp, stringify(data), "utf8");
+  const fh = await open(tmp, "w");
+  try {
+    await fh.writeFile(content, "utf8");
+    try {
+      await fh.sync();
+    } catch (err) {
+      warnFsyncFailedOnce(err);
+    }
+  } finally {
+    await fh.close();
+  }
   // rename is atomic, but on Windows it can transiently fail with EPERM/EBUSY/
   // EACCES when the target is briefly held — antivirus, the search indexer, a
   // reader, or another process writing the same file. Retry with backoff before
@@ -185,6 +203,22 @@ async function writeYaml(filePath: string, data: unknown): Promise<void> {
   }
 }
 
+// fsync failure is non-fatal (some filesystems reject it; write+rename still
+// gives process-crash atomicity) but must never be invisible — log once.
+let _fsyncWarned = false;
+function warnFsyncFailedOnce(err: unknown): void {
+  if (_fsyncWarned) return;
+  _fsyncWarned = true;
+  console.error(
+    "[ME:storage] fsync failed — writes remain atomic against process crashes but are NOT durable against power loss/BSOD:",
+    err instanceof Error ? err.message : err,
+  );
+}
+
+async function writeYaml(filePath: string, data: unknown): Promise<void> {
+  await atomicWriteFile(filePath, stringify(data));
+}
+
 // ── Write serialization ───────────────────────────────────────────────────────
 // Concurrent upsertIndexEntry calls for the same file cause read-modify-write
 // races that corrupt YAML. Serialize all writes per file path.
@@ -195,8 +229,11 @@ function serializedWrite(filePath: string, fn: () => Promise<void>): Promise<voi
   const prev = _writeLocks.get(filePath) ?? Promise.resolve();
   const next = prev.then(fn, fn);
   _writeLocks.set(filePath, next);
-  // Prune resolved locks to avoid unbounded growth.
-  next.then(() => { if (_writeLocks.get(filePath) === next) _writeLocks.delete(filePath); });
+  // Prune settled locks to avoid unbounded growth. Handle rejection here too:
+  // a fulfillment-only .then() spawns a derived promise that rejects unhandled
+  // whenever fn fails, even when the caller handles the returned `next`.
+  const prune = () => { if (_writeLocks.get(filePath) === next) _writeLocks.delete(filePath); };
+  next.then(prune, prune);
   return next;
 }
 

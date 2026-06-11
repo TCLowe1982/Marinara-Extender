@@ -16,7 +16,7 @@
 //   Card recreated: relinkIdentity("cm8y...", "lara") → points new ID at old data
 //   Key conflict: renameIdentityKey("lara", "lara_morrigan")
 
-import { readFile, writeFile, rename, mkdir, access } from "fs/promises";
+import { readFile, rename, access } from "fs/promises";
 import { join } from "path";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 import {
@@ -25,6 +25,7 @@ import {
   readEntry,
   writeEntry,
   upsertIndexEntry,
+  atomicWriteFile,
   type Entry,
 } from "./storage.js";
 import { readBeatIndex, readBeat, writeBeat, type BeatIndex } from "./sentiment/encoder.js";
@@ -75,8 +76,7 @@ async function readMapFile(): Promise<IdentityMapFile> {
 }
 
 async function writeMapFile(map: IdentityMapFile): Promise<void> {
-  await mkdir(getDataDir(), { recursive: true });
-  await writeFile(identityMapPath(), toYaml(map), "utf8");
+  await atomicWriteFile(identityMapPath(), toYaml(map));
 }
 
 async function dirExists(path: string): Promise<boolean> {

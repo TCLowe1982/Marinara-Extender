@@ -11,11 +11,11 @@
 //
 // Stored at data/characters/<identityKey>/imports/<jobKey>.yaml
 
-import { readFile, writeFile, mkdir, readdir, unlink, rename } from "fs/promises";
-import { join, dirname } from "path";
+import { readFile, readdir, unlink } from "fs/promises";
+import { join } from "path";
 import { createHash } from "crypto";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
-import { getDataDir } from "./storage.js";
+import { getDataDir, atomicWriteFile } from "./storage.js";
 import type { DigestMessage } from "./digest.js";
 
 export interface ImportJob {
@@ -60,10 +60,7 @@ export async function loadJob(characterId: string, jobKey: string): Promise<Impo
 
 export async function saveJob(characterId: string, job: ImportJob): Promise<void> {
   const p = jobPath(characterId, job.jobKey);
-  await mkdir(dirname(p), { recursive: true });
-  const tmp = `${p}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(tmp, toYaml({ ...job, updatedAt: new Date().toISOString() }), "utf8");
-  await rename(tmp, p);
+  await atomicWriteFile(p, toYaml({ ...job, updatedAt: new Date().toISOString() }));
 }
 
 export async function deleteJob(characterId: string, jobKey: string): Promise<void> {

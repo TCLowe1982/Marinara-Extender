@@ -11,11 +11,11 @@
 // without reading every beat file. The beats store is intentionally separate
 // from the main entries/ index so the existing memory UI is unaffected.
 
-import { readFile, writeFile, mkdir, access, rm } from "fs/promises";
-import { join, dirname } from "path";
+import { readFile, access, rm } from "fs/promises";
+import { join } from "path";
 import { createHash } from "crypto";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
-import { getDataDir, assertSafeId } from "../storage.js";
+import { getDataDir, assertSafeId, atomicWriteFile } from "../storage.js";
 import type { Emotion } from "./types.js";
 import type { EmotionalBeat, ClassificationResult, BeatAnalysis, Chunk } from "./types.js";
 import type { AnalyzedBeat } from "./analyzer.js";
@@ -63,10 +63,6 @@ function beatFilePath(characterId: string, beatId: string): string {
 
 // ── YAML helpers ───────────────────────────────────────────────────────────
 
-async function ensureDir(filePath: string): Promise<void> {
-  await mkdir(dirname(filePath), { recursive: true });
-}
-
 async function fileExists(filePath: string): Promise<boolean> {
   return access(filePath).then(() => true).catch(() => false);
 }
@@ -77,8 +73,7 @@ async function readYaml<T>(filePath: string): Promise<T | null> {
 }
 
 async function writeYaml(filePath: string, data: unknown): Promise<void> {
-  await ensureDir(filePath);
-  await writeFile(filePath, toYaml(data), "utf8");
+  await atomicWriteFile(filePath, toYaml(data));
 }
 
 // ── Beat index ─────────────────────────────────────────────────────────────

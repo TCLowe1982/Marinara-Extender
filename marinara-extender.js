@@ -2472,6 +2472,14 @@ function renderImportSection() {
       okEl.title = `${result.count} emotional beat${result.count === 1 ? "" : "s"} added as retrievable memory`
         + (result.skipped ? ` (${result.skipped} already done, skipped)` : "");
       row.appendChild(okEl);
+      // Re-import without a page reload: replaces this chat's imported entries
+      // (re-imports clear by sourceChatId; beats are idempotent by id).
+      const reBtn = el("button", "me-chat-import-btn");
+      reBtn.textContent = "↻";
+      reBtn.title = "Re-import this chat (replaces its previously imported entries)";
+      reBtn.disabled = anyBusy;
+      reBtn.addEventListener("click", () => importOneChat(chat));
+      row.appendChild(reBtn);
     } else {
       const importBtn = el("button", "me-chat-import-btn");
       importBtn.textContent = "Import"; importBtn.disabled = anyBusy;

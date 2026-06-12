@@ -558,11 +558,36 @@ function notifyIngestDone(characterName, beatCount) {
 
 // ── Sidecar fetch helper ──────────────────────────────────────────────────────
 
+// ── CSRF token ────────────────────────────────────────────────────────────────
+// The sidecar requires x-me-csrf on mutating requests from browser origins.
+// The token is per-process: a sidecar restart mints a new one, so a 403 means
+// "refresh and retry once", not "give up".
+
+let _csrfToken = null;
+async function getCsrfToken(force = false) {
+  if (_csrfToken && !force) return _csrfToken;
+  try {
+    const r = await fetch(`${MEMORY_EXTENDER}/api/csrf-token`);
+    _csrfToken = (await r.json())?.token ?? null;
+  } catch { _csrfToken = null; }
+  return _csrfToken;
+}
+
 async function memFetch(path, options = {}) {
-  const r = await fetch(`${MEMORY_EXTENDER}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
+  const { headers: extraHeaders, ...rest } = options;
+  const method = (options.method ?? "GET").toUpperCase();
+  const doFetch = async (token) => fetch(`${MEMORY_EXTENDER}${path}`, {
+    ...rest,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { "x-me-csrf": token } : {}),
+      ...(extraHeaders ?? {}),
+    },
   });
+  let r = await doFetch(method === "GET" ? null : await getCsrfToken());
+  if (r.status === 403 && method !== "GET") {
+    r = await doFetch(await getCsrfToken(true)); // sidecar restarted — fresh token
+  }
   return r.json();
 }
 
@@ -2710,7 +2735,9 @@ async function importOneChat(chat, preFetched) {
       // safe.
       const resp = await fetch(`${MEMORY_EXTENDER}/api/analyze-beats`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        // Raw fetch (NDJSON stream — memFetch would consume the body); needs
+        // the CSRF token explicitly.
+        headers: { "Content-Type": "application/json", "x-me-csrf": await getCsrfToken() },
         signal: ac.signal,
         body: JSON.stringify({
           characterId,

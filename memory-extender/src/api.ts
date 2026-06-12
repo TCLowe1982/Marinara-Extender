@@ -59,6 +59,7 @@ import {
 } from "./aliases.js";
 import { chunkMessages } from "./sentiment/chunker.js";
 import { listActiveThreads, resolveOrMintThread } from "./threads.js";
+import { csrfRejection, csrfToken, CSRF_HEADER } from "./csrf.js";
 import { classifyChunks } from "./sentiment/classifier.js";
 import { analyzeChunks } from "./sentiment/analyzer.js";
 import { encodeBeat } from "./sentiment/encoder.js";
@@ -119,6 +120,25 @@ function today(): string {
 // ── Route registration ────────────────────────────────────────────────────────
 
 export function registerApiRoutes(app: FastifyInstance): void {
+
+  // ── CSRF guard (cb4) ──────────────────────────────────────────────────────
+  // Every mutating /api/* request from a browser must carry the per-process
+  // token; see csrf.ts for the full rule. Non-browser clients (no Origin)
+  // pass — they cannot be CSRF'd.
+
+  app.addHook("onRequest", async (req, reply) => {
+    if (!req.url.startsWith("/api/")) return;
+    const reason = csrfRejection(req.method, req.headers.origin, req.headers[CSRF_HEADER]);
+    if (reason) {
+      console.warn(`[ME:csrf] blocked ${req.method} ${req.url} — ${reason}`);
+      return reply.code(403).send({ error: `CSRF check failed: ${reason}` });
+    }
+  });
+
+  app.get("/api/csrf-token", { logLevel: "silent" }, async (_req, reply) => {
+    // Readable only by allowed origins (CORS gates the response read).
+    return reply.send({ token: csrfToken() });
+  });
 
   // ── GET /api/entries ──────────────────────────────────────────────────────
   // Returns index entries (summaries) for a scope. No file I/O beyond the index.

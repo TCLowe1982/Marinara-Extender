@@ -61,7 +61,7 @@ app.addHook("onSend", async (req, reply) => {
     void reply.header("Vary", "Origin");
   }
   void reply.header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
-  void reply.header("Access-Control-Allow-Headers", "Content-Type,Authorization");
+  void reply.header("Access-Control-Allow-Headers", "Content-Type,Authorization,x-me-csrf");
 });
 
 app.options("*", { logLevel: "silent" }, async (_req, reply) => reply.send());

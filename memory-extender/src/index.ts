@@ -11,6 +11,7 @@ import { localUrl, localEnabled, localModel, externalUpstream, externalModel } f
 import { registerApiRoutes } from "./api.js";
 import { registerSetupRoutes } from "./setup.js";
 import { updateStatus } from "./update.js";
+import { embeddingsStatus, describeEmbeddingsStatus } from "./embeddings.js";
 import { isEideticMode } from "./loader.js";
 
 // ── .env loader ───────────────────────────────────────────────────────────────
@@ -81,8 +82,8 @@ app.get("/api/health", { logLevel: "silent" }, async (_req, reply) => {
       ollama = "unavailable";
     }
   }
-  const update = await updateStatus();
-  return reply.send({ ok: true, ollama, ...update });
+  const [update, embeddings] = await Promise.all([updateStatus(), embeddingsStatus()]);
+  return reply.send({ ok: true, ollama, embeddings, ...update });
 });
 
 // ── Setup page ────────────────────────────────────────────────────────────────
@@ -110,4 +111,6 @@ app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
   console.log(`External API: ${apiKey ? `${externalModel()} @ ${externalUpstream()}` : "no key — local only"}`);
   console.log(`Eidetic mode: ${isEideticMode() ? "ON — all entries injected (no budget limit)" : "off"}`);
   console.log(`Progress:     ${process.env.MARINARA_EXTENDER_PROGRESS !== "0" ? "on (story-import console bar)" : "off"}`);
+  // First-boot embeddings check — semantic degradation must never be silent.
+  void embeddingsStatus().then((s) => console.log(`Embeddings:   ${describeEmbeddingsStatus(s)}`));
 });

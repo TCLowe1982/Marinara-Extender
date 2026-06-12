@@ -28,3 +28,19 @@ describe("currentVersion", () => {
     expect(currentVersion()).toMatch(/^\d+\.\d+\.\d+$/);
   });
 });
+
+describe("embeddingsStatus kill switch", () => {
+  it("reports disabled without any network probe when the switch is set", async () => {
+    const prev = process.env.MARINARA_EXTENDER_EMBED_MODEL;
+    process.env.MARINARA_EXTENDER_EMBED_MODEL = "0";
+    try {
+      const { embeddingsStatus, describeEmbeddingsStatus } = await import("../embeddings.js");
+      const s = await embeddingsStatus();
+      expect(s).toBe("disabled");
+      expect(describeEmbeddingsStatus(s)).toContain("MARINARA_EXTENDER_EMBED_MODEL");
+    } finally {
+      if (prev === undefined) delete process.env.MARINARA_EXTENDER_EMBED_MODEL;
+      else process.env.MARINARA_EXTENDER_EMBED_MODEL = prev;
+    }
+  });
+});

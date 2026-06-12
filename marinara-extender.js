@@ -1244,6 +1244,19 @@ function renderPanel() {
     panel.appendChild(note);
   }
 
+  // Embeddings degradation is never silent (support-ticket prevention): if
+  // semantic features are off for a fixable reason, say so with the fix.
+  const emb = panelState.health?.embeddings;
+  if (emb === "model_missing" || emb === "ollama_down") {
+    const warn = el("div", "me-panel-info");
+    warn.style.color = "#fbbf24";
+    warn.textContent = emb === "model_missing"
+      ? "⚠ Semantic memory features are OFF — embedding model not installed. Run: ollama pull nomic-embed-text"
+      : "⚠ Semantic memory features are OFF — Ollama isn't running.";
+    warn.title = "Affects arc clustering and semantic chunk merging. Everything else works normally.";
+    panel.appendChild(warn);
+  }
+
   // Last-turn memory activity (15y): what the character actually had in
   // context, without reading sidecar logs. Click to expand the list.
   if (lastTurnActivity && panelState.session && lastTurnActivity.chatId === panelState.session.chatId) {

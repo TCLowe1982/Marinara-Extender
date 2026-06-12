@@ -56,6 +56,37 @@ export async function fetchEmbeddings(texts: string[]): Promise<number[][] | nul
   }
 }
 
+// First-boot/diagnostic probe (TC review feedback): "semantic features feel
+// different" is undiagnosable from the outside, so the sidecar says exactly
+// why embeddings are off and what one command fixes it. Distinguishes the
+// three states a user can actually act on.
+export type EmbeddingsStatus = "ok" | "model_missing" | "ollama_down" | "disabled";
+
+export async function embeddingsStatus(): Promise<EmbeddingsStatus> {
+  const model = embedModel();
+  if (!model) return "disabled";
+  const root = localUrl().replace(/\/v1\/?$/, "");
+  try {
+    const res = await fetch(`${root}/api/tags`, { signal: AbortSignal.timeout(1_500) });
+    if (!res.ok) return "ollama_down";
+    const json = (await res.json()) as { models?: Array<{ name?: string }> };
+    const have = (json.models ?? []).some((m) => (m.name ?? "").split(":")[0] === model.split(":")[0]);
+    return have ? "ok" : "model_missing";
+  } catch {
+    return "ollama_down";
+  }
+}
+
+export function describeEmbeddingsStatus(status: EmbeddingsStatus): string {
+  const model = embedModel() ?? DEFAULT_EMBED_MODEL;
+  switch (status) {
+    case "ok":            return `on (${model})`;
+    case "disabled":      return "off (disabled via MARINARA_EXTENDER_EMBED_MODEL)";
+    case "ollama_down":   return "UNAVAILABLE — Ollama is not running. Semantic features (arc clustering, chunk merging) are disabled until it starts.";
+    case "model_missing": return `MODEL MISSING — semantic features disabled. Enable with:  ollama pull ${model}`;
+  }
+}
+
 export function cosineSim(a: number[], b: number[]): number {
   let dot = 0, magA = 0, magB = 0;
   const n = Math.min(a.length, b.length);

@@ -13,6 +13,8 @@ import { analyzeChunk } from "./analyzer.js";
 import { encodeBeat, beatIdForChunk, readBeatIndex, readBeat, companionEntryFromBeat } from "./encoder.js";
 import { createEntryIfUnique } from "../dedup.js";
 import { Progress, progressEnabled } from "../progress.js";
+import { buildSubjectRoster, resolveNameToKey, matchesSessionName } from "../identity.js";
+import { normalizeLabel } from "../aliases.js";
 
 export interface PipelineOptions {
   sourceType?: "chat" | "story";
@@ -120,7 +122,14 @@ export async function runSentimentPipeline(
   // Resume support: beats already on disk (from a prior interrupted run) are
   // skipped. Beat ids are deterministic per chunk, so a re-run of the same
   // import continues where it stopped instead of re-analyzing everything.
+  // (Beats subject-routed to a DIFFERENT character are not in this bucket's
+  // index, so a re-run re-analyzes those chunks — idempotent on disk, just
+  // re-spends the analyzer call.)
   const existingBeatIds = new Set((await readBeatIndex(characterId))?.entries.map((e) => e.id) ?? []);
+
+  // Known-identity roster for per-beat subject attribution — global, because
+  // imports routinely involve the whole cast.
+  const roster = await buildSubjectRoster(characterName);
 
   // Narrative position boost: the final 20% of a story carries climax and
   // resolution weight. Computed up front so it can be applied per chunk.
@@ -171,7 +180,7 @@ export async function runSentimentPipeline(
       analysis = await analyzeChunk(result, idx === -1 ? undefined : {
         before: classifications[idx - 1],
         after:  classifications[idx + 1],
-      });
+      }, { roster });
     } catch (err) {
       failed++;
       report.error(current, err instanceof Error ? err.message : String(err));
@@ -189,14 +198,32 @@ export async function runSentimentPipeline(
       analysis = { ...analysis, salience: Math.min(1.0, analysis.salience * NARRATIVE_POSITION_BOOST) };
     }
 
-    const beat = await encodeBeat(characterId, result, analysis, sourceType, options.sourceChatId);
+    // Subject routing (MarinaraExtender-cx4): like the live path, a beat lands
+    // in the ledger of whoever it is ABOUT, not the import bucket. RP prose is
+    // narration — the speaker label can't attribute it; the analysis can.
+    // Unlike the live path, an UNRESOLVED subject falls back to the import
+    // bucket rather than the holding pool: these chunks were already
+    // explicitly assigned by the user, so the bucket is the stated intent.
+    let targetKey = characterId;
+    let attributed = result;
+    const subject = analysis.subject?.trim();
+    if (subject && normalizeLabel(subject) !== "user" && !matchesSessionName(subject, characterName)) {
+      const key = await resolveNameToKey(subject);
+      if (key && key !== characterId) {
+        targetKey = key;
+        attributed = { ...result, chunk: { ...result.chunk, speaker: subject } };
+        console.info(`[ME:pipeline] subject="${subject}" → ${targetKey} (routed off the ${characterId} bucket)`);
+      }
+    }
+
+    const beat = await encodeBeat(targetKey, attributed, analysis, sourceType, options.sourceChatId);
     beats.push(beat);
 
     // Also write a retrievable ledger entry. The loader builds the injected
     // <memory> block from the entry index, NOT the beats store — so without this
     // companion entry the character could never recall an imported beat.
     const { summary, content } = companionEntryFromBeat(beat);
-    if (summary) await createEntryIfUnique("character", characterId, { lane: "character_topics", summary, content, sourceChatId: options.sourceChatId, kind: "incident" });
+    if (summary) await createEntryIfUnique("character", targetKey, { lane: "character_topics", summary, content, sourceChatId: options.sourceChatId, kind: "incident" });
 
     tick(current);
   }

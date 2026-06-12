@@ -15,6 +15,7 @@ import { createEntryIfUnique } from "../dedup.js";
 import { Progress, progressEnabled } from "../progress.js";
 import { buildSubjectRoster, resolveNameToKey, matchesSessionName } from "../identity.js";
 import { normalizeLabel } from "../aliases.js";
+import { addPending } from "../holding-pool.js";
 
 export interface PipelineOptions {
   sourceType?: "chat" | "story";
@@ -105,8 +106,16 @@ export async function runSentimentPipeline(
   // Collect unique speakers for diagnostics.
   const speakers = [...new Set(chunks.map((c) => c.speaker))].sort();
 
+  // CHAT imports analyze EVERYTHING: assistant messages carry the session
+  // character's id, so the chunker labels every narration chunk with one
+  // speaker — a shared scene cannot be split by speaker, only by analyzed
+  // subject. "Import once, from either side." STORY imports keep the speaker
+  // pre-filter (big casts; explicit name assignments matter).
+  const analyzeAll = sourceType === "chat";
   let filtered: ClassificationResult[];
-  if (characters?.length) {
+  if (analyzeAll) {
+    filtered = passing;
+  } else if (characters?.length) {
     filtered = passing.filter((c) =>
       characters.some((name) => speakerMatches(c.chunk.speaker, name)),
     );
@@ -201,18 +210,34 @@ export async function runSentimentPipeline(
     // Subject routing (MarinaraExtender-cx4): like the live path, a beat lands
     // in the ledger of whoever it is ABOUT, not the import bucket. RP prose is
     // narration — the speaker label can't attribute it; the analysis can.
-    // Unlike the live path, an UNRESOLVED subject falls back to the import
-    // bucket rather than the holding pool: these chunks were already
-    // explicitly assigned by the user, so the bucket is the stated intent.
+    // UNRESOLVED subjects: chunks whose speaker the user explicitly assigned
+    // (keep list / bucket character / user) fall back to the bucket — stated
+    // intent. A stranger's chunk with an unresolvable subject goes to the
+    // holding pool instead: never guessed into a permanent ledger.
     let targetKey = characterId;
     let attributed = result;
     const subject = analysis.subject?.trim();
-    if (subject && normalizeLabel(subject) !== "user" && !matchesSessionName(subject, characterName)) {
+    const isUserish = !subject || normalizeLabel(subject) === "user" || matchesSessionName(subject, characterName);
+    if (!isUserish) {
       const key = await resolveNameToKey(subject);
       if (key && key !== characterId) {
         targetKey = key;
         attributed = { ...result, chunk: { ...result.chunk, speaker: subject } };
         console.info(`[ME:pipeline] subject="${subject}" → ${targetKey} (routed off the ${characterId} bucket)`);
+      } else if (!key && analyzeAll) {
+        const assignedNames = [characterName, "user", "Narrator", ...(characters ?? [])];
+        const speakerAssigned = assignedNames.some((n) => speakerMatches(result.chunk.speaker, n));
+        if (!speakerAssigned) {
+          await addPending({
+            speaker: subject,
+            sourceType,
+            sourceChatId: options.sourceChatId,
+            classification: { ...result, chunk: { ...result.chunk, speaker: subject } },
+          }).catch(() => {});
+          console.info(`[ME:pipeline] unknown subject "${subject}" on unassigned speaker — parked in holding pool`);
+          tick(current);
+          continue;
+        }
       }
     }
 

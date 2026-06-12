@@ -1021,22 +1021,27 @@ export function registerApiRoutes(app: FastifyInstance): void {
         onProgress: (current, total) => send({ type: "progress", current, total }),
       });
 
-      // Route the other named speakers via the alias table (auto-route known,
-      // hold unknown) — same as the story path. Best-effort; never fails import.
+      // STORY imports: route the other named speakers via the alias table
+      // (auto-route known, hold unknown). CHAT imports skip this — the
+      // pipeline now analyzes every passing chunk and routes per-beat by
+      // subject, so a post-hoc speaker pass would double-handle the same
+      // chunks ("import once, from either side").
       let pending = 0;
       let autoRouted = 0;
-      try {
-        const { passing } = await collectPassingClassifications(messages, characterName, { sourceType });
-        const orphanItems = passing
-          .filter((c) => !keep.some((n) => speakerMatches(c.chunk.speaker, n)))
-          .map((c) => ({ classification: c, sourceType, sourceChatId: chatId }));
-        if (orphanItems.length) {
-          const routed = await routeOrphans(orphanItems);
-          pending = routed.held;
-          autoRouted = routed.autoRouted;
+      if (sourceType !== "chat") {
+        try {
+          const { passing } = await collectPassingClassifications(messages, characterName, { sourceType });
+          const orphanItems = passing
+            .filter((c) => !keep.some((n) => speakerMatches(c.chunk.speaker, n)))
+            .map((c) => ({ classification: c, sourceType, sourceChatId: chatId }));
+          if (orphanItems.length) {
+            const routed = await routeOrphans(orphanItems);
+            pending = routed.held;
+            autoRouted = routed.autoRouted;
+          }
+        } catch (err) {
+          console.warn(`[ME] chat orphan routing skipped: ${err instanceof Error ? err.message : err}`);
         }
-      } catch (err) {
-        console.warn(`[ME] chat orphan routing skipped: ${err instanceof Error ? err.message : err}`);
       }
 
       console.info(

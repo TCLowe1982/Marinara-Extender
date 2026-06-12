@@ -1196,6 +1196,9 @@ function renderPanel() {
   // switch the content differs, so reset to the top instead.
   const prevContent = panel.querySelector(".me-panel-content");
   const prevScroll = prevContent ? prevContent.scrollTop : 0;
+  // Inner scrollables are rebuilt at scrollTop 0 by the full re-render —
+  // importing a chat low in the list would snap the list back to the top.
+  const prevImportScroll = panel.querySelector(".me-import-list")?.scrollTop ?? 0;
   const tabChanged = panelState._lastRenderedTab !== panelState.activeTab;
   panelState._lastRenderedTab = panelState.activeTab;
 
@@ -1340,6 +1343,10 @@ function renderPanel() {
 
   // Restore scroll once layout is in place (unless we just switched tabs).
   if (prevScroll && !tabChanged) content.scrollTop = prevScroll;
+  if (prevImportScroll && !tabChanged) {
+    const importList = content.querySelector(".me-import-list");
+    if (importList) importList.scrollTop = prevImportScroll;
+  }
 }
 
 function etaText(current, total, startMs) {

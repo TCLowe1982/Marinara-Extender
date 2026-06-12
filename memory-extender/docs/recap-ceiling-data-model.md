@@ -1,9 +1,15 @@
-# Recap Layer — Ceiling-Tier Data Model (sketch)
+# Recap Layer — Ceiling-Tier Data Model
 
-Tracking: `MarinaraExtender-ajb` (ceiling), parent `MarinaraExtender-cz3`.
-Status: **design sketch**, not yet implemented. Grounded against the live types in
-`src/sentiment/types.ts` (`EmotionalBeat`) and `src/storage.ts` (`Lane`, `Entry`,
-`EntryStatus`, `MemoryTier`, `TIER_DAYS_COLD`).
+Tracking: `MarinaraExtender-ajb` (ceiling, closed), parent `MarinaraExtender-cz3`
+(open as the tuning umbrella).
+Status: **IMPLEMENTED 2026-06-12** — floor in `src/arcs.ts` (scene ingestion),
+ceiling in `src/arc-promotion.ts` (assign-on-promotion pass) + `src/arc-renderer.ts`
+(the one LLM call), embeddings in `src/embeddings.ts` (default-ON, kill switch).
+All four Resolved decisions below are honored in code (beat `seq` in
+`sentiment/encoder.ts`, standalone memberships in `arc-memberships.yaml`,
+edge-salience floor and once-per-pass centroids in `arc-promotion.ts`); the
+EntryStatus invariant stands — `ArcStatus` lives on the arc, and the loader is
+still the only place the two type systems meet.
 
 ## Where it sits
 

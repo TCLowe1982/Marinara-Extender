@@ -162,6 +162,7 @@ export interface CreateEntryInput {
   status?: EntryStatus;
   timeContext?: Entry["timeContext"];
   sourceChatId?: string; // tag for clean per-chat re-import
+  threadId?: string;     // narrative thread membership, inherited from the beat
   // What the entry IS: an incident (a beat-bound moment) or a trait (a
   // standing pattern/fact about who someone is). Drives the character_topics
   // dedup matrix; omitted = legacy behavior (aggressive dedup).
@@ -242,6 +243,7 @@ export async function createEntryIfUnique(
     tokens: estimateTokens(`${summary} ${content}`),
     ...(input.timeContext ? { timeContext: input.timeContext } : {}),
     ...(input.sourceChatId ? { sourceChatId: input.sourceChatId } : {}),
+    ...(input.threadId ? { threadId: input.threadId } : {}),
   };
 
   const relativePath = await writeEntry(scope, scopeId, entry);
@@ -254,6 +256,7 @@ export async function createEntryIfUnique(
     status,
     lastAccessed: now,
     ...(input.sourceChatId ? { sourceChatId: input.sourceChatId } : {}),
+    ...(input.threadId ? { threadId: input.threadId } : {}),
   });
 
   if (verdict.action === "create-correction") {

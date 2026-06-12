@@ -17,6 +17,7 @@ import {
 } from "./storage.js";
 import { computeScore } from "./promotion.js";
 import { getSoftClock, formatClockContext, timesenseEnabled } from "./soft-clock.js";
+import { listActiveThreads } from "./threads.js";
 
 // ── Budget config ─────────────────────────────────────────────────────────────
 
@@ -130,10 +131,15 @@ export function isEideticMode(): boolean {
 // being pulled in by the conversation, not passive presence.
 const RELEVANCE_CREDIT_THRESHOLD = 0.1;
 
+// A sibling's strong recall lifts the rest of its narrative thread, but at a
+// discount — thread context rides along, it doesn't outrank direct matches.
+const THREAD_SIBLING_FACTOR = 0.75;
+
 function selectEntries(
   index: ScopeIndex | null,
   budget: number,
   recentText: string,
+  threadLabelRelevance?: Map<string, number>,
 ): { selected: IndexEntry[]; used: number; summoned: Set<string>; bestRelevance: number } {
   if (!index) return { selected: [], used: 0, summoned: new Set(), bestRelevance: 0 };
 
@@ -146,8 +152,29 @@ function selectEntries(
     return { selected: candidates, used, summoned: new Set(), bestRelevance: 1 };
   }
 
+  // Thread relevance (MarinaraExtender-pln): a beat is recalled not just on
+  // its own summary but on its NARRATIVE THREAD — (a) the conversation
+  // matching the thread's label pulls every member, and (b) one member's
+  // strong direct match pulls its siblings (recalling any beat from the
+  // Porsche test drive surfaces the test drive, not one disconnected moment).
+  const ownRelevance = new Map<string, number>();
+  const threadPeak = new Map<string, number>();
+  for (const e of candidates) {
+    const r = relevanceScore(e.summary, recentText);
+    ownRelevance.set(e.id, r);
+    if (e.threadId) threadPeak.set(e.threadId, Math.max(threadPeak.get(e.threadId) ?? 0, r));
+  }
+
   const ranked = candidates
-    .map((e) => ({ e, relevance: relevanceScore(e.summary, recentText), recency: e.lastRetrievedAt ?? e.lastAccessed ?? "" }))
+    .map((e) => {
+      let relevance = ownRelevance.get(e.id)!;
+      if (e.threadId) {
+        const labelMatch = threadLabelRelevance?.get(e.threadId) ?? 0;
+        const siblingPull = (threadPeak.get(e.threadId) ?? 0) * THREAD_SIBLING_FACTOR;
+        relevance = Math.max(relevance, labelMatch, siblingPull);
+      }
+      return { e, relevance, recency: e.lastRetrievedAt ?? e.lastAccessed ?? "" };
+    })
     .sort((a, b) => {
       if (b.relevance !== a.relevance) return b.relevance - a.relevance;   // topical now
       if (a.recency !== b.recency) return b.recency.localeCompare(a.recency); // recently used
@@ -382,9 +409,21 @@ export async function loadContext(
 
   // Pass 2 — build the Current working cache per scope (relevance + recency)
   const recentText = session.recentText ?? "";
-  const chatSelection = selectEntries(indexes.chat, budgets.chat, recentText);
-  const charSelection = selectEntries(indexes.character, budgets.character, recentText);
-  const globalSelection = selectEntries(indexes.global, budgets.global, recentText);
+
+  // Thread label relevance for this chat's active threads — lets a beat be
+  // recalled because the conversation returned to its ARC, not just its words.
+  const threadLabelRelevance = new Map<string, number>();
+  if (recentText) {
+    const activeThreads = await listActiveThreads(session.chatId).catch(() => []);
+    for (const t of activeThreads) {
+      const r = relevanceScore(t.label, recentText);
+      if (r > 0) threadLabelRelevance.set(t.id, r);
+    }
+  }
+
+  const chatSelection = selectEntries(indexes.chat, budgets.chat, recentText, threadLabelRelevance);
+  const charSelection = selectEntries(indexes.character, budgets.character, recentText, threadLabelRelevance);
+  const globalSelection = selectEntries(indexes.global, budgets.global, recentText, threadLabelRelevance);
   dbg(`entries selected — chat:${chatSelection.selected.length}/${indexes.chat?.entries.length ?? 0} (${chatSelection.used} tokens) | char:${charSelection.selected.length}/${indexes.character?.entries.length ?? 0} (${charSelection.used} tokens) | global:${globalSelection.selected.length}/${indexes.global?.entries.length ?? 0} (${globalSelection.used} tokens)`);
   if (chatSelection.selected.length) dbg(`  chat selected: ${chatSelection.selected.map(e => e.id).join(", ")}`);
   if (charSelection.selected.length) dbg(`  char selected: ${charSelection.selected.map(e => e.id).join(", ")}`);

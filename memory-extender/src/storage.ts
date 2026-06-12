@@ -42,6 +42,7 @@ export interface IndexEntry {
   cycleCount?: number;
   lastRetrievedAt?: string; // ISO datetime of last retrieval
   sourceChatId?: string;    // chat this entry was imported/derived from (for clean re-import)
+  threadId?: string;        // narrative thread membership (nthr-* — see threads.ts)
 }
 
 export interface ScopeIndex {
@@ -67,6 +68,7 @@ export interface Entry {
   cycleCount?: number;
   lastRetrievedAt?: string; // ISO datetime of last retrieval
   sourceChatId?: string;    // chat this entry was imported/derived from (for clean re-import)
+  threadId?: string;        // narrative thread membership (nthr-* — see threads.ts)
   // Soft clock context at time of encoding
   timeContext?: { timeOfDay: string; dayOfWeek: string; inferredFrom?: string };
 }

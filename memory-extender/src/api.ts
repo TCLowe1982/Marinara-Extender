@@ -58,7 +58,7 @@ import {
   normalizeLabel,
 } from "./aliases.js";
 import { chunkMessages } from "./sentiment/chunker.js";
-import { listActiveThreads, resolveOrMintThread } from "./threads.js";
+import { listActiveThreads, resolveOrMintThread, autoCloseStaleThreads } from "./threads.js";
 import { csrfRejection, csrfToken, CSRF_HEADER } from "./csrf.js";
 import { classifyChunks } from "./sentiment/classifier.js";
 import { analyzeChunks } from "./sentiment/analyzer.js";
@@ -535,6 +535,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
       void Promise.all([
         runPromotion("character", identityKey),
         runPromotion("chat", chatId),
+        autoCloseStaleThreads(),
       ]).catch((err) => console.warn("[ME] promotion pass failed:", err));
     }
 
@@ -630,6 +631,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
 
             const entry = await createEntryIfUnique("character", targetKey, {
               lane: "character_topics", summary, content: capContent(rawContent), timeContext: timeCtx, kind: "incident",
+              ...(threadId ? { threadId } : {}),
             });
             if (entry) {
               console.info(`[ME:tier2] saved beat ${beat.id} + ledger entry for ${beat.emotion} under ${targetKey} (salience ${beat.salience.toFixed(2)})`);

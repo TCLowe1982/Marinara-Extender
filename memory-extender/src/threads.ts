@@ -127,3 +127,30 @@ export async function closeThread(threadId: string): Promise<boolean> {
   });
   return closed;
 }
+
+// Idle threads close themselves: a scene nobody has touched in maxIdleDays is
+// over, whether or not anyone said so. Keeps the analyzer roster from growing
+// unbounded and lets the promotion pass eventually archive the arc as a unit.
+// (A scene-conclude hook from the engine would close threads sooner — tracked
+// in rfx — this is the floor that works without any engine integration.)
+export const THREAD_AUTO_CLOSE_DAYS = 14;
+
+export async function autoCloseStaleThreads(
+  maxIdleDays = THREAD_AUTO_CLOSE_DAYS,
+  now = Date.now(),
+): Promise<number> {
+  let closed = 0;
+  const cutoff = now - maxIdleDays * 24 * 60 * 60 * 1000;
+  await mutateYamlFile<ThreadRegistry>(registryPath(), emptyRegistry, (reg) => {
+    for (const t of reg.threads) {
+      if (t.status !== "active") continue;
+      const last = Date.parse(t.lastActiveAt || t.created || "");
+      if (Number.isFinite(last) && last < cutoff) {
+        t.status = "closed";
+        closed++;
+        console.info(`[threads] auto-closed "${t.label}" (${t.id}) — idle ${maxIdleDays}+ days`);
+      }
+    }
+  });
+  return closed;
+}

@@ -27,6 +27,7 @@ import {
   TIER_DAYS_COLD,
   TIER_SECONDARY_CORE_CYCLES,
 } from "./storage.js";
+import { readThreadRegistry } from "./threads.js";
 
 // ── Score ──────────────────────────────────────────────────────────────────────
 
@@ -102,6 +103,14 @@ function nextTier(entry: IndexEntry): {
 export async function runPromotion(scope: Scope, scopeId: string): Promise<void> {
   const coldIds: string[] = [];
 
+  // Narrative threads archive as UNITS (MarinaraExtender-pln): members of an
+  // ACTIVE thread never go cold (the arc is still alive), and a closed
+  // thread's members go together — only once every member is stale — so the
+  // arc is never split across hot and cold storage.
+  const registry = await readThreadRegistry().catch(() => ({ threads: [] }));
+  const threadStatus = new Map(registry.threads.map((t) => [t.id, t.status]));
+  const threadMembers = new Map<string, { stale: number; total: number; ids: string[] }>();
+
   // Serialized read-modify-write so the promotion pass can't collide with the
   // Tier-2/Tier-3/retrieval writes that run concurrently on the same index.
   await mutateIndex(scope, scopeId, (index) => {
@@ -116,8 +125,23 @@ export async function runPromotion(scope: Scope, scopeId: string): Promise<void>
       // This bounds the hot index without losing anything — a recall miss brings
       // them back. Core/secondary_core stay hot forever.
       if (tier !== "core" && tier !== "secondary_core" && daysSinceRetrieval(entry) > TIER_DAYS_COLD) {
+        // Thread members are decided as a group below, not individually.
+        if (entry.threadId && threadStatus.has(entry.threadId)) {
+          const g = threadMembers.get(entry.threadId) ?? { stale: 0, total: 0, ids: [] };
+          g.stale++; g.total++; g.ids.push(entry.id);
+          threadMembers.set(entry.threadId, g);
+          continue;
+        }
         coldIds.push(entry.id);
         continue; // leave the row in place; moveToCold relocates it after the write
+      }
+
+      // Fresh thread members still count toward their group's total, so a
+      // half-stale closed thread stays hot as a unit.
+      if (entry.threadId && threadStatus.has(entry.threadId)) {
+        const g = threadMembers.get(entry.threadId) ?? { stale: 0, total: 0, ids: [] };
+        g.total++; g.ids.push(entry.id);
+        threadMembers.set(entry.threadId, g);
       }
 
       if (tier !== (entry.tier ?? "short") || cycleCount !== (entry.cycleCount ?? 0)) {
@@ -134,6 +158,15 @@ export async function runPromotion(scope: Scope, scopeId: string): Promise<void>
 
     if (!changed) return false;
   });
+
+  // Thread-unit decision: a CLOSED thread whose every member is stale archives
+  // whole; anything less (active, or any member still fresh) stays hot intact.
+  for (const [threadId, g] of threadMembers) {
+    if (threadStatus.get(threadId) === "closed" && g.stale === g.total && g.total > 0) {
+      coldIds.push(...g.ids);
+      console.info(`[promotion] ${scope}:${scopeId} — thread ${threadId} archived as a unit (${g.total} entries)`);
+    }
+  }
 
   if (coldIds.length > 0) {
     const moved = await moveToCold(scope, scopeId, coldIds);

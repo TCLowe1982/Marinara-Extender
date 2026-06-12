@@ -265,7 +265,9 @@ export function registerSetupRoutes(
     // show what's ACTUALLY loaded in the tab and warn on mismatch — a stale
     // tab running old extension code is otherwise invisible (learned the
     // hard way: a shipped fix "didn't work" because it was never loaded).
-    return reply.send(code.replace("__ME_VERSION__", currentVersion()));
+    // split/join, NOT replace: the placeholder appears more than once and
+    // String.replace with a string pattern only hits the first occurrence.
+    return reply.send(code.split("__ME_VERSION__").join(currentVersion()));
   });
 
   // Saves the API key to sidecar/.env and applies it immediately.

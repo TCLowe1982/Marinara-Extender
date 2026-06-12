@@ -1239,7 +1239,13 @@ function renderPanel() {
     const stale = el("div", "me-panel-info");
     stale.style.color = "#f87171";
     stale.style.fontWeight = "600";
-    stale.textContent = `⚠ This tab is running extension v${ME_VERSION} but the server is v${serverVersion} — reload the page.`;
+    // The shared info-line style ellipsizes — this message must wrap in full.
+    stale.style.whiteSpace = "normal";
+    stale.style.overflow = "visible";
+    stale.style.textOverflow = "clip";
+    stale.style.wordBreak = "break-word";
+    stale.style.lineHeight = "1.4";
+    stale.textContent = `⚠ This tab is running extension v${ME_VERSION} but the server is v${serverVersion} — reload the page to update.`;
     panel.appendChild(stale);
   }
 

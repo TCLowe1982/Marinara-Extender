@@ -30,30 +30,41 @@ type EmbeddingResponse = {
   data: Array<{ embedding: number[]; index?: number }>;
 };
 
+// Ollama falls over on oversized embedding batches (measured live: 256 texts
+// OK, 800 → 400 with its internal tokenize subprocess dying), so requests are
+// chunked. All-or-null contract preserved: any failed sub-batch fails the lot,
+// because callers align embeddings[i] with texts[i].
+const EMBED_BATCH_SIZE = 64;
+
 export async function fetchEmbeddings(texts: string[]): Promise<number[][] | null> {
   const base = localUrl();
   const model = embedModel();
   if (!base || !model || texts.length === 0) return null;
 
-  try {
-    const res = await fetch(`${base}/embeddings`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model, input: texts }),
-      signal: AbortSignal.timeout(60_000),
-    });
-    if (!res.ok) return null;
+  const out: number[][] = [];
+  for (let start = 0; start < texts.length; start += EMBED_BATCH_SIZE) {
+    const batch = texts.slice(start, start + EMBED_BATCH_SIZE);
+    try {
+      const res = await fetch(`${base}/embeddings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model, input: batch }),
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (!res.ok) return null;
 
-    const json = (await res.json()) as EmbeddingResponse;
-    if (!Array.isArray(json.data) || json.data.length !== texts.length) return null;
+      const json = (await res.json()) as EmbeddingResponse;
+      if (!Array.isArray(json.data) || json.data.length !== batch.length) return null;
 
-    const ordered = json.data.every((d) => typeof d.index === "number")
-      ? [...json.data].sort((a, b) => a.index! - b.index!)
-      : json.data;
-    return ordered.map((d) => d.embedding);
-  } catch {
-    return null;
+      const ordered = json.data.every((d) => typeof d.index === "number")
+        ? [...json.data].sort((a, b) => a.index! - b.index!)
+        : json.data;
+      out.push(...ordered.map((d) => d.embedding));
+    } catch {
+      return null;
+    }
   }
+  return out;
 }
 
 // First-boot/diagnostic probe (TC review feedback): "semantic features feel

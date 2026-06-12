@@ -43,6 +43,11 @@ export interface IndexEntry {
   lastRetrievedAt?: string; // ISO datetime of last retrieval
   sourceChatId?: string;    // chat this entry was imported/derived from (for clean re-import)
   threadId?: string;        // narrative thread membership (nthr-* — see threads.ts)
+  // Fact supersession (FR2): a newer fact replaced this one. Deliberately a
+  // separate field, NOT an EntryStatus value — see the EntryStatus audit:
+  // widening a serialized enum breaks empirical consumers silently.
+  supersededBy?: string;    // id of the replacing entry
+  supersededAt?: string;    // ISO datetime
 }
 
 export interface ScopeIndex {
@@ -69,6 +74,8 @@ export interface Entry {
   lastRetrievedAt?: string; // ISO datetime of last retrieval
   sourceChatId?: string;    // chat this entry was imported/derived from (for clean re-import)
   threadId?: string;        // narrative thread membership (nthr-* — see threads.ts)
+  supersededBy?: string;    // FR2: id of the replacing entry (see IndexEntry note)
+  supersededAt?: string;
   // Soft clock context at time of encoding
   timeContext?: { timeOfDay: string; dayOfWeek: string; inferredFrom?: string };
 }
@@ -340,6 +347,39 @@ export async function moveToCold(scope: Scope, scopeId: string, ids: string[]): 
     await writeYaml(indexPath(scope, scopeId), h);
   });
   return moving.length;
+}
+
+// FR2: a newer fact replaces an older one. The old entry is marked with a
+// pointer to its replacement and moved to COLD — a tier move, never a delete —
+// so a disproven fact stays queryable ("you said Mei before — did you mean
+// Lin?") via cold recall, while dropping out of the Current working set.
+export async function supersedeEntry(
+  scope: Scope,
+  scopeId: string,
+  oldId: string,
+  newId: string,
+): Promise<boolean> {
+  const now = new Date().toISOString();
+  let row: IndexEntry | undefined;
+  await serializedWrite(indexPath(scope, scopeId), async () => {
+    const index = await readIndex(scope, scopeId);
+    if (!index) return;
+    row = index.entries.find((e) => e.id === oldId);
+    if (!row) return;
+    row.supersededBy = newId;
+    row.supersededAt = now;
+    index.lastUpdated = now;
+    await writeYaml(indexPath(scope, scopeId), index);
+  });
+  if (!row) return false;
+  // Mirror onto the entry file so the fact carries its own history.
+  const entry = await readEntry(scope, scopeId, row.path);
+  if (entry) {
+    await writeEntry(scope, scopeId, { ...entry, supersededBy: newId, supersededAt: now });
+  }
+  await moveToCold(scope, scopeId, [oldId]);
+  console.info(`[ME:supersede] ${scope}:${scopeId} — ${oldId} superseded by ${newId} (moved to cold)`);
+  return true;
 }
 
 // Bring one entry back from cold → hot (rehydrate on recall). Returns its row.

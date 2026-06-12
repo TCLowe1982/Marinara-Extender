@@ -73,7 +73,7 @@ import { classifyChunks } from "./sentiment/classifier.js";
 import { analyzeChunks } from "./sentiment/analyzer.js";
 import { encodeBeat } from "./sentiment/encoder.js";
 import { classifyAmbient } from "./ambient.js";
-import { createEntryIfUnique, isDuplicate } from "./dedup.js";
+import { createEntryIfUnique, isDuplicate, readSupersessionCandidates } from "./dedup.js";
 import { Progress, progressEnabled } from "./progress.js";
 import { computeJobKey, loadJob, saveJob, deleteJob, clearJobs } from "./story-jobs.js";
 import type { Chunk } from "./sentiment/types.js";
@@ -1375,6 +1375,11 @@ export function registerApiRoutes(app: FastifyInstance): void {
     if (!ok) return reply.code(404).send({ error: "thread not found or already closed" });
     console.info(`[ME:threads] closed ${req.params.id}`);
     return reply.send({ ok: true });
+  });
+
+  // ── Fact supersession audit (FR2 → FR3/FR4 input) ─────────────────────────
+  app.get("/api/supersessions", async (_req, reply) => {
+    return reply.send({ candidates: await readSupersessionCandidates() });
   });
 
   // ── Speaker resolution (holding pool + alias table) ───────────────────────

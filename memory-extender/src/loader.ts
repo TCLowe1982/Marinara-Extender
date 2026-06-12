@@ -143,7 +143,10 @@ function selectEntries(
 ): { selected: IndexEntry[]; used: number; summoned: Set<string>; bestRelevance: number } {
   if (!index) return { selected: [], used: 0, summoned: new Set(), bestRelevance: 0 };
 
-  const candidates = [...index.entries].filter((e) => e.status !== "done");
+  // done = resolved; supersededBy = replaced fact (FR2) — normally already in
+  // cold, filtered here defensively so a stale fact never shares a prompt with
+  // its replacement.
+  const candidates = [...index.entries].filter((e) => e.status !== "done" && !e.supersededBy);
 
   // Eidetic mode: skip budgeting — treat every memory as Current. No exposure
   // credit (it's an inspection mode, not real usage).
@@ -220,6 +223,10 @@ async function coldRecall(
   let best: { e: IndexEntry; r: number } | null = null;
   for (const e of cold.entries) {
     if (e.status === "done") continue;
+    // Superseded facts are history, not live memory — rehydrating one would
+    // put the stale fact back in Current next to its replacement. FR3/FR4 own
+    // deliberate resurrection.
+    if (e.supersededBy) continue;
     const r = relevanceScore(e.summary, recentText);
     if (r > RELEVANCE_CREDIT_THRESHOLD && (!best || r > best.r)) best = { e, r };
   }

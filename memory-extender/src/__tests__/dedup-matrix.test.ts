@@ -21,6 +21,7 @@ import {
   correctionSignature,
   looksIncident,
 } from "../dedup.js";
+import { readIndex, readColdIndex, readEntry } from "../storage.js";
 
 let dir: string;
 beforeEach(async () => {
@@ -69,7 +70,7 @@ describe("character_topics matrix", () => {
 });
 
 describe("user_topics corrections (FR1)", () => {
-  it("a correction is CREATED and recorded as a supersession candidate", async () => {
+  it("a correction is CREATED, recorded, and the old fact is SUPERSEDED (FR2)", async () => {
     const original = await utopic("the user's sister is named Mei");
     expect(original).not.toBeNull();
     const correction = await utopic("the user's sister is named Lin");
@@ -78,6 +79,18 @@ describe("user_topics corrections (FR1)", () => {
     expect(candidates).toHaveLength(1);
     expect(candidates[0]!.existingId).toBe(original!.id);
     expect(candidates[0]!.newId).toBe(correction!.id);
+    expect(candidates[0]!.applied).toBe(true);
+
+    // The old fact: pointered, out of the hot index, retained in cold.
+    const hot = (await readIndex("character", "mari"))!;
+    expect(hot.entries.map((e) => e.id)).not.toContain(original!.id);
+    expect(hot.entries.map((e) => e.id)).toContain(correction!.id);
+    const cold = (await readColdIndex("character", "mari"))!;
+    const oldRow = cold.entries.find((e) => e.id === original!.id)!;
+    expect(oldRow.supersededBy).toBe(correction!.id);
+    // Entry file carries its own history too.
+    const oldEntry = await readEntry("character", "mari", oldRow.path);
+    expect(oldEntry?.supersededBy).toBe(correction!.id);
   });
 
   it("a plain restatement is still deduped, with no candidate recorded", async () => {

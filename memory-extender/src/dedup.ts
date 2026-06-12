@@ -36,6 +36,7 @@ import {
   getDataDir,
   mutateYamlFile,
   readYamlFile,
+  supersedeEntry,
   type Scope,
   type Lane,
   type EntryStatus,
@@ -123,6 +124,9 @@ export interface SupersessionCandidate {
   newId: string;
   newSummary: string;
   recordedAt: string;
+  // FR2: true when the old entry was actually superseded (pointer set + moved
+  // to cold). False/absent = recorded only — FR3's adjudication input.
+  applied?: boolean;
 }
 
 interface CandidateFile {
@@ -260,6 +264,10 @@ export async function createEntryIfUnique(
   });
 
   if (verdict.action === "create-correction") {
+    // FR2: facts supersede. The newer fact replaces the older one — the old
+    // entry gets a pointer to its replacement and a tier move to cold (never
+    // a delete). The candidate file keeps the audit trail for FR3/FR4.
+    const applied = await supersedeEntry(scope, scopeId, verdict.against.id, id).catch(() => false);
     await recordSupersessionCandidate({
       scope,
       scopeId,
@@ -268,9 +276,10 @@ export async function createEntryIfUnique(
       newId: id,
       newSummary: summary,
       recordedAt: new Date().toISOString(),
+      applied,
     }).catch(() => { /* candidate file is advisory — never block the save */ });
     console.info(
-      `[ME:dedup] correction candidate (${scope}:${scopeId}): "${verdict.against.summary.slice(0, 50)}" ← "${summary.slice(0, 50)}"`,
+      `[ME:dedup] correction (${scope}:${scopeId}): "${verdict.against.summary.slice(0, 50)}" ← "${summary.slice(0, 50)}"${applied ? " [superseded]" : ""}`,
     );
   }
 

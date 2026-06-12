@@ -30,7 +30,7 @@ import {
 } from "./storage.js";
 import { readBeatIndex, readBeat, writeBeat, type BeatIndex } from "./sentiment/encoder.js";
 import type { EmotionalBeat } from "./sentiment/types.js";
-import { readAliasTable, findExactMatches, normalizeLabel, tokenContainment } from "./aliases.js";
+import { readAliasTable, findExactMatches, normalizeLabel, tokenContainment, jaroWinkler } from "./aliases.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -150,15 +150,17 @@ export async function resolveNameToKey(label: string): Promise<string | null> {
 }
 
 // Does a subject name refer to the session character? Exact normalized match,
-// or significant-token containment ("Mari" ⊂ "Dr. Mari Zielińska") — the
-// session name is the one context where containment is safe to auto-route,
+// significant-token containment ("Mari" ⊂ "Dr. Mari Zielińska"), or a high
+// jaro-winkler score — models stumble on diacritics ("Zieliöska" for
+// "Zielińska") and a near-miss spelling of the session name shouldn't park a
+// beat in the holding pool. Fuzzy matching is safe to auto-route ONLY here,
 // because the candidate set has exactly one member.
 export function matchesSessionName(subject: string, sessionCharacterName?: string): boolean {
   if (!sessionCharacterName) return false;
   const a = normalizeLabel(subject);
   const b = normalizeLabel(sessionCharacterName);
   if (!a || !b) return false;
-  return a === b || tokenContainment(a, b);
+  return a === b || tokenContainment(a, b) || jaroWinkler(a, b) >= 0.9;
 }
 
 // Resolve a Marinara card ID to its stable identity key.

@@ -14,3 +14,7 @@ memory-extender/dist/
 
 # Saved-page / design-reference captures (third-party assets, not our source)
 *_files/
+node_modules
+
+# Sidecar data quarantine/backup copies (user data, never source)
+marinara-extender-backups/

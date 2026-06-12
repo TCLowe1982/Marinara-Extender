@@ -63,6 +63,10 @@ export interface LoaderSession {
   // relevance for the "Current" working cache. Omitted on cold load → the cache
   // falls back to recency only.
   recentText?: string;
+  // Pre-turn refresh (1ba) calls loadContext a second time per exchange; skip
+  // the retrieval-credit stamping so exposure counts aren't double-inflated —
+  // the post-turn call remains the one that earns credit.
+  skipCredit?: boolean;
 }
 
 // ── Relevance (lexical) ─────────────────────────────────────────────────────────
@@ -516,11 +520,13 @@ export async function loadContext(
       // only when the model demonstrably uses the entry.
       retrievalCount: (e.retrievalCount ?? 0) + (summoned ? 1 : 0),
     });
-  void Promise.all([
-    ...chatSelection.selected.map((e) => stamp("chat", session.chatId, e, chatSelection.summoned.has(e.id))),
-    ...charSelection.selected.map((e) => stamp("character", session.characterId, e, charSelection.summoned.has(e.id))),
-    ...globalSelection.selected.map((e) => stamp("global", "global", e, globalSelection.summoned.has(e.id))),
-  ]).catch(() => {});
+  if (!session.skipCredit) {
+    void Promise.all([
+      ...chatSelection.selected.map((e) => stamp("chat", session.chatId, e, chatSelection.summoned.has(e.id))),
+      ...charSelection.selected.map((e) => stamp("character", session.characterId, e, charSelection.summoned.has(e.id))),
+      ...globalSelection.selected.map((e) => stamp("global", "global", e, globalSelection.summoned.has(e.id))),
+    ]).catch(() => {});
+  }
 
   const indexTokensUsed =
     (indexes.chat?.entries.length ?? 0) * 50 + // rough cost of scanning an index row

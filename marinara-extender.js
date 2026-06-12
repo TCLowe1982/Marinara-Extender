@@ -3177,6 +3177,61 @@ async function ensureRegexScript() {
 
 ensureRegexScript();
 
+// ── Pre-turn context refresh (MarinaraExtender-1ba) ───────────────────────────
+// The memory block used to be assembled AFTER each response, for the next one —
+// a one-turn recall lag that made characters deny things they remembered one
+// message later ("there was no porsche thomas"). Fix: intercept the engine's
+// /api/generate request, refresh the block against the OUTGOING user message,
+// THEN let generation proceed. Hard time budget — on any failure or timeout the
+// request continues with the previous block (i.e., the old behavior).
+
+const PRE_TURN_BUDGET_MS = 800;
+let lorebookIdCache = {}; // characterId → lorebookId (ensureLorebook is slow-ish)
+
+async function preTurnRefresh(rawBody) {
+  let body;
+  try { body = typeof rawBody === "string" ? JSON.parse(rawBody) : null; } catch { return; }
+  const chatId = body?.chatId ? String(body.chatId) : null;
+  const userText = typeof body?.userMessage === "string" ? body.userMessage : "";
+  if (!chatId || !userText.trim()) return;
+  // Only refresh for the session we know; a brand-new chat skips (no lag to fix).
+  if (!currentSession || String(currentSession.chatId) !== chatId) return;
+  const { characterId, characterName } = currentSession;
+
+  const res = await memFetch("/api/pre-turn", {
+    method: "POST",
+    body: JSON.stringify({ characterId, characterName, chatId, userText }),
+  });
+  if (!res?.memoryBlock) return;
+
+  let lorebookId = lorebookIdCache[characterId];
+  if (!lorebookId) {
+    lorebookId = await ensureLorebook(characterId, characterName);
+    if (lorebookId) lorebookIdCache[characterId] = lorebookId;
+  }
+  if (!lorebookId) return;
+  await writeMemoryToLorebook(lorebookId, res.memoryBlock);
+  dbg(`pre-turn refresh — block updated before generation (${res.surfaced} entries in context)`);
+}
+
+(function installPreTurnHook() {
+  const origFetch = window.fetch.bind(window);
+  window.fetch = async (input, init) => {
+    try {
+      const url = typeof input === "string" ? input : (input?.url ?? "");
+      const method = (init?.method ?? (typeof input === "object" ? input?.method : "") ?? "GET").toUpperCase();
+      if (method === "POST" && /\/api\/generate(\?|$)/.test(url)) {
+        // Budgeted: never let a slow/sick sidecar delay generation more than this.
+        await Promise.race([
+          preTurnRefresh(init?.body).catch(() => {}),
+          new Promise((r) => setTimeout(r, PRE_TURN_BUDGET_MS)),
+        ]);
+      }
+    } catch { /* interception must never break generation */ }
+    return origFetch(input, init);
+  };
+})();
+
 // ── Session resolution ────────────────────────────────────────────────────────
 // Marinara is a pure SPA — location.href never changes. We capture chatId from
 // Marinara's own generation events, with a header-based fallback for the first

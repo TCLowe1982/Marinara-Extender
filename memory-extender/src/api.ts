@@ -1451,6 +1451,29 @@ export function registerApiRoutes(app: FastifyInstance): void {
     },
   );
 
+  // ── POST /api/pre-turn — kill the one-turn recall lag (1ba) ───────────────
+  // Called by the extension BEFORE the engine generates, with the OUTGOING
+  // user message as the relevance signal. LLM-free: just loadContext + return
+  // the block; the extension writes it to the lorebook and then lets the
+  // generation proceed. No capture, no credit stamping (post-turn owns both).
+  app.post<{
+    Body: { characterId: string; characterName?: string; chatId: string; userText?: string };
+  }>("/api/pre-turn", async (req, reply) => {
+    const { characterId, characterName, chatId, userText = "" } = req.body ?? {};
+    if (!characterId || !chatId) {
+      return reply.code(400).send({ error: "characterId and chatId are required" });
+    }
+    const identityKey = await resolveIdentity(characterId, characterName);
+    const { contextBlock, surfaced } = await loadContext({
+      characterId: identityKey,
+      chatId,
+      turnNumber: 0,
+      recentText: userText,
+      skipCredit: true,
+    });
+    return reply.send({ memoryBlock: contextBlock, surfaced: surfaced.length });
+  });
+
   // ── One-click update (uo4) ────────────────────────────────────────────────
   // Spawns the visible updater console; it stops this process, pulls, builds,
   // and relaunches. CSRF guard applies (mutating route).

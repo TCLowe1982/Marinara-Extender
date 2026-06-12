@@ -458,7 +458,10 @@ export async function removeEntriesBySourceChat(
     if (!index) return;
     const keep: IndexEntry[] = [];
     for (const e of index.entries) {
-      if (e.sourceChatId === sourceChatId) removed.push(e);
+      // Scene recaps carry the scene's sourceChatId but are NOT import
+      // artifacts — purging one on re-import would lose it permanently
+      // (the arc's ingestedScenes idempotency blocks re-ingestion).
+      if (e.sourceChatId === sourceChatId && !e.id.startsWith("recap-")) removed.push(e);
       else keep.push(e);
     }
     if (removed.length === 0) return;

@@ -9,12 +9,33 @@
 // that already exists in the same lane. Previously only the command paths
 // deduped, so the automated tiers regenerated duplicates faster than cleanup
 // could remove them. This module is the single source of truth for the check.
+//
+// The decision is LANE- and KIND-aware (MarinaraExtender-ef6 + 4eu/FR1):
+//
+//   character_topics — feelings ACCUMULATE. An INCIDENT (a beat-bound moment,
+//   kind:"incident", summaries start "[emotion] ...") never collapses into a
+//   TRAIT entry: an event resembling a standing pattern is the arc growing,
+//   not a duplicate. Incident-vs-incident dedups at a HIGHER bar — the real
+//   duplicate is the same moment re-captured (swipe/regen), which is
+//   near-identical; merely-similar moments both persist. Traits keep the
+//   aggressive default against everything.
+//
+//   user_topics — facts SUPERSEDE. A similarity hit whose symmetric difference
+//   is one-to-few content words is the CORRECTION signature ("sister is Mei"
+//   -> "sister is Lin"): the meaning-carrying token is exactly what Jaccard
+//   ignores. Corrections are CREATED, not dropped, and the collision pair is
+//   recorded to data/supersession-candidates.yaml — the queue FR2 (supersede)
+//   and FR3 (LLM reconciliation) consume. Plain restatements still dedup.
 
+import { join } from "path";
 import {
   readIndex,
   writeEntry,
   upsertIndexEntry,
   estimateTokens,
+  getDataDir,
+  mutateYamlFile,
+  readYamlFile,
   type Scope,
   type Lane,
   type EntryStatus,
@@ -24,30 +45,104 @@ import {
 import { nanoid } from "./nanoid.js";
 
 export const DEDUP_SIMILARITY_THRESHOLD = 0.35;
+// Incident-vs-incident: only a re-capture of the SAME moment should collapse.
+export const INCIDENT_DEDUP_THRESHOLD = 0.6;
+// Correction signature needs high structural overlap to be a correction rather
+// than a coincidentally-similar different fact.
+export const CORRECTION_MIN_JACCARD = 0.5;
+
+export type EntryKind = "incident" | "trait";
+
+function wordBag(s: string): Set<string> {
+  return new Set(s.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean));
+}
 
 // Jaccard similarity on word bags.
 export function jaccardSimilarity(a: string, b: string): number {
-  const words = (s: string) =>
-    new Set(s.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean));
-  const wa = words(a);
-  const wb = words(b);
+  const wa = wordBag(a);
+  const wb = wordBag(b);
   const intersection = [...wa].filter((w) => wb.has(w)).length;
   const union = new Set([...wa, ...wb]).size;
   return union === 0 ? 0 : intersection / union;
 }
 
+// Tier-2 beat companions are always "[emotion] motivation" — a reliable
+// incident marker for the thousands of legacy entries that predate the stored
+// kind field.
+export function looksIncident(summary: string): boolean {
+  return /^\[\w+\]/.test(summary.trim());
+}
+
+// Function words can differ between restatements of the SAME fact ("the
+// user's sister" vs "user's sister") — they never carry a correction. Length
+// can't separate them: "the" and "Mei" are both three letters.
+const FUNCTION_WORDS = new Set([
+  "the", "and", "was", "has", "had", "are", "but", "for", "not", "with",
+  "that", "this", "his", "her", "its", "their", "they", "she", "him", "who",
+  "now", "then", "also", "very", "into", "from", "about", "been", "will",
+]);
+
+// "sister is Mei" vs "sister is Lin": high structural overlap, and the tokens
+// that differ are few and content-bearing.
+export function correctionSignature(a: string, b: string): boolean {
+  const wa = wordBag(a);
+  const wb = wordBag(b);
+  if (jaccardSimilarity(a, b) < CORRECTION_MIN_JACCARD) return false;
+  const symdiff = [
+    ...[...wa].filter((w) => !wb.has(w)),
+    ...[...wb].filter((w) => !wa.has(w)),
+  ].filter((w) => w.length >= 3 && !FUNCTION_WORDS.has(w));
+  return symdiff.length >= 1 && symdiff.length <= 4;
+}
+
 // True if summary OR content is too similar to an existing entry's summary.
+// Kind-blind — kept for the explicit [remember:] command path; the capture
+// tiers use createEntryIfUnique, which applies the lane/kind matrix.
 export function isDuplicate(
   summary: string,
   content: string,
   existing: IndexEntry[],
 ): boolean {
-  return existing.some(
-    (e) =>
-      jaccardSimilarity(e.summary, summary) >= DEDUP_SIMILARITY_THRESHOLD ||
-      (content.length > 20 &&
-        jaccardSimilarity(e.summary, content) >= DEDUP_SIMILARITY_THRESHOLD),
+  return existing.some((e) => similarityHit(summary, content, e));
+}
+
+function similarityHit(summary: string, content: string, e: IndexEntry, threshold = DEDUP_SIMILARITY_THRESHOLD): boolean {
+  return (
+    jaccardSimilarity(e.summary, summary) >= threshold ||
+    (content.length > 20 && jaccardSimilarity(e.summary, content) >= threshold)
   );
+}
+
+// ── Supersession candidates (FR1 output, FR2/FR3 input) ─────────────────────
+
+export interface SupersessionCandidate {
+  scope: Scope;
+  scopeId: string;
+  existingId: string;
+  existingSummary: string;
+  newId: string;
+  newSummary: string;
+  recordedAt: string;
+}
+
+interface CandidateFile {
+  candidates: SupersessionCandidate[];
+}
+
+function candidatesPath(): string {
+  return join(getDataDir(), "supersession-candidates.yaml");
+}
+
+async function recordSupersessionCandidate(c: SupersessionCandidate): Promise<void> {
+  await mutateYamlFile<CandidateFile>(candidatesPath(), () => ({ candidates: [] }), (f) => {
+    if (!f.candidates.some((x) => x.existingId === c.existingId && x.newId === c.newId)) {
+      f.candidates.push(c);
+    }
+  });
+}
+
+export async function readSupersessionCandidates(): Promise<SupersessionCandidate[]> {
+  return (await readYamlFile<CandidateFile>(candidatesPath()))?.candidates ?? [];
 }
 
 function idPrefix(lane: Lane): string {
@@ -67,6 +162,50 @@ export interface CreateEntryInput {
   status?: EntryStatus;
   timeContext?: Entry["timeContext"];
   sourceChatId?: string; // tag for clean per-chat re-import
+  // What the entry IS: an incident (a beat-bound moment) or a trait (a
+  // standing pattern/fact about who someone is). Drives the character_topics
+  // dedup matrix; omitted = legacy behavior (aggressive dedup).
+  kind?: EntryKind;
+}
+
+// Lane/kind-aware duplicate decision. Returns the blocking entry, or a
+// correction-candidate marker, or null (no block — create).
+type DedupVerdict =
+  | { action: "create" }
+  | { action: "skip"; against: IndexEntry }
+  | { action: "create-correction"; against: IndexEntry };
+
+function decide(input: { lane: Lane; summary: string; content: string; kind?: EntryKind }, existing: IndexEntry[]): DedupVerdict {
+  const { lane, summary, content, kind } = input;
+
+  if (lane === "character_topics" && kind === "incident") {
+    for (const e of existing) {
+      const existingIsIncident = looksIncident(e.summary);
+      // Incidents never collapse into traits — the arc accumulates.
+      if (!existingIsIncident) continue;
+      // Same-moment recapture (swipe/regen) is near-identical; merely-similar
+      // moments in the same emotional territory both persist.
+      if (similarityHit(summary, content, e, INCIDENT_DEDUP_THRESHOLD)) return { action: "skip", against: e };
+    }
+    return { action: "create" };
+  }
+
+  if (lane === "user_topics") {
+    for (const e of existing) {
+      if (!similarityHit(summary, content, e)) continue;
+      // A hit that differs by a few content words is a CORRECTION — the new
+      // fact must land (FR1). Everything else is a restatement.
+      if (correctionSignature(e.summary, summary)) return { action: "create-correction", against: e };
+      return { action: "skip", against: e };
+    }
+    return { action: "create" };
+  }
+
+  // Traits, open_threads, and legacy (kind-less) entries: aggressive default.
+  for (const e of existing) {
+    if (similarityHit(summary, content, e)) return { action: "skip", against: e };
+  }
+  return { action: "create" };
 }
 
 // Create an entry only if no sufficiently similar entry already exists in the
@@ -83,7 +222,8 @@ export async function createEntryIfUnique(
 
   const idx = await readIndex(scope, scopeId);
   const existingInLane = (idx?.entries ?? []).filter((e) => e.lane === input.lane);
-  if (isDuplicate(summary, content, existingInLane)) {
+  const verdict = decide({ lane: input.lane, summary, content, kind: input.kind }, existingInLane);
+  if (verdict.action === "skip") {
     console.info(`[ME:dedup] skipped duplicate (${input.lane}/${scope}:${scopeId}): "${summary.slice(0, 60)}"`);
     return null;
   }
@@ -115,6 +255,21 @@ export async function createEntryIfUnique(
     lastAccessed: now,
     ...(input.sourceChatId ? { sourceChatId: input.sourceChatId } : {}),
   });
+
+  if (verdict.action === "create-correction") {
+    await recordSupersessionCandidate({
+      scope,
+      scopeId,
+      existingId: verdict.against.id,
+      existingSummary: verdict.against.summary,
+      newId: id,
+      newSummary: summary,
+      recordedAt: new Date().toISOString(),
+    }).catch(() => { /* candidate file is advisory — never block the save */ });
+    console.info(
+      `[ME:dedup] correction candidate (${scope}:${scopeId}): "${verdict.against.summary.slice(0, 50)}" ← "${summary.slice(0, 50)}"`,
+    );
+  }
 
   return entry;
 }

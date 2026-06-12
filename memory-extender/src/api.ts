@@ -606,7 +606,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
             ].join("\n");
 
             const entry = await createEntryIfUnique("character", targetKey, {
-              lane: "character_topics", summary, content: capContent(rawContent), timeContext: timeCtx,
+              lane: "character_topics", summary, content: capContent(rawContent), timeContext: timeCtx, kind: "incident",
             });
             if (entry) {
               console.info(`[ME:tier2] saved beat ${beat.id} + ledger entry for ${beat.emotion} under ${targetKey} (salience ${beat.salience.toFixed(2)})`);
@@ -652,6 +652,8 @@ export function registerApiRoutes(app: FastifyInstance): void {
             console.info(`[ME:tier3] subject="${subject ?? "(none)"}" → ${scope}:${scopeId}`);
             const entry = await createEntryIfUnique(scope, scopeId, {
               lane: fact.lane, summary, content: capContent(fact.text), timeContext: timeCtx,
+              // Ambient facts describe who someone IS — the trait side of the matrix.
+              ...(fact.lane === "character_topics" ? { kind: "trait" as const } : {}),
             });
             if (entry) saved++;
           }
@@ -1302,7 +1304,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
     for (const beat of beats) {
       const { summary, content } = companionEntryFromBeat(beat);
       if (!summary) continue;
-      const entry = await createEntryIfUnique("character", identityKey, { lane: "character_topics", summary, content });
+      const entry = await createEntryIfUnique("character", identityKey, { lane: "character_topics", summary, content, kind: "incident" });
       if (entry) created++;
     }
     console.info(`[ME] beats->entries — key:${identityKey} — ${created} entries created from ${beats.length} beats`);

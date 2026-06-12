@@ -10,6 +10,7 @@ import type { FastifyInstance } from "fastify";
 import { readFile } from "fs/promises";
 import { defaultEnvPath, extensionJsCandidates } from "./paths.js";
 import { atomicWriteFile } from "./storage.js";
+import { currentVersion } from "./update.js";
 
 // ── Extension file lookup ─────────────────────────────────────────────────────
 
@@ -260,7 +261,11 @@ export function registerSetupRoutes(
       return reply.code(404).send("marinara-extender.js not found — run the server from the memory-extender/ directory.");
     }
     reply.header("Content-Type", "text/plain; charset=utf-8");
-    return reply.send(code);
+    // Stamp the served extension with the sidecar's version so the panel can
+    // show what's ACTUALLY loaded in the tab and warn on mismatch — a stale
+    // tab running old extension code is otherwise invisible (learned the
+    // hard way: a shipped fix "didn't work" because it was never loaded).
+    return reply.send(code.replace("__ME_VERSION__", currentVersion()));
   });
 
   // Saves the API key to sidecar/.env and applies it immediately.

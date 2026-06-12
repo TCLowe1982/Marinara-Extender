@@ -15,6 +15,9 @@
 // ╚══════════════════════════════════════════════════════════════════════════╝
 
 const MEMORY_EXTENDER = "http://127.0.0.1:3001";
+// Stamped by the sidecar at serve time (setup.ts) — shows what's ACTUALLY
+// loaded in this tab. "dev" = running from a copy the sidecar didn't serve.
+const ME_VERSION = ("__ME_VERSION__".startsWith("__") ? "dev" : "__ME_VERSION__");
 const ME_DEBUG_KEY = `${marinara.extensionId}:debug`;
 const isDebug = () => localStorage.getItem(ME_DEBUG_KEY) === "1";
 const dbg = (...a) => isDebug() && console.debug("[ME:dbg]", ...a);
@@ -1220,12 +1223,24 @@ function renderPanel() {
   refreshBtn.addEventListener("click", loadPanelData);
   closeBtn.addEventListener("click", closePanel);
 
-  // Session info line
+  // Session info line — includes the version actually LOADED in this tab.
   if (panelState.session) {
     const info = el("div", "me-panel-info");
     const charLabel = panelState.session.characterName ?? shorten(panelState.session.characterId);
-    info.textContent = `chat/${shorten(panelState.session.chatId)} · ${charLabel}`;
+    const serverV = panelState.health?.version;
+    info.textContent = `chat/${shorten(panelState.session.chatId)} · ${charLabel} · ext v${ME_VERSION}${serverV ? ` · server v${serverV}` : ""}`;
     panel.appendChild(info);
+  }
+
+  // Stale-tab alarm: the tab is running older extension code than the server
+  // is serving — every "the fix didn't work" so far has been exactly this.
+  const serverVersion = panelState.health?.version;
+  if (serverVersion && ME_VERSION !== "dev" && ME_VERSION !== serverVersion) {
+    const stale = el("div", "me-panel-info");
+    stale.style.color = "#f87171";
+    stale.style.fontWeight = "600";
+    stale.textContent = `⚠ This tab is running extension v${ME_VERSION} but the server is v${serverVersion} — reload the page.`;
+    panel.appendChild(stale);
   }
 
   // One-click update (uo4): when GitHub has a newer published release, offer

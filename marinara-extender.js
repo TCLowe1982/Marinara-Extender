@@ -1225,6 +1225,36 @@ function renderPanel() {
     panel.appendChild(info);
   }
 
+  // Last-turn memory activity (15y): what the character actually had in
+  // context, without reading sidecar logs. Click to expand the list.
+  if (lastTurnActivity && panelState.session && lastTurnActivity.chatId === panelState.session.chatId) {
+    const act = el("div", "me-panel-info");
+    act.style.cursor = "pointer";
+    const n = lastTurnActivity.surfaced.length;
+    const extras = [];
+    if (lastTurnActivity.created > 0) extras.push(`+${lastTurnActivity.created} saved`);
+    if (lastTurnActivity.bookmarks > 0) extras.push(`${lastTurnActivity.bookmarks} bookmark${lastTurnActivity.bookmarks === 1 ? "" : "s"}`);
+    const ago = Math.max(0, Math.round((Date.now() - lastTurnActivity.at) / 1000));
+    act.textContent = `🧠 last turn: ${n} memor${n === 1 ? "y" : "ies"} in context${extras.length ? " · " + extras.join(" · ") : ""} (${ago}s ago) ${panelState.showActivity ? "▾" : "▸"}`;
+    act.title = "Memories surfaced into the prompt on the last processed turn — click to expand";
+    act.addEventListener("click", () => { panelState.showActivity = !panelState.showActivity; renderPanel(); });
+    panel.appendChild(act);
+    if (panelState.showActivity && n > 0) {
+      const list = el("div", "me-panel-info");
+      list.style.maxHeight = "140px";
+      list.style.overflowY = "auto";
+      list.style.fontSize = "11px";
+      list.style.opacity = "0.85";
+      for (const s of lastTurnActivity.surfaced) {
+        const row = el("div");
+        row.textContent = `· [${s.scope}] ${s.summary}`;
+        row.title = s.id;
+        list.appendChild(row);
+      }
+      panel.appendChild(list);
+    }
+  }
+
   // First-run onboarding takes over the panel (no tabs) until imported or skipped.
   if (panelState.session && !panelState.loading && !panelState.error && !isOnboarded()) {
     const obContent = el("div", "me-panel-content");
@@ -1492,6 +1522,19 @@ function renderEntry(entry, lane) {
   badge.style.background = statusCfg.bg;
   badge.style.color = statusCfg.fg;
   meta.appendChild(badge);
+
+  // Retrieval/recitation stats (15y): is this memory actually getting used?
+  const rc = entry.retrievalCount ?? 0;
+  const rec = entry.recitationCount ?? 0;
+  if (rc > 0 || rec > 0) {
+    const stats = el("span", "me-status-badge");
+    stats.textContent = `⟲${rc}${rec > 0 ? ` ✓${rec}` : ""}`;
+    stats.style.background = "transparent";
+    stats.style.opacity = "0.7";
+    stats.title = `retrieved into context ${rc}×${rec > 0 ? `, demonstrably used ${rec}×` : ""}` +
+      (entry.lastRetrievedAt ? ` — last ${String(entry.lastRetrievedAt).slice(0, 10)}` : "");
+    meta.appendChild(stats);
+  }
 
   body.append(summary, meta);
 
@@ -3170,6 +3213,10 @@ async function resolveSession() {
 let currentSession = null;
 const lastMsgId = {};      // chatId → last processed assistant message id
 const lastSurfaced = {};   // chatId → entries surfaced into context on the PREVIOUS turn
+
+// Last-turn memory activity for the panel (MarinaraExtender-15y): what the
+// character had in context this turn, visible without reading sidecar logs.
+let lastTurnActivity = null; // { at, chatId, surfaced: [{id,summary,scope}], created, bookmarks }
                            // (recitation compares the current response against the memory
                            //  that was actually live when that response was generated)
 const SNAPSHOT_KEY = `${marinara.extensionId}:snapshot-time`;
@@ -3459,6 +3506,17 @@ async function checkForNewMessage() {
       detectRecitations(priorSurfaced, content).catch(() => {});
     }
     if (Array.isArray(result.surfaced)) lastSurfaced[chatId] = result.surfaced;
+
+    // Panel observability: record what this turn put in context, and refresh
+    // the panel if it's open so the activity line updates live.
+    lastTurnActivity = {
+      at: Date.now(),
+      chatId,
+      surfaced: Array.isArray(result.surfaced) ? result.surfaced : [],
+      created: result.created ?? 0,
+      bookmarks: result.bookmarksExtracted ?? 0,
+    };
+    if (panel?.classList.contains("open")) renderPanel();
 
     const charLabel = currentSession?.characterName ?? characterId;
     const saved = (result.created ?? 0) + (result.bookmarksExtracted ?? 0);

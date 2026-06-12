@@ -71,6 +71,7 @@ import {
 import { csrfRejection, csrfToken, CSRF_HEADER } from "./csrf.js";
 import { ingestSceneRecap, readArcs, readArcMemberships } from "./arcs.js";
 import { runArcPromotion } from "./arc-promotion.js";
+import { spawnUpdater } from "./update.js";
 import { classifyChunks } from "./sentiment/classifier.js";
 import { analyzeChunks } from "./sentiment/analyzer.js";
 import { encodeBeat } from "./sentiment/encoder.js";
@@ -1444,6 +1445,15 @@ export function registerApiRoutes(app: FastifyInstance): void {
       return reply.send({ arcs: file.arcs, memberships, ingestedScenes: file.ingestedScenes });
     },
   );
+
+  // ── One-click update (uo4) ────────────────────────────────────────────────
+  // Spawns the visible updater console; it stops this process, pulls, builds,
+  // and relaunches. CSRF guard applies (mutating route).
+  app.post("/api/update", async (_req, reply) => {
+    const launched = spawnUpdater();
+    if (!launched) return reply.code(500).send({ error: "updater script not found or failed to launch" });
+    return reply.send({ ok: true, message: "updating — the memory server will restart; reload Marinara when it's back" });
+  });
 
   // Run the through-line arc promotion pass on demand (ceiling tier, ajb).
   // The periodic trigger rides process-turn every ARC_PROMOTION_TURNS; this

@@ -10,6 +10,7 @@ import { getDataDir } from "./storage.js";
 import { localUrl, localEnabled, localModel, externalUpstream, externalModel } from "./llm-config.js";
 import { registerApiRoutes } from "./api.js";
 import { registerSetupRoutes } from "./setup.js";
+import { updateStatus } from "./update.js";
 import { isEideticMode } from "./loader.js";
 
 // ── .env loader ───────────────────────────────────────────────────────────────
@@ -80,7 +81,8 @@ app.get("/api/health", { logLevel: "silent" }, async (_req, reply) => {
       ollama = "unavailable";
     }
   }
-  return reply.send({ ok: true, ollama });
+  const update = await updateStatus();
+  return reply.send({ ok: true, ollama, ...update });
 });
 
 // ── Setup page ────────────────────────────────────────────────────────────────

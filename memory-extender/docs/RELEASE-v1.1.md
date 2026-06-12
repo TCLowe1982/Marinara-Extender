@@ -84,6 +84,14 @@ Semantic features (chunk merging, the arc kNN generator) now default to
 (274 MB). Everything degrades gracefully without it; disable entirely with
 `MARINARA_EXTENDER_EMBED_MODEL=0`.
 
+## One-click updates (new in this release)
+
+From v1.1 onward, **upgrading never needs a terminal**: the ledger panel shows
+an **⬆ Update** button whenever a newer release is published — one click
+downloads, builds, and restarts the memory server in a visible console window;
+you reload the Marinara tab and you're done. Prefer files? Double-click
+`Marinara_Extender_Update.bat` in the repo root — same thing.
+
 ---
 
 ## Migrating from v1.0
@@ -91,25 +99,31 @@ Semantic features (chunk merging, the arc kNN generator) now default to
 No data migration. All storage changes are additive — v1.0 data loads as-is,
 and new fields appear as you play.
 
-1. **Update & build**
-   ```
+v1.0 has no update button, so **this hop is the last manual one**:
+
+1. **Double-click `Marinara_Extender_Update.bat`** after a one-time
+   `git pull` to receive it — or run the equivalent once:
+
+   ```text
    git pull
    cd memory-extender && npm install && npm run build
    ```
-2. **Pull the embedding model** (recommended):
-   `ollama pull nomic-embed-text` — or set `MARINARA_EXTENDER_EMBED_MODEL=0`
-   in `.env` to opt out.
-3. **Start with the launcher**: `Marinara_Extender_Start.bat` (repo root).
-4. **Reload your Marinara tab.** Required: the CSRF guard rejects the old
+
+   (The updater also pulls the embedding model for you; doing it by hand:
+   `ollama pull nomic-embed-text`, or set `MARINARA_EXTENDER_EMBED_MODEL=0`
+   to opt out.)
+2. **Start with the launcher**: `Marinara_Extender_Start.bat` (repo root) —
+   visible console + persistent log.
+3. **Reload your Marinara tab.** Required: the CSRF guard rejects the old
    in-page extension until the reload pulls the new one (you'll see
    `[ME:csrf] blocked` lines until you do). The loader stub you pasted into
    Marinara settings is unchanged — no re-pasting.
-5. **Expect a one-time backfill** on first load: your concluded scenes ingest
+4. **Expect a one-time backfill** on first load: your concluded scenes ingest
    as recaps (`[ME:recap] scene "…" ingested` lines).
-6. **Recommended:** give co-star characters short-name aliases (Pending tab,
+5. **Recommended:** give co-star characters short-name aliases (Pending tab,
    or `POST /api/aliases`) — subject routing resolves "Priya" to her ledger
    through the alias table.
-7. **Optional:** re-import shared multi-character scenes once (↻ in the
+6. **Optional:** re-import shared multi-character scenes once (↻ in the
    Import tab) so past scenes redistribute beats to the right ledgers.
 
 Full import semantics and costs: `memory-extender/docs/importing.md`.

@@ -64,6 +64,13 @@ Examples:
 - "She always deflects with humor when nervous" (about Priya) → character scope, character_topics, subject "Priya"
 - "Mari grew up in Kraków" (in any block) → character scope, character_topics, subject "Mari"
 
+SKIP examples — these are NOT facts, return nothing for them:
+- "She adds an item to the list" → SKIP (in-scene action, no information about who anyone IS)
+- "He presses his mouth to her shoulder" → SKIP (physical roleplay action)
+- "Her shoulders shake against his palm" → SKIP (moment-to-moment scene description)
+A fact survives the scene it was said in. If it only describes what bodies are
+doing right now, it is scene narration — skip it.
+
 Return a JSON object of this exact shape:
 {"facts":[{"text":"<original sentence>","fact":"<concise fact>","lane":"user_topics|character_topics","scope":"character|chat","subject":"<user or character name>"}]}
 Return {"facts":[]} if nothing qualifies. Raw JSON only — no explanation, no markdown.`;

@@ -85,4 +85,33 @@ describe("buildSubjectRoster", () => {
     expect(roster).toContain("Dr. Priya Chandrasekaran");
     expect(roster).not.toContain("8V1kReXzyJkyRAwIk7yc3"); // raw card ID — never shown to the model
   });
+
+  it("restricts to scene participants when participantIds are given — absentees drop out", async () => {
+    const priyaKey = await resolveIdentity("card-priya-01", "Dr. Priya Chandrasekaran");
+    await addAlias(priyaKey, "Dr. Priya Chandrasekaran", "Priya");
+    const auroraKey = await resolveIdentity("card-aurora-01", "Aurora");
+    await addAlias(auroraKey, "Aurora", "Narrator");
+
+    // Scene contains only Priya's card; Aurora is not a participant.
+    const roster = await buildSubjectRoster("Dr. Mari Zielińska", ["card-priya-01"]);
+    expect(roster).toContain("Dr. Mari Zielińska"); // session name always present
+    expect(roster).toContain("Dr. Priya Chandrasekaran");
+    expect(roster).not.toContain("Aurora"); // not in the scene — no longer a fact magnet
+  });
+
+  it("falls back to the global roster when no participants are sent (old extension)", async () => {
+    const auroraKey = await resolveIdentity("card-aurora-01", "Aurora");
+    await addAlias(auroraKey, "Aurora", "Narrator");
+    const roster = await buildSubjectRoster("Dr. Mari Zielińska", undefined);
+    expect(roster).toContain("Aurora");
+  });
+});
+
+describe("persona-as-user (matchesSessionName reuse)", () => {
+  it("matches the persona name the same way as the session name", () => {
+    expect(matchesSessionName("Thomas Collier", "Thomas Collier")).toBe(true);
+    expect(matchesSessionName("Thomas", "Thomas Collier")).toBe(true); // containment
+    expect(matchesSessionName("Priya", "Thomas Collier")).toBe(false);
+    expect(matchesSessionName("Thomas", undefined)).toBe(false); // no persona sent
+  });
 });

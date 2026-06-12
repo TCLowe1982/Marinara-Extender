@@ -448,9 +448,9 @@ export function registerApiRoutes(app: FastifyInstance): void {
   // Body: { characterId, chatId, turnNumber, messageText }
 
   app.post<{
-    Body: { characterId: string; characterName?: string; chatId: string; turnNumber?: number; messageText?: string; userMessageText?: string };
+    Body: { characterId: string; characterName?: string; participantIds?: string[]; personaName?: string; chatId: string; turnNumber?: number; messageText?: string; userMessageText?: string };
   }>("/api/process-turn", async (req, reply) => {
-    const { characterId, characterName, chatId, turnNumber = 0, messageText = "", userMessageText = "" } = req.body ?? {};
+    const { characterId, characterName, participantIds, personaName, chatId, turnNumber = 0, messageText = "", userMessageText = "" } = req.body ?? {};
     if (!characterId || !chatId) {
       return reply.code(400).send({ error: "characterId and chatId are required" });
     }
@@ -555,7 +555,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
 
           console.info(`[ME:tier2] ${passing.length} chunk(s) passed sentiment threshold`);
 
-          const roster = await buildSubjectRoster(characterName);
+          const roster = await buildSubjectRoster(characterName, participantIds);
           const activeThreads = await listActiveThreads(chatId);
           const threadLabels = activeThreads.map((t) => t.label);
 
@@ -568,7 +568,10 @@ export function registerApiRoutes(app: FastifyInstance): void {
             // analyzer's `subject` says whose inner state this beat describes —
             // route the beat to that identity's ledger.
             const subject = analysis.subject;
-            const isUserSubject = !subject || normalizeLabel(subject) === "user";
+            // The player's persona name counts as "user" — facts and beats
+            // about the player belong in the session ledger.
+            const isUserSubject = !subject || normalizeLabel(subject) === "user"
+              || matchesSessionName(subject, personaName);
             let targetKey = identityKey;
             let beatSpeaker = result.chunk.speaker;
             if (!isUserSubject && !matchesSessionName(subject, characterName ?? identityKey)) {
@@ -643,7 +646,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
     if (messageText || userMessageText) {
       void (async () => {
         try {
-          const roster = await buildSubjectRoster(characterName);
+          const roster = await buildSubjectRoster(characterName, participantIds);
           const facts = await classifyAmbient({ userText: userMessageText, characterText: messageText, roster });
           let saved = 0;
           for (const fact of facts) {
@@ -656,6 +659,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
             // the session identity is only the right home for its own facts.
             const subject = fact.subject;
             if (scope === "character" && subject && normalizeLabel(subject) !== "user"
+                && !matchesSessionName(subject, personaName) // persona = the player = session ledger
                 && !matchesSessionName(subject, characterName ?? identityKey)) {
               const key = await resolveNameToKey(subject);
               if (key) {

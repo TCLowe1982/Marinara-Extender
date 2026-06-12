@@ -49,14 +49,21 @@ function getChatCharacterId(chat) {
   const d = parseData(chat);
   const direct = chat?.characterId ?? chat?.character_id ?? d?.characterId ?? d?.character_id;
   if (direct) return String(direct);
+  const arr = getChatParticipantIds(chat);
+  return arr.length > 0 ? arr[0] : null;
+}
+
+// All character ids in the chat (group scenes) — the sidecar uses these to
+// scope the subject roster to characters actually IN the scene, so absent
+// characters (e.g. the Narrator-aliased one) stop collecting stray facts.
+function getChatParticipantIds(chat) {
+  const d = parseData(chat);
   const raw = chat?.characterIds ?? d?.characterIds;
-  if (raw) {
-    try {
-      const arr = typeof raw === "string" ? JSON.parse(raw) : raw;
-      if (Array.isArray(arr) && arr.length > 0) return String(arr[0]);
-    } catch {}
-  }
-  return null;
+  if (!raw) return [];
+  try {
+    const arr = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return Array.isArray(arr) ? arr.map(String) : [];
+  } catch { return []; }
 }
 
 const LANES = [
@@ -3089,7 +3096,23 @@ async function resolveSession() {
         characterName = char?.name ?? charData?.name ?? null;
       } catch { /* name is optional */ }
 
-      return { characterId: String(characterId), chatId: String(chatId), characterName };
+      const participantIds = getChatParticipantIds(chat);
+
+      // Active persona name — the sidecar maps it to "user" during subject
+      // routing so facts about the player land in the session ledger instead
+      // of being demoted to chat scope.
+      let personaName = null;
+      const personaId = chat?.personaId ?? parseData(chat)?.personaId;
+      if (personaId) {
+        try {
+          const personas = await marinara.apiFetch("/personas");
+          const list = Array.isArray(personas) ? personas : (personas?.personas ?? personas?.data ?? []);
+          const p = list.find(x => String(x.id ?? parseData(x).id) === String(personaId));
+          personaName = p ? (p.name ?? parseData(p)?.name ?? null) : null;
+        } catch { /* persona name is optional */ }
+      }
+
+      return { characterId: String(characterId), chatId: String(chatId), characterName, participantIds, personaName };
     } catch (e) {
       console.error("[ME] resolveSession primary path error:", e);
       return null;
@@ -3403,7 +3426,15 @@ async function checkForNewMessage() {
       // characterName matters: without it the sidecar falls back to the identity
       // key ("professor_mari") as the chunk speaker, and the analyzer mirrors
       // that identifier style back into subject names and thread labels.
-      body: JSON.stringify({ characterId, characterName: currentSession?.characterName, chatId, turnNumber: msgs.length, messageText: content, userMessageText: userContent }),
+      // participantIds scope the subject roster to characters actually in the
+      // scene; personaName routes player-facts to "user" instead of chat scope.
+      body: JSON.stringify({
+        characterId,
+        characterName: currentSession?.characterName,
+        participantIds: currentSession?.participantIds,
+        personaName: currentSession?.personaName,
+        chatId, turnNumber: msgs.length, messageText: content, userMessageText: userContent,
+      }),
     });
     dbg(`checkForNewMessage: process-turn response memoryBlock length=${result?.memoryBlock?.length ?? "null"} created=${result?.created} bookmarks=${result?.bookmarksExtracted}`);
     if (!result?.memoryBlock) { dbg("checkForNewMessage: no memoryBlock in response — aborting"); return; }

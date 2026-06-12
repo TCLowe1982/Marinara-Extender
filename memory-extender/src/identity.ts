@@ -120,14 +120,34 @@ export async function getIdentityMap(): Promise<IdentityEntry[]> {
 // Names to show the analyzer as the known-character roster: alias-table
 // canonical names win, identity-map names fill in the rest. Raw card-ID
 // "names" are skipped — they'd teach the model to answer with IDs.
-export async function buildSubjectRoster(sessionCharacterName?: string): Promise<string[]> {
+//
+// When participantCharacterIds is provided (the extension sends the chat's
+// characterIds), the roster is RESTRICTED to characters actually in the
+// scene — otherwise the model assigns narration-voice trivia to whichever
+// global name looks narrator-shaped (observed: Aurora, via her "Narrator"
+// alias, collecting in-scene junk from scenes she was not in).
+export async function buildSubjectRoster(
+  sessionCharacterName?: string,
+  participantCharacterIds?: string[],
+): Promise<string[]> {
   const [map, aliases] = await Promise.all([readMapFile(), readAliasTable()]);
   const names = new Set<string>();
   if (sessionCharacterName?.trim()) names.add(sessionCharacterName.trim());
-  for (const rec of Object.values(aliases)) {
+
+  const restrictToKeys = participantCharacterIds?.length
+    ? new Set(
+        map.entries
+          .filter((e) => participantCharacterIds.includes(e.characterId))
+          .map((e) => e.identityKey),
+      )
+    : null;
+
+  for (const [key, rec] of Object.entries(aliases)) {
+    if (restrictToKeys && !restrictToKeys.has(key)) continue;
     if (rec.canonicalName?.trim()) names.add(rec.canonicalName.trim());
   }
   for (const e of map.entries) {
+    if (restrictToKeys && !restrictToKeys.has(e.identityKey)) continue;
     if (e.name && e.name !== e.characterId && !/^_|^[A-Za-z0-9_-]{18,}$/.test(e.name)) names.add(e.name);
   }
   return [...names];

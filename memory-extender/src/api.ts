@@ -569,6 +569,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
             const attributed = beatSpeaker === result.chunk.speaker
               ? result
               : { ...result, chunk: { ...result.chunk, speaker: beatSpeaker } };
+            console.info(`[ME:tier2] subject="${subject ?? "(none)"}" → ${targetKey}`);
             const beat = await encodeBeat(targetKey, attributed, analysis, "chat");
 
             // Prefer the LLM's nuanced primary emotion for the human-facing tag;
@@ -633,13 +634,14 @@ export function registerApiRoutes(app: FastifyInstance): void {
                 summary = truncateSummary(`[about: ${subject}] ${fact.fact}`);
               }
             }
+            console.info(`[ME:tier3] subject="${subject ?? "(none)"}" → ${scope}:${scopeId}`);
             const entry = await createEntryIfUnique(scope, scopeId, {
               lane: fact.lane, summary, content: capContent(fact.text), timeContext: timeCtx,
             });
             if (entry) saved++;
           }
           if (saved > 0) {
-            console.info(`[ME:tier3] saved ${saved} ambient fact(s) for ${identityKey}`);
+            console.info(`[ME:tier3] saved ${saved} ambient fact(s)`);
           }
         } catch (err) {
           console.warn("[ME:tier3] ambient pass failed:", err);

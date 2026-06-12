@@ -84,7 +84,7 @@ export async function createEntryIfUnique(
   const idx = await readIndex(scope, scopeId);
   const existingInLane = (idx?.entries ?? []).filter((e) => e.lane === input.lane);
   if (isDuplicate(summary, content, existingInLane)) {
-    console.info(`[ME:dedup] skipped duplicate (${input.lane}/${scope}): "${summary.slice(0, 60)}"`);
+    console.info(`[ME:dedup] skipped duplicate (${input.lane}/${scope}:${scopeId}): "${summary.slice(0, 60)}"`);
     return null;
   }
 

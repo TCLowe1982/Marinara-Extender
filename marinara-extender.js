@@ -1223,13 +1223,33 @@ function renderPanel() {
   refreshBtn.addEventListener("click", loadPanelData);
   closeBtn.addEventListener("click", closePanel);
 
-  // Session info line — includes the version actually LOADED in this tab.
+  // Session info line.
   if (panelState.session) {
     const info = el("div", "me-panel-info");
     const charLabel = panelState.session.characterName ?? shorten(panelState.session.characterId);
-    const serverV = panelState.health?.version;
-    info.textContent = `chat/${shorten(panelState.session.chatId)} · ${charLabel} · ext v${ME_VERSION}${serverV ? ` · server v${serverV}` : ""}`;
+    info.textContent = `chat/${shorten(panelState.session.chatId)} · ${charLabel}`;
     panel.appendChild(info);
+  }
+
+  // Version line — its own row so it's actually readable. Green check when
+  // the tab matches the server; the red stale-tab alarm below covers mismatch.
+  {
+    const serverV = panelState.health?.version;
+    const ver = el("div", "me-panel-info");
+    ver.style.fontSize = "11px";
+    ver.style.opacity = "0.75";
+    ver.style.marginTop = "-2px";
+    if (serverV && serverV === ME_VERSION) {
+      ver.textContent = `Marinara Extender v${ME_VERSION} ✓`;
+      ver.title = "Extension and memory server are both on this version.";
+    } else if (serverV) {
+      ver.textContent = `extension v${ME_VERSION} · server v${serverV}`;
+      ver.title = "Versions differ — see the warning below.";
+    } else {
+      ver.textContent = `Marinara Extender v${ME_VERSION}`;
+      ver.title = "Server version unknown (health not loaded yet).";
+    }
+    panel.appendChild(ver);
   }
 
   // Stale-tab alarm: the tab is running older extension code than the server

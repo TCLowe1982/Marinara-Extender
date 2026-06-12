@@ -162,7 +162,10 @@ Rules:
 - salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
 - emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
 - subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
-- thread: which ongoing narrative thread this beat belongs to. Pick a label VERBATIM from the "Active threads" list when the beat continues one of them; if the moment clearly starts something new, give it a short 2–5 word label. Labels name WHAT IS HAPPENING (the event or arc), never who is involved, and are plain natural-language phrases with spaces — "Porsche test drive", "the Hargrove investigation" — never identifiers like "mari_and_priya". null when the beat is incidental and belongs to no thread.
+- thread: which ongoing narrative thread this beat belongs to. Pick a label VERBATIM from the "Active threads" list when the beat continues one of them; if the moment clearly starts something new, give it a short 2–5 word label naming the EVENT or ARC. Never name the participants — the cast is not the story.
+  GOOD: "Porsche test drive", "jurisprudence soft launch", "the Hargrove investigation"
+  BAD: "thomas_and_mari" (cast list, not an event), "professor_mari_and_priya" (cast list, identifier style)
+  Use null when the beat is incidental and belongs to no thread.
 - Respond with raw JSON only — no explanation, no markdown.`.trim();
 
 const JSON_FORMAT_STANDARD = `{"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":${EMOTIONS_FORMAT},"subtext":null,"salience":0.0,"subject":"...","thread":null}`;

@@ -2705,15 +2705,24 @@ async function loadImportChats() {
     panelState.importChats = list
       .filter(c => {
         const id = c.id ?? parseData(c).id;
-        return getChatCharacterId(c) === String(characterId) && String(id) !== String(chatId);
+        if (String(id) === String(chatId)) return false;
+        // Shared scenes count: the character may be ANY participant, not just
+        // the chat's primary — a Mari-led scene with Priya co-starring belongs
+        // in Priya's import list too. (Since cx4, import routes each beat by
+        // its analyzed subject, so importing from either side lands beats on
+        // the right ledgers — import a shared scene ONCE, from either list.)
+        return getChatCharacterId(c) === String(characterId) ||
+               getChatParticipantIds(c).includes(String(characterId));
       })
       .map(c => {
         const d = parseData(c);
         const id = String(c.id ?? d.id);
         const folderId = String(c.folderId ?? d.folderId ?? "");
+        const shared = getChatCharacterId(c) !== String(characterId);
+        const baseName = String(c.name ?? c.title ?? d.name ?? d.title ?? `Chat ${shorten(id, 8)}`);
         return {
           id,
-          name:       String(c.name ?? c.title ?? d.name ?? d.title ?? `Chat ${shorten(id, 8)}`),
+          name:       shared ? `${baseName} (shared)` : baseName,
           folderName: folderMap.get(folderId) ?? "",
         };
       })

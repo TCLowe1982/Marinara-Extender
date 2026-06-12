@@ -1471,6 +1471,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
       recentText: userText,
       skipCredit: true,
     });
+    console.info(`[ME:pre-turn] ${identityKey} chat:${chatId} — block rebuilt against outgoing message (${surfaced.length} entries)`);
     return reply.send({ memoryBlock: contextBlock, surfaced: surfaced.length });
   });
 

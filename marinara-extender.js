@@ -3195,14 +3195,27 @@ async function preTurnRefresh(rawBody) {
   const userText = typeof body?.userMessage === "string" ? body.userMessage : "";
   if (!chatId || !userText.trim()) return;
   // Only refresh for the session we know; a brand-new chat skips (no lag to fix).
-  if (!currentSession || String(currentSession.chatId) !== chatId) return;
+  if (!currentSession || String(currentSession.chatId) !== chatId) {
+    dbg(`pre-turn skipped — session chat ${currentSession?.chatId} != generating chat ${chatId}`);
+    return;
+  }
   const { characterId, characterName } = currentSession;
 
-  const res = await memFetch("/api/pre-turn", {
-    method: "POST",
-    body: JSON.stringify({ characterId, characterName, chatId, userText }),
-  });
-  if (!res?.memoryBlock) return;
+  // The time budget applies to the SIDECAR call only. Once a fresh block
+  // exists, the lorebook write runs to completion unconditionally — it nukes
+  // and recreates the memory entries, and abandoning it mid-write would let
+  // the model generate with NO memory at all (worse than the lag).
+  const res = await Promise.race([
+    memFetch("/api/pre-turn", {
+      method: "POST",
+      body: JSON.stringify({ characterId, characterName, chatId, userText }),
+    }),
+    new Promise((resolve) => setTimeout(() => resolve(null), PRE_TURN_BUDGET_MS)),
+  ]).catch(() => null);
+  if (!res?.memoryBlock) {
+    console.info("[ME] pre-turn: no refreshed block (timeout or sidecar down) — generating with the previous context");
+    return;
+  }
 
   let lorebookId = lorebookIdCache[characterId];
   if (!lorebookId) {
@@ -3211,7 +3224,7 @@ async function preTurnRefresh(rawBody) {
   }
   if (!lorebookId) return;
   await writeMemoryToLorebook(lorebookId, res.memoryBlock);
-  dbg(`pre-turn refresh — block updated before generation (${res.surfaced} entries in context)`);
+  console.info(`[ME] pre-turn: context refreshed before generation (${res.surfaced} entries)`);
 }
 
 (function installPreTurnHook() {
@@ -3221,11 +3234,7 @@ async function preTurnRefresh(rawBody) {
       const url = typeof input === "string" ? input : (input?.url ?? "");
       const method = (init?.method ?? (typeof input === "object" ? input?.method : "") ?? "GET").toUpperCase();
       if (method === "POST" && /\/api\/generate(\?|$)/.test(url)) {
-        // Budgeted: never let a slow/sick sidecar delay generation more than this.
-        await Promise.race([
-          preTurnRefresh(init?.body).catch(() => {}),
-          new Promise((r) => setTimeout(r, PRE_TURN_BUDGET_MS)),
-        ]);
+        await preTurnRefresh(init?.body).catch(() => {});
       }
     } catch { /* interception must never break generation */ }
     return origFetch(input, init);

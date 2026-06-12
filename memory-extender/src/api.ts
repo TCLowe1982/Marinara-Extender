@@ -1002,10 +1002,17 @@ export function registerApiRoutes(app: FastifyInstance): void {
     try {
       // Clean re-import: drop this chat's prior companion entries first so a
       // re-run replaces rather than piles up. (Beats are idempotent by id.)
+      // purged > 0 = a DELIBERATE re-import → force full re-analysis so subject
+      // routing redistributes the scene; the resume shortcut stays for first
+      // imports and crash-resumes (purged 0).
+      let forceReanalyze = false;
       if (chatId) {
         await snapshotScope("character", identityKey); // recover point before a destructive index change
         const purged = await removeEntriesBySourceChat("character", identityKey, chatId);
-        if (purged > 0) console.info(`[ME] re-import — cleared ${purged} prior entries for chat ${chatId}`);
+        if (purged > 0) {
+          forceReanalyze = true;
+          console.info(`[ME] re-import — cleared ${purged} prior entries for chat ${chatId}; full re-analysis for routing`);
+        }
       }
       // Keep the primary character's own turns, the user, and narration with this
       // character. Other NAMED speakers (group chat, or a side character voiced
@@ -1017,6 +1024,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
         characters: keep,
         progressLabel: title?.trim() || `${characterName} (chat history)`,
         sourceChatId: chatId,
+        forceReanalyze,
         signal: ac.signal,
         onProgress: (current, total) => send({ type: "progress", current, total }),
       });

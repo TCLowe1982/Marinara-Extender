@@ -36,6 +36,11 @@ export interface PipelineOptions {
   // Tag companion ledger entries with the chat they came from, so a re-import
   // of that chat can cleanly replace them.
   sourceChatId?: string;
+  // Deliberate re-import: skip the existing-beat resume shortcut and re-analyze
+  // every chunk. The resume skip bypasses subject routing (it recreates
+  // companions under the bucket without analysis), which silently defeats a
+  // re-import whose purpose is redistributing a shared scene across ledgers.
+  forceReanalyze?: boolean;
   // Per-chunk progress sink (in addition to the console reporter) — used to
   // stream within-chat progress to the browser.
   onProgress?: (current: number, total: number) => void;
@@ -170,8 +175,10 @@ export async function runSentimentPipeline(
     // make sure its companion ledger entry is present. A clean re-import clears
     // companions by sourceChatId; without this, skipped chunks would lose their
     // retrievable entry. Re-derive it from the stored beat (no re-analysis).
+    // forceReanalyze (deliberate re-import) bypasses this: the skip would also
+    // bypass subject routing and silently undo a redistribution.
     const beatId = beatIdForChunk(result.chunk);
-    if (existingBeatIds.has(beatId)) {
+    if (!options.forceReanalyze && existingBeatIds.has(beatId)) {
       skipped++;
       const existing = await readBeat(characterId, beatId);
       if (existing) {

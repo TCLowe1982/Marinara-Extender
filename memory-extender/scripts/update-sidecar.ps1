@@ -48,7 +48,10 @@ if ($busy) {
 }
 
 # 2. Pull the update. --ff-only so a locally-modified checkout is never merged
-#    over silently; that case fails loudly with advice instead.
+#    over silently; that case fails loudly with advice instead. The lockfile is
+#    derived state that npm install dirties on version bumps — discard local
+#    drift so it can never block the pull (found by the v1.1.0→v1.1.1 live test).
+git -C $repoRoot checkout -- memory-extender/package-lock.json 2>$null
 Step "Downloading the update (git pull)..."
 $pull = git -C $repoRoot pull --ff-only 2>&1 | Out-String
 Add-Content -Path $log -Value $pull -Encoding UTF8

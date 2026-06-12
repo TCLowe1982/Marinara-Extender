@@ -70,6 +70,7 @@ import {
 } from "./threads.js";
 import { csrfRejection, csrfToken, CSRF_HEADER } from "./csrf.js";
 import { ingestSceneRecap, readArcs, readArcMemberships } from "./arcs.js";
+import { runArcPromotion } from "./arc-promotion.js";
 import { classifyChunks } from "./sentiment/classifier.js";
 import { analyzeChunks } from "./sentiment/analyzer.js";
 import { encodeBeat } from "./sentiment/encoder.js";
@@ -547,6 +548,16 @@ export function registerApiRoutes(app: FastifyInstance): void {
         runPromotion("chat", chatId),
         autoCloseStaleThreads(),
       ]).catch((err) => console.warn("[ME] promotion pass failed:", err));
+    }
+
+    // Through-line arc promotion (ceiling) — slower cadence: it spends one
+    // renderer LLM call per touched arc. Fire-and-forget, off the hot path.
+    if (turnNumber > 0 && turnNumber % 60 === 0) {
+      void runArcPromotion(identityKey, characterName)
+        .then((r) => {
+          if (r.minted || r.extended) console.info(`[ME:arcs] promotion — minted ${r.minted}, extended ${r.extended} (from ${r.clusters} cluster(s), ${r.candidates} candidate beat(s))`);
+        })
+        .catch((err) => console.warn("[ME:arcs] promotion failed:", err));
     }
 
     // ── Tier 2: sentiment classification — fire-and-forget ────────────────────
@@ -1431,6 +1442,20 @@ export function registerApiRoutes(app: FastifyInstance): void {
       const identityKey = directKey ?? await resolveIdentity(characterId!, characterName);
       const [file, memberships] = await Promise.all([readArcs(identityKey), readArcMemberships(identityKey)]);
       return reply.send({ arcs: file.arcs, memberships, ingestedScenes: file.ingestedScenes });
+    },
+  );
+
+  // Run the through-line arc promotion pass on demand (ceiling tier, ajb).
+  // The periodic trigger rides process-turn every ARC_PROMOTION_TURNS; this
+  // endpoint exists for manual runs and verification.
+  app.post<{ Body: { characterId?: string; identityKey?: string; characterName?: string } }>(
+    "/api/arcs/promote",
+    async (req, reply) => {
+      const { characterId, identityKey: directKey, characterName } = req.body ?? {};
+      if (!characterId && !directKey) return reply.code(400).send({ error: "characterId or identityKey is required" });
+      const identityKey = directKey ?? await resolveIdentity(characterId!, characterName);
+      const result = await runArcPromotion(identityKey, characterName);
+      return reply.send({ ok: true, ...result });
     },
   );
 

@@ -1,0 +1,78 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
+// Shared Ollama embeddings (MarinaraExtender-d6d packaging).
+//
+// DEFAULT-ON with an env kill switch, per the project's ergonomic posture:
+// opt-in capability flags cause silent degradation — the median user gets
+// restricted results that look fine because they have nothing to compare to.
+// The model defaults to nomic-embed-text (a 274MB one-time `ollama pull`);
+// set MARINARA_EXTENDER_EMBED_MODEL=0 (or "off") to disable embeddings
+// entirely, or set it to any other Ollama embedding model to swap.
+//
+// Consumers: sentiment/chunker.ts (semantic chunk merging) and
+// arc-promotion.ts (the kNN candidate generator for through-line arcs).
+// All failures degrade gracefully to null — callers fall back to their
+// non-embedding behavior.
+
+import { localUrl } from "./llm-config.js";
+
+export const DEFAULT_EMBED_MODEL = "nomic-embed-text";
+
+export function embedModel(): string | null {
+  const v = process.env.MARINARA_EXTENDER_EMBED_MODEL?.trim();
+  if (v === "0" || v?.toLowerCase() === "off") return null; // kill switch
+  return v || DEFAULT_EMBED_MODEL;                           // default ON
+}
+
+type EmbeddingResponse = {
+  data: Array<{ embedding: number[]; index?: number }>;
+};
+
+export async function fetchEmbeddings(texts: string[]): Promise<number[][] | null> {
+  const base = localUrl();
+  const model = embedModel();
+  if (!base || !model || texts.length === 0) return null;
+
+  try {
+    const res = await fetch(`${base}/embeddings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, input: texts }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!res.ok) return null;
+
+    const json = (await res.json()) as EmbeddingResponse;
+    if (!Array.isArray(json.data) || json.data.length !== texts.length) return null;
+
+    const ordered = json.data.every((d) => typeof d.index === "number")
+      ? [...json.data].sort((a, b) => a.index! - b.index!)
+      : json.data;
+    return ordered.map((d) => d.embedding);
+  } catch {
+    return null;
+  }
+}
+
+export function cosineSim(a: number[], b: number[]): number {
+  let dot = 0, magA = 0, magB = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    dot += a[i]! * b[i]!;
+    magA += a[i]! * a[i]!;
+    magB += b[i]! * b[i]!;
+  }
+  const denom = Math.sqrt(magA) * Math.sqrt(magB);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+export function meanVector(vectors: number[][]): number[] {
+  if (vectors.length === 0) return [];
+  const dims = vectors[0]!.length;
+  const out = new Array<number>(dims).fill(0);
+  for (const v of vectors) for (let i = 0; i < dims; i++) out[i]! += v[i] ?? 0;
+  for (let i = 0; i < dims; i++) out[i]! /= vectors.length;
+  return out;
+}

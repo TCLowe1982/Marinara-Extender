@@ -15,7 +15,7 @@
 import type { DigestMessage } from "../digest.js";
 import type { Chunk, DialogueTurn } from "./types.js";
 import { loadSentimentConfig } from "./config.js";
-import { localUrl } from "../llm-config.js";
+import { embedModel } from "../embeddings.js";
 
 // ── Turn detection ────────────────────────────────────────────────────────────
 
@@ -80,37 +80,8 @@ export function parseTurns(messages: DigestMessage[], characterName: string): Di
 // When unset, fetchEmbeddings returns null and chunkMessages falls back to
 // speaker-turn grouping — no Marinara Engine sidecar involved.
 
-type EmbeddingResponse = {
-  data: Array<{ embedding: number[]; index?: number }>;
-};
-
-async function fetchEmbeddings(texts: string[]): Promise<number[][] | null> {
-  const base = localUrl();
-  const model = process.env.MARINARA_EXTENDER_EMBED_MODEL;
-  if (!base || !model) return null; // embeddings opt-in (EMBED_MODEL); otherwise turn-only grouping
-
-  try {
-    const res = await fetch(`${base}/embeddings`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model, input: texts }),
-      signal: AbortSignal.timeout(30_000),
-    });
-
-    if (!res.ok) return null;
-
-    const json = (await res.json()) as EmbeddingResponse;
-    if (!Array.isArray(json.data) || json.data.length !== texts.length) return null;
-
-    // Ollama returns items in input order; sort by index only when present.
-    const ordered = json.data.every((d) => typeof d.index === "number")
-      ? [...json.data].sort((a, b) => a.index! - b.index!)
-      : json.data;
-    return ordered.map((d) => d.embedding);
-  } catch {
-    return null;
-  }
-}
+// Delegates to the shared embeddings module (default-ON with kill switch — d6d).
+import { fetchEmbeddings } from "../embeddings.js";
 
 // ── Cosine similarity ─────────────────────────────────────────────────────────
 
@@ -239,7 +210,7 @@ export async function chunkMessages(
 
   // Only warn when embeddings were actually attempted (a model is configured);
   // otherwise turn-only grouping is the intended default, silently.
-  if (process.env.MARINARA_EXTENDER_EMBED_MODEL) {
+  if (embedModel()) {
     console.warn("[chunker] embeddings unavailable (is the embed model pulled in Ollama?) — using speaker-turn grouping.");
   }
   return mergeByTurnOnly(turns, cfg.max_turns_per_chunk);

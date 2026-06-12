@@ -1225,6 +1225,25 @@ function renderPanel() {
     panel.appendChild(info);
   }
 
+  // One-click update (uo4): when GitHub has a newer published release, offer
+  // it right here — the updater runs in its own console; no terminal needed.
+  if (panelState.health?.updateAvailable && !panelState.updateLaunched) {
+    const up = el("button", "me-import-all-btn");
+    up.textContent = `⬆ Update to v${panelState.health.latest} (installed: v${panelState.health.version})`;
+    up.title = "Downloads, builds, and restarts the memory server in a visible console window, then you reload this page.";
+    up.addEventListener("click", async () => {
+      up.disabled = true;
+      up.textContent = "Updating — watch the console window…";
+      panelState.updateLaunched = true;
+      try { await memFetch("/api/update", { method: "POST" }); } catch { /* server restarts mid-reply */ }
+    });
+    panel.appendChild(up);
+  } else if (panelState.updateLaunched) {
+    const note = el("div", "me-panel-info");
+    note.textContent = "⬆ Updating… the memory server is restarting. Reload this page in a minute.";
+    panel.appendChild(note);
+  }
+
   // Last-turn memory activity (15y): what the character actually had in
   // context, without reading sidecar logs. Click to expand the list.
   if (lastTurnActivity && panelState.session && lastTurnActivity.chatId === panelState.session.chatId) {
@@ -2974,6 +2993,11 @@ async function loadPanelData() {
     ]);
     panelState.chatEntries = Array.isArray(entries) ? entries : [];
     panelState.bookmarks = Array.isArray(bookmarks) ? bookmarks : [];
+    // Update availability (uo4) — best effort, never blocks the panel.
+    memFetch("/api/health").then(h => {
+      if (h && panelState.health?.updateAvailable !== h.updateAvailable) { panelState.health = h; renderPanel(); }
+      else panelState.health = h;
+    }).catch(() => {});
   } catch {
     panelState.error = "Failed to load. Is the Memory Extender running?";
     panelState.chatEntries = [];

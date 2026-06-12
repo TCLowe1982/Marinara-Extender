@@ -351,11 +351,24 @@ export interface AnalysisContext {
   after?: ClassificationResult;
 }
 
-function buildUserPrompt(result: ClassificationResult, context?: AnalysisContext, roster?: string[], threads?: string[]): string {
+// Prompt context beyond the chunk itself: who is in the scene, which threads
+// are live, and what the scene is called (often the right new-thread label).
+export interface AnalysisExtras {
+  roster?: string[];
+  threads?: string[];
+  sceneTitle?: string;
+}
+
+function buildUserPrompt(result: ClassificationResult, context?: AnalysisContext, extras?: AnalysisExtras): string {
   const { chunk, scores, primaryEmotion, salience, structuralMatches } = result;
+  const { roster, threads, sceneTitle } = extras ?? {};
 
   const rosterBlock = roster && roster.length > 0
     ? `Known characters (for the subject field): ${roster.join(", ")} — or "user" for the human player.\n\n`
+    : "";
+
+  const sceneLine = sceneTitle?.trim()
+    ? `Scene title: "${sceneTitle.trim()}" — when a beat starts a NEW thread and the scene title describes what is happening, prefer it as the thread label.\n\n`
     : "";
 
   const threadsBlock = threads && threads.length > 0
@@ -388,7 +401,7 @@ ${context.after.chunk.text.slice(0, 400)}${context.after.chunk.text.length > 400
 """`
     : "";
 
-  return `${rosterBlock}${threadsBlock}${beforeBlock}ANALYZE THIS — Speaker: ${chunk.speaker}
+  return `${rosterBlock}${sceneLine}${threadsBlock}${beforeBlock}ANALYZE THIS — Speaker: ${chunk.speaker}
 Primary emotion detected: ${primaryEmotion ?? "unknown"} (salience ${salience.toFixed(2)})
 All emotion scores:
 ${scoreLines}${structuralLines}
@@ -407,8 +420,7 @@ Analyze the emotional beat in the chunk marked "ANALYZE THIS".`;
 export async function analyzeChunk(
   result: ClassificationResult,
   context?: AnalysisContext,
-  roster?: string[],
-  threads?: string[],
+  extras?: AnalysisExtras,
 ): Promise<BeatAnalysis | null> {
   if (!result.passesThreshold || !result.primaryEmotion) return null;
 
@@ -417,7 +429,7 @@ export async function analyzeChunk(
     .filter((s): s is string => Boolean(s));
 
   const systemPrompt = buildSystemPrompt(result.primaryEmotion, structuralSubpatterns);
-  const userPrompt   = buildUserPrompt(result, context, roster, threads);
+  const userPrompt   = buildUserPrompt(result, context, extras);
 
   const raw = await callLlm(systemPrompt, userPrompt);
   return parseAnalysisJson(raw);
@@ -441,8 +453,7 @@ export async function analyzeChunks(
   allChunks?: ClassificationResult[],
   onItem?: (current: number, total: number, reason?: string) => void,
   signal?: AbortSignal,
-  roster?: string[],
-  threads?: string[],
+  extras?: AnalysisExtras,
 ): Promise<AnalyzedBeat[]> {
   const context = allChunks ?? targets;
   const passing = targets.filter((r) => r.passesThreshold && r.primaryEmotion);
@@ -458,7 +469,7 @@ export async function analyzeChunks(
       const analysis = await analyzeChunk(result, idx === -1 ? undefined : {
         before: context[idx - 1],
         after:  context[idx + 1],
-      }, roster, threads);
+      }, extras);
       if (analysis) {
         output.push({ result, analysis });
         onItem?.(i, total);

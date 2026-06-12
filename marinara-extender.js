@@ -3112,7 +3112,12 @@ async function resolveSession() {
         } catch { /* persona name is optional */ }
       }
 
-      return { characterId: String(characterId), chatId: String(chatId), characterName, participantIds, personaName };
+      // Scene chats are usually named for the arc ("Scene: Jurisprudence,
+      // Soft Launch") — the sidecar offers the title to the analyzer as a
+      // new-thread label hint.
+      const sceneTitle = chat?.name ?? chat?.title ?? parseData(chat)?.name ?? null;
+
+      return { characterId: String(characterId), chatId: String(chatId), characterName, participantIds, personaName, sceneTitle };
     } catch (e) {
       console.error("[ME] resolveSession primary path error:", e);
       return null;
@@ -3433,6 +3438,7 @@ async function checkForNewMessage() {
         characterName: currentSession?.characterName,
         participantIds: currentSession?.participantIds,
         personaName: currentSession?.personaName,
+        sceneTitle: currentSession?.sceneTitle,
         chatId, turnNumber: msgs.length, messageText: content, userMessageText: userContent,
       }),
     });

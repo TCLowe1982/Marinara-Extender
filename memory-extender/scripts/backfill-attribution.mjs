@@ -162,7 +162,7 @@ if (chats.length > 0) {
       };
 
       let analysis = null;
-      try { analysis = await analyzeChunk(result, undefined, roster); } catch { /* counted below */ }
+      try { analysis = await analyzeChunk(result, undefined, { roster }); } catch { /* counted below */ }
       if (!analysis) { stats.failed++; console.log(`  ! ${beat.id}: analyzer returned nothing — kept as-is`); continue; }
 
       const subject = analysis.subject?.trim();

@@ -16,6 +16,9 @@ import {
   listActiveThreads,
   closeThread,
   readThreadRegistry,
+  relabelThread,
+  looksCastList,
+  threadRegistryHealth,
 } from "../threads.js";
 
 let dir: string;
@@ -76,6 +79,39 @@ describe("resolveOrMintThread", () => {
 
   it("returns null for blank labels", async () => {
     expect(await resolveOrMintThread("chat-1", "   ", "mari")).toBeNull();
+  });
+});
+
+describe("registry health (rfx)", () => {
+  const names = ["Dr. Mari Zielińska", "Dr. Priya Chandrasekaran", "Aurora", "Professor Mari"];
+
+  it("looksCastList flags participant-only labels and passes event labels", () => {
+    expect(looksCastList("professor mari and priya", names)).toBe(true);
+    expect(looksCastList("mari", names)).toBe(true);
+    expect(looksCastList("Porsche test drive", names)).toBe(false);
+    expect(looksCastList("jurisprudence soft launch", names)).toBe(false);
+    expect(looksCastList("mari confronts the provost", names)).toBe(false); // event words save it
+  });
+
+  it("threadRegistryHealth reports counts, fragmentation, and suspects", async () => {
+    const a = await resolveOrMintThread("chat-1", "Porsche test drive", "mari");
+    await resolveOrMintThread("chat-1", "Porsche test drive", "k6cq"); // second beat, same thread
+    await resolveOrMintThread("chat-2", "professor mari and priya", "mari"); // 1-beat suspect
+    const h = await threadRegistryHealth(names);
+    expect(h.total).toBe(2);
+    expect(h.threadsPerChat["chat-1"]).toBe(1);
+    expect(h.singleBeatThreads).toBe(1);
+    expect(h.castListSuspects.map((s) => s.label)).toEqual(["professor mari and priya"]);
+    expect(a).not.toBeNull();
+  });
+
+  it("relabelThread renames without touching the id; sanitizes identifiers", async () => {
+    const t = await resolveOrMintThread("chat-1", "professor_mari_and_priya", "mari");
+    expect(await relabelThread(t!.id, "jurisprudence soft launch")).toBe(true);
+    const reg = await readThreadRegistry();
+    const row = reg.threads.find((x) => x.id === t!.id)!;
+    expect(row.label).toBe("jurisprudence soft launch");
+    expect(await relabelThread("nthr-missing", "x")).toBe(false);
   });
 });
 

@@ -35,7 +35,9 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   delete process.env.MARINARA_EXTENDER_DATA;
-  await rm(dir, { recursive: true, force: true });
+  // loadContext's fire-and-forget retrieval-credit stamping can race teardown;
+  // retries let rm re-scan and clear files that land mid-delete.
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();

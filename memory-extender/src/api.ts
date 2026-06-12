@@ -58,7 +58,16 @@ import {
   normalizeLabel,
 } from "./aliases.js";
 import { chunkMessages } from "./sentiment/chunker.js";
-import { listActiveThreads, resolveOrMintThread, autoCloseStaleThreads } from "./threads.js";
+import {
+  listActiveThreads,
+  resolveOrMintThread,
+  autoCloseStaleThreads,
+  readThreadRegistry,
+  relabelThread,
+  closeThread,
+  threadRegistryHealth,
+  looksCastList,
+} from "./threads.js";
 import { csrfRejection, csrfToken, CSRF_HEADER } from "./csrf.js";
 import { classifyChunks } from "./sentiment/classifier.js";
 import { analyzeChunks } from "./sentiment/analyzer.js";
@@ -448,9 +457,9 @@ export function registerApiRoutes(app: FastifyInstance): void {
   // Body: { characterId, chatId, turnNumber, messageText }
 
   app.post<{
-    Body: { characterId: string; characterName?: string; participantIds?: string[]; personaName?: string; chatId: string; turnNumber?: number; messageText?: string; userMessageText?: string };
+    Body: { characterId: string; characterName?: string; participantIds?: string[]; personaName?: string; sceneTitle?: string; chatId: string; turnNumber?: number; messageText?: string; userMessageText?: string };
   }>("/api/process-turn", async (req, reply) => {
-    const { characterId, characterName, participantIds, personaName, chatId, turnNumber = 0, messageText = "", userMessageText = "" } = req.body ?? {};
+    const { characterId, characterName, participantIds, personaName, sceneTitle, chatId, turnNumber = 0, messageText = "", userMessageText = "" } = req.body ?? {};
     if (!characterId || !chatId) {
       return reply.code(400).send({ error: "characterId and chatId are required" });
     }
@@ -562,7 +571,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
 
           // Analyze with the full classified list as context so each beat sees
           // its true neighbor (e.g. the user line before the character's reply).
-          for (const { result, analysis } of await analyzeChunks(passing, classified, undefined, undefined, roster, threadLabels)) {
+          for (const { result, analysis } of await analyzeChunks(passing, classified, undefined, undefined, { roster, threads: threadLabels, sceneTitle })) {
             // Attribution: chunk.speaker is the SESSION label (the whole AI
             // message is one chunk), so in multi-character RP it names the
             // session character even when the beat belongs to a co-star. The
@@ -605,7 +614,12 @@ export function registerApiRoutes(app: FastifyInstance): void {
               const resolved = await resolveOrMintThread(chatId, analysis.thread, targetKey).catch(() => null);
               if (resolved) {
                 threadId = resolved.id;
-                if (resolved.isNew) console.info(`[ME:tier2] new thread "${resolved.label}" (${resolved.id})`);
+                if (resolved.isNew) {
+                  console.info(`[ME:tier2] new thread "${resolved.label}" (${resolved.id})`);
+                  if (looksCastList(resolved.label, roster)) {
+                    console.warn(`[ME:threads] new thread label looks like a CAST LIST, not an event: "${resolved.label}" — consider PATCH /api/threads/${resolved.id}`);
+                  }
+                }
               }
             }
             console.info(`[ME:tier2] subject="${subject ?? "(none)"}" → ${targetKey}${threadId ? ` | thread=${threadId}` : ""}`);
@@ -1335,6 +1349,32 @@ export function registerApiRoutes(app: FastifyInstance): void {
     }
     console.info(`[ME] beats->entries — key:${identityKey} — ${created} entries created from ${beats.length} beats`);
     return reply.send({ ok: true, beats: beats.length, created });
+  });
+
+  // ── Narrative threads (MarinaraExtender-rfx) ──────────────────────────────
+  // Registry inspection + health metrics, manual relabel (cast-list labels),
+  // and manual close (the scene-conclude hook's server half).
+
+  app.get("/api/threads", async (_req, reply) => {
+    const [reg, roster] = await Promise.all([readThreadRegistry(), buildSubjectRoster()]);
+    const health = await threadRegistryHealth(roster);
+    return reply.send({ threads: reg.threads, health });
+  });
+
+  app.patch<{ Params: { id: string }; Body: { label?: string } }>("/api/threads/:id", async (req, reply) => {
+    const label = req.body?.label?.trim();
+    if (!label) return reply.code(400).send({ error: "label is required" });
+    const ok = await relabelThread(req.params.id, label);
+    if (!ok) return reply.code(404).send({ error: "thread not found" });
+    console.info(`[ME:threads] relabeled ${req.params.id} → "${label}"`);
+    return reply.send({ ok: true });
+  });
+
+  app.post<{ Params: { id: string } }>("/api/threads/:id/close", async (req, reply) => {
+    const ok = await closeThread(req.params.id);
+    if (!ok) return reply.code(404).send({ error: "thread not found or already closed" });
+    console.info(`[ME:threads] closed ${req.params.id}`);
+    return reply.send({ ok: true });
   });
 
   // ── Speaker resolution (holding pool + alias table) ───────────────────────

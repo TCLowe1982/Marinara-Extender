@@ -128,6 +128,66 @@ export async function closeThread(threadId: string): Promise<boolean> {
   return closed;
 }
 
+// Rename a thread (bad label, drifted phrasing). The id — and therefore every
+// beat/entry pointing at it — is untouched.
+export async function relabelThread(threadId: string, label: string): Promise<boolean> {
+  const clean = label.replace(/[_]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  if (!clean) return false;
+  let renamed = false;
+  await mutateYamlFile<ThreadRegistry>(registryPath(), emptyRegistry, (reg) => {
+    const t = reg.threads.find((x) => x.id === threadId);
+    if (t) { t.label = clean; renamed = true; }
+  });
+  return renamed;
+}
+
+// ── Registry health (MarinaraExtender-rfx) ────────────────────────────────────
+
+// The cast-list failure mode: a label whose every significant token comes from
+// character names ("professor mari and priya") names WHO, not WHAT — it will
+// absorb everything those characters ever do. Detected against the roster of
+// known names so prompt regressions surface in numbers, not vibes.
+export function looksCastList(label: string, knownNames: string[]): boolean {
+  const nameTokens = new Set<string>();
+  for (const n of knownNames) {
+    for (const t of normalizeLabel(n).split(/\s+/)) if (t.length >= 3) nameTokens.add(t);
+  }
+  const labelTokens = normalizeLabel(label).split(/\s+/).filter((t) => t.length >= 3 && t !== "and" && t !== "the");
+  if (labelTokens.length === 0) return false;
+  return labelTokens.every((t) => nameTokens.has(t));
+}
+
+export interface RegistryHealth {
+  total: number;
+  active: number;
+  closed: number;
+  threadsPerChat: Record<string, number>;
+  singleBeatThreads: number;     // fragmentation signal: 1-beat threads
+  singleBeatRatio: number;       // singleBeatThreads / total (0 when empty)
+  castListSuspects: Array<{ id: string; label: string; chatId: string }>;
+}
+
+export async function threadRegistryHealth(knownNames: string[]): Promise<RegistryHealth> {
+  const reg = await readThreadRegistry();
+  const perChat: Record<string, number> = {};
+  let singleBeat = 0;
+  const suspects: RegistryHealth["castListSuspects"] = [];
+  for (const t of reg.threads) {
+    perChat[t.chatId] = (perChat[t.chatId] ?? 0) + 1;
+    if (t.beatCount <= 1) singleBeat++;
+    if (looksCastList(t.label, knownNames)) suspects.push({ id: t.id, label: t.label, chatId: t.chatId });
+  }
+  return {
+    total: reg.threads.length,
+    active: reg.threads.filter((t) => t.status === "active").length,
+    closed: reg.threads.filter((t) => t.status === "closed").length,
+    threadsPerChat: perChat,
+    singleBeatThreads: singleBeat,
+    singleBeatRatio: reg.threads.length ? singleBeat / reg.threads.length : 0,
+    castListSuspects: suspects,
+  };
+}
+
 // Idle threads close themselves: a scene nobody has touched in maxIdleDays is
 // over, whether or not anyone said so. Keeps the analyzer roster from growing
 // unbounded and lets the promotion pass eventually archive the arc as a unit.

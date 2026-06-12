@@ -660,6 +660,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
 
             const entry = await createEntryIfUnique("character", targetKey, {
               lane: "character_topics", summary, content: capContent(rawContent), timeContext: timeCtx, kind: "incident",
+              sourceChatId: chatId, turnStart: result.chunk.turnStart,
               ...(threadId ? { threadId } : {}),
             });
             if (entry) {
@@ -1372,7 +1373,11 @@ export function registerApiRoutes(app: FastifyInstance): void {
     for (const beat of beats) {
       const { summary, content } = companionEntryFromBeat(beat);
       if (!summary) continue;
-      const entry = await createEntryIfUnique("character", identityKey, { lane: "character_topics", summary, content, kind: "incident" });
+      const entry = await createEntryIfUnique("character", identityKey, {
+        lane: "character_topics", summary, content, kind: "incident",
+        ...(beat.sourceChatId ? { sourceChatId: beat.sourceChatId } : {}),
+        turnStart: beat.turnStart,
+      });
       if (entry) created++;
     }
     console.info(`[ME] beats->entries — key:${identityKey} — ${created} entries created from ${beats.length} beats`);

@@ -46,10 +46,40 @@ describe("character_topics matrix", () => {
     expect(incident).not.toBeNull();
   });
 
-  it("a near-identical incident recapture (swipe/regen) is still skipped", async () => {
-    expect(await ctopic("[fear] Priya fears her request for intimacy will be rejected tonight", "incident")).not.toBeNull();
-    const recapture = await ctopic("[fear] Priya fears her request for intimacy will be rejected", "incident");
+  it("a near-identical recapture from the SAME moment (chat + turn) is skipped", async () => {
+    expect(await createEntryIfUnique("character", "mari", {
+      lane: "character_topics", summary: "[fear] Priya fears her request for intimacy will be rejected tonight",
+      content: "", kind: "incident", sourceChatId: "chat-1", turnStart: 40,
+    })).not.toBeNull();
+    const recapture = await createEntryIfUnique("character", "mari", {
+      lane: "character_topics", summary: "[fear] Priya fears her request for intimacy will be rejected",
+      content: "", kind: "incident", sourceChatId: "chat-1", turnStart: 41, // a swipe of the same turn
+    });
     expect(recapture).toBeNull();
+  });
+
+  it("IDENTICAL boilerplate summaries from DIFFERENT moments both persist", async () => {
+    // The measured failure: the analyzer emitted byte-identical genre labels
+    // for distinct moments; similarity alone must never collapse them.
+    const boiler = "[vulnerability] Dr. Mari Zielińska exposes her personal fear";
+    const a = await createEntryIfUnique("character", "mari", {
+      lane: "character_topics", summary: boiler, content: "", kind: "incident", sourceChatId: "chat-1", turnStart: 160,
+    });
+    const b = await createEntryIfUnique("character", "mari", {
+      lane: "character_topics", summary: boiler, content: "", kind: "incident", sourceChatId: "chat-1", turnStart: 190, // 30 turns later
+    });
+    const c = await createEntryIfUnique("character", "mari", {
+      lane: "character_topics", summary: boiler, content: "", kind: "incident", sourceChatId: "chat-2", turnStart: 160, // different chat
+    });
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(c).not.toBeNull();
+  });
+
+  it("without moment provenance, similar incidents persist (accumulate bias)", async () => {
+    expect(await ctopic("[fear] Priya fears her request for intimacy will be rejected tonight", "incident")).not.toBeNull();
+    const second = await ctopic("[fear] Priya fears her request for intimacy will be rejected", "incident");
+    expect(second).not.toBeNull(); // no proof of same-moment — keep both
   });
 
   it("merely-similar incidents in the same emotional territory BOTH persist", async () => {

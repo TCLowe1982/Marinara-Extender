@@ -183,7 +183,7 @@ export async function runSentimentPipeline(
       const existing = await readBeat(characterId, beatId);
       if (existing) {
         const { summary, content } = companionEntryFromBeat(existing);
-        if (summary) await createEntryIfUnique("character", characterId, { lane: "character_topics", summary, content, sourceChatId: options.sourceChatId, kind: "incident" });
+        if (summary) await createEntryIfUnique("character", characterId, { lane: "character_topics", summary, content, sourceChatId: options.sourceChatId, kind: "incident", turnStart: existing.turnStart });
       }
       tick(current);
       continue;
@@ -255,7 +255,7 @@ export async function runSentimentPipeline(
     // <memory> block from the entry index, NOT the beats store — so without this
     // companion entry the character could never recall an imported beat.
     const { summary, content } = companionEntryFromBeat(beat);
-    if (summary) await createEntryIfUnique("character", targetKey, { lane: "character_topics", summary, content, sourceChatId: options.sourceChatId, kind: "incident" });
+    if (summary) await createEntryIfUnique("character", targetKey, { lane: "character_topics", summary, content, sourceChatId: options.sourceChatId, kind: "incident", turnStart: beat.turnStart });
 
     tick(current);
   }

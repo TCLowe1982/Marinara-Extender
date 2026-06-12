@@ -183,7 +183,7 @@ export async function migratePendingBeats(
     const { summary, content } = companionEntryFromBeat(beat);
     if (summary) {
       await createEntryIfUnique("character", identityKey, {
-        lane: "character_topics", summary, content, sourceChatId: beat.sourceChatId, kind: "incident",
+        lane: "character_topics", summary, content, sourceChatId: beat.sourceChatId, kind: "incident", turnStart: beat.turnStart,
       });
     }
   };

@@ -43,6 +43,7 @@ export interface IndexEntry {
   lastRetrievedAt?: string; // ISO datetime of last retrieval
   sourceChatId?: string;    // chat this entry was imported/derived from (for clean re-import)
   threadId?: string;        // narrative thread membership (nthr-* — see threads.ts)
+  turnStart?: number;       // where in the source chat the moment happened (same-moment dedup)
   // Fact supersession (FR2): a newer fact replaced this one. Deliberately a
   // separate field, NOT an EntryStatus value — see the EntryStatus audit:
   // widening a serialized enum breaks empirical consumers silently.
@@ -74,6 +75,7 @@ export interface Entry {
   lastRetrievedAt?: string; // ISO datetime of last retrieval
   sourceChatId?: string;    // chat this entry was imported/derived from (for clean re-import)
   threadId?: string;        // narrative thread membership (nthr-* — see threads.ts)
+  turnStart?: number;       // where in the source chat the moment happened (same-moment dedup)
   supersededBy?: string;    // FR2: id of the replacing entry (see IndexEntry note)
   supersededAt?: string;
   // Soft clock context at time of encoding

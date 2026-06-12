@@ -157,6 +157,9 @@ const SUBTEXT_INSTRUCTION = `
 const SHARED_RULES = `
 Rules:
 - Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
+- motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
+  BAD:  "exposes her personal fear" / "reveals her vulnerability and desire for connection"
+  GOOD: "admits she's afraid the memory loss means she was never real" / "asks Thomas to stay through the night for the first time"
 - Be specific to the text provided — do not generalize.
 - 1–3 sentences per field.
 - salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
@@ -242,10 +245,14 @@ Format: ${JSON_FORMAT_STANDARD}`;
 }
 
 function vulnerabilityPrompt(): string {
+  // Measured failure mode (2026-06-13): this prompt produced identical
+  // genre-boilerplate motivations for 37% of one character's vulnerability
+  // beats (78 byte-identical strings) — an order of magnitude worse than any
+  // other emotion. The WHAT-exactly demand below is targeted at that.
   return `You are analyzing a moment of vulnerability in a conversation.
 
 Extract the emotional beat as JSON:
-- motivation: What is this person exposing, admitting, or allowing to be seen? What makes this moment an act of courage or risk for them?
+- motivation: WHAT EXACTLY is this person exposing — quote or closely paraphrase the specific admission, fear, or confession from the text. Never write "exposes her personal fear" or any sentence that could describe a different vulnerability moment; name THIS fear, THIS admission, THIS secret.
 - relational_dynamics: How does this vulnerability land in the relationship? Does it invite reciprocity, create intimacy, or risk rejection?
 - outcome: What does this moment of openness suggest about where this person or relationship could go from here?
 ${SUBTEXT_INSTRUCTION}

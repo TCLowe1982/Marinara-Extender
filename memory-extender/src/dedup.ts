@@ -48,6 +48,8 @@ import { nanoid } from "./nanoid.js";
 export const DEDUP_SIMILARITY_THRESHOLD = 0.35;
 // Incident-vs-incident: only a re-capture of the SAME moment should collapse.
 export const INCIDENT_DEDUP_THRESHOLD = 0.6;
+// …and "same moment" must be proven: same source chat, within this many turns.
+export const SAME_MOMENT_TURN_WINDOW = 5;
 // Correction signature needs high structural overlap to be a correction rather
 // than a coincidentally-similar different fact.
 export const CORRECTION_MIN_JACCARD = 0.5;
@@ -167,6 +169,7 @@ export interface CreateEntryInput {
   timeContext?: Entry["timeContext"];
   sourceChatId?: string; // tag for clean per-chat re-import
   threadId?: string;     // narrative thread membership, inherited from the beat
+  turnStart?: number;    // where in the source chat the moment happened
   // What the entry IS: an incident (a beat-bound moment) or a trait (a
   // standing pattern/fact about who someone is). Drives the character_topics
   // dedup matrix; omitted = legacy behavior (aggressive dedup).
@@ -180,7 +183,10 @@ type DedupVerdict =
   | { action: "skip"; against: IndexEntry }
   | { action: "create-correction"; against: IndexEntry };
 
-function decide(input: { lane: Lane; summary: string; content: string; kind?: EntryKind }, existing: IndexEntry[]): DedupVerdict {
+function decide(
+  input: { lane: Lane; summary: string; content: string; kind?: EntryKind; sourceChatId?: string; turnStart?: number },
+  existing: IndexEntry[],
+): DedupVerdict {
   const { lane, summary, content, kind } = input;
 
   if (lane === "character_topics" && kind === "incident") {
@@ -188,9 +194,17 @@ function decide(input: { lane: Lane; summary: string; content: string; kind?: En
       const existingIsIncident = looksIncident(e.summary);
       // Incidents never collapse into traits — the arc accumulates.
       if (!existingIsIncident) continue;
-      // Same-moment recapture (swipe/regen) is near-identical; merely-similar
-      // moments in the same emotional territory both persist.
-      if (similarityHit(summary, content, e, INCIDENT_DEDUP_THRESHOLD)) return { action: "skip", against: e };
+      if (!similarityHit(summary, content, e, INCIDENT_DEDUP_THRESHOLD)) continue;
+      // A similar summary is NOT sufficient: the analyzer emits identical
+      // genre boilerplate for genuinely distinct moments (measured: 37% of
+      // Mari's vulnerability beats collapsed, 78 byte-identical summaries).
+      // A true recapture (swipe/regen) is the SAME moment — same source chat,
+      // same turn neighborhood. Without that proof, the moments both persist.
+      const sameMoment =
+        !!input.sourceChatId && input.sourceChatId === e.sourceChatId &&
+        typeof input.turnStart === "number" && typeof e.turnStart === "number" &&
+        Math.abs(input.turnStart - e.turnStart) <= SAME_MOMENT_TURN_WINDOW;
+      if (sameMoment) return { action: "skip", against: e };
     }
     return { action: "create" };
   }
@@ -227,7 +241,10 @@ export async function createEntryIfUnique(
 
   const idx = await readIndex(scope, scopeId);
   const existingInLane = (idx?.entries ?? []).filter((e) => e.lane === input.lane);
-  const verdict = decide({ lane: input.lane, summary, content, kind: input.kind }, existingInLane);
+  const verdict = decide(
+    { lane: input.lane, summary, content, kind: input.kind, sourceChatId: input.sourceChatId, turnStart: input.turnStart },
+    existingInLane,
+  );
   if (verdict.action === "skip") {
     console.info(`[ME:dedup] skipped duplicate (${input.lane}/${scope}:${scopeId}): "${summary.slice(0, 60)}"`);
     return null;
@@ -248,6 +265,7 @@ export async function createEntryIfUnique(
     ...(input.timeContext ? { timeContext: input.timeContext } : {}),
     ...(input.sourceChatId ? { sourceChatId: input.sourceChatId } : {}),
     ...(input.threadId ? { threadId: input.threadId } : {}),
+    ...(typeof input.turnStart === "number" ? { turnStart: input.turnStart } : {}),
   };
 
   const relativePath = await writeEntry(scope, scopeId, entry);
@@ -261,6 +279,7 @@ export async function createEntryIfUnique(
     lastAccessed: now,
     ...(input.sourceChatId ? { sourceChatId: input.sourceChatId } : {}),
     ...(input.threadId ? { threadId: input.threadId } : {}),
+    ...(typeof input.turnStart === "number" ? { turnStart: input.turnStart } : {}),
   });
 
   if (verdict.action === "create-correction") {

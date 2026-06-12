@@ -58,6 +58,7 @@ import {
   normalizeLabel,
 } from "./aliases.js";
 import { chunkMessages } from "./sentiment/chunker.js";
+import { listActiveThreads, resolveOrMintThread } from "./threads.js";
 import { classifyChunks } from "./sentiment/classifier.js";
 import { analyzeChunks } from "./sentiment/analyzer.js";
 import { encodeBeat } from "./sentiment/encoder.js";
@@ -535,10 +536,12 @@ export function registerApiRoutes(app: FastifyInstance): void {
           console.info(`[ME:tier2] ${passing.length} chunk(s) passed sentiment threshold`);
 
           const roster = await buildSubjectRoster(characterName);
+          const activeThreads = await listActiveThreads(chatId);
+          const threadLabels = activeThreads.map((t) => t.label);
 
           // Analyze with the full classified list as context so each beat sees
           // its true neighbor (e.g. the user line before the character's reply).
-          for (const { result, analysis } of await analyzeChunks(passing, classified, undefined, undefined, roster)) {
+          for (const { result, analysis } of await analyzeChunks(passing, classified, undefined, undefined, roster, threadLabels)) {
             // Attribution: chunk.speaker is the SESSION label (the whole AI
             // message is one chunk), so in multi-character RP it names the
             // session character even when the beat belongs to a co-star. The
@@ -569,8 +572,20 @@ export function registerApiRoutes(app: FastifyInstance): void {
             const attributed = beatSpeaker === result.chunk.speaker
               ? result
               : { ...result, chunk: { ...result.chunk, speaker: beatSpeaker } };
-            console.info(`[ME:tier2] subject="${subject ?? "(none)"}" → ${targetKey}`);
-            const beat = await encodeBeat(targetKey, attributed, analysis, "chat");
+
+            // Narrative thread: resolve the analyzer's label against this chat's
+            // active threads (fuzzy — labels drift), minting when genuinely new.
+            // No label = the beat rides no thread; never guessed.
+            let threadId: string | undefined;
+            if (analysis.thread) {
+              const resolved = await resolveOrMintThread(chatId, analysis.thread, targetKey).catch(() => null);
+              if (resolved) {
+                threadId = resolved.id;
+                if (resolved.isNew) console.info(`[ME:tier2] new thread "${resolved.label}" (${resolved.id})`);
+              }
+            }
+            console.info(`[ME:tier2] subject="${subject ?? "(none)"}" → ${targetKey}${threadId ? ` | thread=${threadId}` : ""}`);
+            const beat = await encodeBeat(targetKey, attributed, analysis, "chat", undefined, threadId);
 
             // Prefer the LLM's nuanced primary emotion for the human-facing tag;
             // fall back to the classifier's keyword lane when the model omits it.

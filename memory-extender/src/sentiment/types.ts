@@ -87,6 +87,11 @@ export interface BeatAnalysis {
   // so the chunk's speaker cannot be trusted for attribution. Absent on older
   // analyses or when the model omits it — callers fall back to chunk.speaker.
   subject?: string;
+  // Which narrative thread this beat belongs to — a LABEL picked from the
+  // active-thread roster in the prompt, or a short new label when the moment
+  // starts a new thread. Resolved to a thread id by threads.ts at ingest.
+  // Absent/null = the beat rides no thread (small talk).
+  thread?: string;
 }
 
 // ── Stage 3: Encoded Beat ─────────────────────────────────────────────────────
@@ -110,4 +115,5 @@ export interface EmotionalBeat {
   created: string;               // ISO date
   sourceType: "chat" | "story";  // came from live chat or story import
   sourceChatId?: string;         // provenance: the chat this beat was imported from
+  threadId?: string;             // narrative thread membership (nthr-* — see threads.ts)
 }

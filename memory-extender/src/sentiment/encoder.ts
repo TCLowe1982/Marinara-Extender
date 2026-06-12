@@ -87,6 +87,7 @@ export interface BeatIndexEntry {
   created: string;
   sourceType: "chat" | "story";
   sourceChatId?: string;
+  threadId?: string;  // narrative thread membership (nthr-* — see threads.ts)
   turnStart: number;
   turnEnd: number;
   tokens: number;
@@ -168,6 +169,7 @@ export async function writeBeat(
     created:      beat.created,
     sourceType:   beat.sourceType,
     sourceChatId: beat.sourceChatId,
+    threadId:     beat.threadId,
     turnStart:    beat.turnStart,
     turnEnd:      beat.turnEnd,
     tokens:     estimateTokens(
@@ -184,6 +186,7 @@ export async function encodeBeat(
   analysis: BeatAnalysis,
   sourceType: "chat" | "story",
   sourceChatId?: string,
+  threadId?: string,
 ): Promise<EmotionalBeat> {
   const beat: EmotionalBeat = {
     id:                beatIdForChunk(result.chunk),
@@ -202,6 +205,7 @@ export async function encodeBeat(
     created:           new Date().toISOString().slice(0, 10),
     sourceType,
     ...(sourceChatId ? { sourceChatId } : {}),
+    ...(threadId ? { threadId } : {}),
   };
 
   await writeBeat(characterId, beat);

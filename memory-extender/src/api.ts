@@ -48,6 +48,7 @@ import {
   listIgnoredSpeakers,
   purgeExpiredIgnored,
   orphanCharacterBeats,
+  addPending,
 } from "./holding-pool.js";
 import {
   readAliasTable,
@@ -76,6 +77,9 @@ import {
   updateIdentityName,
   exportIdentity,
   importIdentity,
+  buildSubjectRoster,
+  resolveNameToKey,
+  matchesSessionName,
   type IdentityExportBundle,
 } from "./identity.js";
 
@@ -530,10 +534,42 @@ export function registerApiRoutes(app: FastifyInstance): void {
 
           console.info(`[ME:tier2] ${passing.length} chunk(s) passed sentiment threshold`);
 
+          const roster = await buildSubjectRoster(characterName);
+
           // Analyze with the full classified list as context so each beat sees
           // its true neighbor (e.g. the user line before the character's reply).
-          for (const { result, analysis } of await analyzeChunks(passing, classified)) {
-            const beat = await encodeBeat(identityKey, result, analysis, "chat");
+          for (const { result, analysis } of await analyzeChunks(passing, classified, undefined, undefined, roster)) {
+            // Attribution: chunk.speaker is the SESSION label (the whole AI
+            // message is one chunk), so in multi-character RP it names the
+            // session character even when the beat belongs to a co-star. The
+            // analyzer's `subject` says whose inner state this beat describes —
+            // route the beat to that identity's ledger.
+            const subject = analysis.subject;
+            const isUserSubject = !subject || normalizeLabel(subject) === "user";
+            let targetKey = identityKey;
+            let beatSpeaker = result.chunk.speaker;
+            if (!isUserSubject && !matchesSessionName(subject, characterName ?? identityKey)) {
+              const key = await resolveNameToKey(subject);
+              if (key) {
+                targetKey = key;
+                beatSpeaker = subject;
+              } else {
+                // Unknown subject — never guess an identity. Park in the holding
+                // pool for manual routing, same flow as story-import orphans.
+                await addPending({
+                  speaker: subject,
+                  sourceType: "chat",
+                  sourceChatId: chatId,
+                  classification: { ...result, chunk: { ...result.chunk, speaker: subject } },
+                });
+                console.info(`[ME:tier2] unknown subject "${subject}" — parked in holding pool`);
+                continue;
+              }
+            }
+            const attributed = beatSpeaker === result.chunk.speaker
+              ? result
+              : { ...result, chunk: { ...result.chunk, speaker: beatSpeaker } };
+            const beat = await encodeBeat(targetKey, attributed, analysis, "chat");
 
             // Prefer the LLM's nuanced primary emotion for the human-facing tag;
             // fall back to the classifier's keyword lane when the model omits it.
@@ -553,11 +589,11 @@ export function registerApiRoutes(app: FastifyInstance): void {
               ...(analysis.subtext ? [`Subtext: ${analysis.subtext}`] : []),
             ].join("\n");
 
-            const entry = await createEntryIfUnique("character", identityKey, {
+            const entry = await createEntryIfUnique("character", targetKey, {
               lane: "character_topics", summary, content: capContent(rawContent), timeContext: timeCtx,
             });
             if (entry) {
-              console.info(`[ME:tier2] saved beat ${beat.id} + ledger entry for ${beat.emotion} (salience ${beat.salience.toFixed(2)})`);
+              console.info(`[ME:tier2] saved beat ${beat.id} + ledger entry for ${beat.emotion} under ${targetKey} (salience ${beat.salience.toFixed(2)})`);
             }
           }
         } catch (err) {
@@ -571,13 +607,32 @@ export function registerApiRoutes(app: FastifyInstance): void {
     if (messageText || userMessageText) {
       void (async () => {
         try {
-          const facts = await classifyAmbient({ userText: userMessageText, characterText: messageText });
+          const roster = await buildSubjectRoster(characterName);
+          const facts = await classifyAmbient({ userText: userMessageText, characterText: messageText, roster });
           let saved = 0;
           for (const fact of facts) {
-            const summary = truncateSummary(fact.fact);
+            let summary = truncateSummary(fact.fact);
             if (!summary.trim()) continue;
-            const scope   = (fact.scope ?? "character") as "character" | "chat";
-            const scopeId = scope === "character" ? identityKey : chatId;
+            let scope   = (fact.scope ?? "character") as "character" | "chat";
+            let scopeId = scope === "character" ? identityKey : chatId;
+            // Route character-scope facts to the subject's ledger — the
+            // [character] block carries every character in an RP message, so
+            // the session identity is only the right home for its own facts.
+            const subject = fact.subject;
+            if (scope === "character" && subject && normalizeLabel(subject) !== "user"
+                && !matchesSessionName(subject, characterName ?? identityKey)) {
+              const key = await resolveNameToKey(subject);
+              if (key) {
+                scopeId = key;
+              } else {
+                // Unknown subject: facts have no holding-pool lane, so keep the
+                // data without polluting a permanent ledger — demote to chat
+                // scope, tagged with who it's about.
+                scope = "chat";
+                scopeId = chatId;
+                summary = truncateSummary(`[about: ${subject}] ${fact.fact}`);
+              }
+            }
             const entry = await createEntryIfUnique(scope, scopeId, {
               lane: fact.lane, summary, content: capContent(fact.text), timeContext: timeCtx,
             });

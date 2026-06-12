@@ -82,6 +82,11 @@ export interface BeatAnalysis {
   // Emotional function of sexual/intimate content when present.
   subtext?: string;
   salience: number;              // 0.0–1.0, model's own salience estimate
+  // Who this beat is ABOUT (whose inner state it describes). In multi-character
+  // roleplay one chunk carries several characters under a single speaker label,
+  // so the chunk's speaker cannot be trusted for attribution. Absent on older
+  // analyses or when the model omits it — callers fall back to chunk.speaker.
+  subject?: string;
 }
 
 // ── Stage 3: Encoded Beat ─────────────────────────────────────────────────────

@@ -30,6 +30,7 @@ import {
 } from "./storage.js";
 import { readBeatIndex, readBeat, writeBeat, type BeatIndex } from "./sentiment/encoder.js";
 import type { EmotionalBeat } from "./sentiment/types.js";
+import { readAliasTable, findExactMatches, normalizeLabel, tokenContainment } from "./aliases.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -108,6 +109,56 @@ async function uniqueSlug(base: string, taken: Set<string>): Promise<string> {
 
 export async function getIdentityMap(): Promise<IdentityEntry[]> {
   return (await readMapFile()).entries;
+}
+
+// ── Subject attribution (live-turn beat routing) ──────────────────────────────
+// In multi-character RP the whole assistant message carries one speaker label,
+// so the analyzer attributes each beat to a `subject` name. These helpers turn
+// that name into an identity key — or refuse, so the caller can park the beat
+// in the holding pool instead of guessing.
+
+// Names to show the analyzer as the known-character roster: alias-table
+// canonical names win, identity-map names fill in the rest. Raw card-ID
+// "names" are skipped — they'd teach the model to answer with IDs.
+export async function buildSubjectRoster(sessionCharacterName?: string): Promise<string[]> {
+  const [map, aliases] = await Promise.all([readMapFile(), readAliasTable()]);
+  const names = new Set<string>();
+  if (sessionCharacterName?.trim()) names.add(sessionCharacterName.trim());
+  for (const rec of Object.values(aliases)) {
+    if (rec.canonicalName?.trim()) names.add(rec.canonicalName.trim());
+  }
+  for (const e of map.entries) {
+    if (e.name && e.name !== e.characterId && !/^_|^[A-Za-z0-9_-]{18,}$/.test(e.name)) names.add(e.name);
+  }
+  return [...names];
+}
+
+// Resolve a subject name to an identity key. Checks the alias table (canonical
+// names + aliases), then identity-map names, exact normalized match only —
+// no fuzzy guessing here; an unresolved name belongs in the holding pool.
+export async function resolveNameToKey(label: string): Promise<string | null> {
+  const normalized = normalizeLabel(label);
+  if (!normalized) return null;
+  const aliases = await readAliasTable();
+  const exact = findExactMatches(aliases, label);
+  if (exact.length === 1) return exact[0]!.identityKey;
+  if (exact.length > 1) return null; // ambiguous — let the pool/user decide
+  const map = await readMapFile();
+  const byName = map.entries.filter((e) => normalizeLabel(e.name) === normalized);
+  const keys = new Set(byName.map((e) => e.identityKey));
+  return keys.size === 1 ? byName[0]!.identityKey : null;
+}
+
+// Does a subject name refer to the session character? Exact normalized match,
+// or significant-token containment ("Mari" ⊂ "Dr. Mari Zielińska") — the
+// session name is the one context where containment is safe to auto-route,
+// because the candidate set has exactly one member.
+export function matchesSessionName(subject: string, sessionCharacterName?: string): boolean {
+  if (!sessionCharacterName) return false;
+  const a = normalizeLabel(subject);
+  const b = normalizeLabel(sessionCharacterName);
+  if (!a || !b) return false;
+  return a === b || tokenContainment(a, b);
 }
 
 // Resolve a Marinara card ID to its stable identity key.

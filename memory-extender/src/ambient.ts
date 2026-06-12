@@ -37,6 +37,10 @@ export interface AmbientFact {
   fact: string;   // concise extracted fact
   lane: Lane;
   scope: "character" | "chat"; // character = permanent; chat = this conversation only
+  // Who the fact is about: "user", or a character name from the roster. The
+  // [character] block carries every character in a multi-character RP message,
+  // so the block label alone cannot attribute a fact. Optional for back-compat.
+  subject?: string;
 }
 
 const SYSTEM_PROMPT = `You are extracting facts from conversation sentences and deciding how long they matter.
@@ -46,17 +50,22 @@ SCOPE RULES:
 - "chat" scope = facts only relevant to this conversation (plans for today, current tasks, temporary states). Save these too, but flag them correctly.
 - Skip entirely: pure actions with no informational content, meta-references, in-scene roleplay events.
 
+SUBJECT RULE:
+- subject = who the fact is ABOUT. Use "user" for the human player; use the character's name for a fact about that character.
+- A [character] sentence may describe ANY character in the scene, not just the one whose turn it is — attribute by content, not by block label. Pick names from the "Known characters" list when one is provided.
+
 Examples:
-- "I grew up in Texas" → character scope, user_topics
-- "I cried at the MGS3 ending" → character scope, user_topics
-- "I've been coding for ten years" → character scope, user_topics
-- "My dog's name is Biscuit" → character scope, user_topics
-- "I have a meeting until 5 PM" → chat scope, user_topics
-- "I'm working on the ledger logic today" → chat scope, user_topics
-- "She always deflects with humor when nervous" → character scope, character_topics
+- "I grew up in Texas" (said by user) → character scope, user_topics, subject "user"
+- "I cried at the MGS3 ending" (said by user) → character scope, user_topics, subject "user"
+- "I've been coding for ten years" → character scope, user_topics, subject "user"
+- "My dog's name is Biscuit" → character scope, user_topics, subject "user"
+- "I have a meeting until 5 PM" → chat scope, user_topics, subject "user"
+- "I'm working on the ledger logic today" → chat scope, user_topics, subject "user"
+- "She always deflects with humor when nervous" (about Priya) → character scope, character_topics, subject "Priya"
+- "Mari grew up in Kraków" (in any block) → character scope, character_topics, subject "Mari"
 
 Return a JSON object of this exact shape:
-{"facts":[{"text":"<original sentence>","fact":"<concise fact>","lane":"user_topics|character_topics","scope":"character|chat"}]}
+{"facts":[{"text":"<original sentence>","fact":"<concise fact>","lane":"user_topics|character_topics","scope":"character|chat","subject":"<user or character name>"}]}
 Return {"facts":[]} if nothing qualifies. Raw JSON only — no explanation, no markdown.`;
 
 async function callLocal(prompt: string): Promise<string | null> {
@@ -110,6 +119,9 @@ function parseFactsJson(raw: string | null): AmbientFact[] {
         .map((f) => ({
           ...f,
           scope: f.scope === "chat" ? "chat" : "character",
+          subject: typeof (f as { subject?: unknown }).subject === "string" && (f as { subject: string }).subject.trim()
+            ? (f as { subject: string }).subject.trim()
+            : undefined,
         }));
     } catch { /* try next */ }
   }
@@ -121,6 +133,9 @@ function parseFactsJson(raw: string | null): AmbientFact[] {
 export interface AmbientInput {
   userText: string;
   characterText: string;
+  // Known character names shown to the model so fact subjects come back as
+  // resolvable names instead of pronouns or invented labels.
+  roster?: string[];
 }
 
 async function callExternal(prompt: string): Promise<string | null> {
@@ -162,7 +177,10 @@ export async function classifyAmbient(input: AmbientInput): Promise<AmbientFact[
   for (const s of userCandidates) lines.push(`[user] ${s}`);
   for (const s of charCandidates) lines.push(`[character] ${s}`);
 
-  const prompt = `Sentences to evaluate:\n${lines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
+  const rosterLine = input.roster && input.roster.length > 0
+    ? `Known characters: ${input.roster.join(", ")}\n\n`
+    : "";
+  const prompt = `${rosterLine}Sentences to evaluate:\n${lines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
 
   let raw = await callLocal(prompt);
   if (raw !== null && !looksLikeJson(raw)) {

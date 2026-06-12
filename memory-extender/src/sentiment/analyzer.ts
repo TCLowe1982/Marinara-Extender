@@ -64,6 +64,8 @@ function parseAnalysisJson(raw: string): BeatAnalysis | null {
         salience:          typeof parsed.salience === "number"
                              ? Math.min(1, Math.max(0, parsed.salience))
                              : 0.5,
+        subject:           typeof parsed.subject === "string" && parsed.subject.trim()
+                             ? parsed.subject.trim() : undefined,
       };
     } catch {
       // try next
@@ -157,10 +159,11 @@ Rules:
 - 1–3 sentences per field.
 - salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
 - emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
+- subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
 - Respond with raw JSON only — no explanation, no markdown.`.trim();
 
-const JSON_FORMAT_STANDARD = `{"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":${EMOTIONS_FORMAT},"subtext":null,"salience":0.0}`;
-const JSON_FORMAT_WITH_SUBPATTERN = `{"motivation":"...","relational_dynamics":"...","outcome":"...","subpattern":"...","emotions":${EMOTIONS_FORMAT},"subtext":null,"salience":0.0}`;
+const JSON_FORMAT_STANDARD = `{"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":${EMOTIONS_FORMAT},"subtext":null,"salience":0.0,"subject":"..."}`;
+const JSON_FORMAT_WITH_SUBPATTERN = `{"motivation":"...","relational_dynamics":"...","outcome":"...","subpattern":"...","emotions":${EMOTIONS_FORMAT},"subtext":null,"salience":0.0,"subject":"..."}`;
 
 function fearPrompt(): string {
   return `You are analyzing a moment of fear in a conversation.
@@ -342,8 +345,12 @@ export interface AnalysisContext {
   after?: ClassificationResult;
 }
 
-function buildUserPrompt(result: ClassificationResult, context?: AnalysisContext): string {
+function buildUserPrompt(result: ClassificationResult, context?: AnalysisContext, roster?: string[]): string {
   const { chunk, scores, primaryEmotion, salience, structuralMatches } = result;
+
+  const rosterBlock = roster && roster.length > 0
+    ? `Known characters (for the subject field): ${roster.join(", ")} — or "user" for the human player.\n\n`
+    : "";
 
   const scoreLines = Object.entries(scores)
     .sort(([, a], [, b]) => b - a)
@@ -371,7 +378,7 @@ ${context.after.chunk.text.slice(0, 400)}${context.after.chunk.text.length > 400
 """`
     : "";
 
-  return `${beforeBlock}ANALYZE THIS — Speaker: ${chunk.speaker}
+  return `${rosterBlock}${beforeBlock}ANALYZE THIS — Speaker: ${chunk.speaker}
 Primary emotion detected: ${primaryEmotion ?? "unknown"} (salience ${salience.toFixed(2)})
 All emotion scores:
 ${scoreLines}${structuralLines}
@@ -390,6 +397,7 @@ Analyze the emotional beat in the chunk marked "ANALYZE THIS".`;
 export async function analyzeChunk(
   result: ClassificationResult,
   context?: AnalysisContext,
+  roster?: string[],
 ): Promise<BeatAnalysis | null> {
   if (!result.passesThreshold || !result.primaryEmotion) return null;
 
@@ -398,7 +406,7 @@ export async function analyzeChunk(
     .filter((s): s is string => Boolean(s));
 
   const systemPrompt = buildSystemPrompt(result.primaryEmotion, structuralSubpatterns);
-  const userPrompt   = buildUserPrompt(result, context);
+  const userPrompt   = buildUserPrompt(result, context, roster);
 
   const raw = await callLlm(systemPrompt, userPrompt);
   return parseAnalysisJson(raw);
@@ -422,6 +430,7 @@ export async function analyzeChunks(
   allChunks?: ClassificationResult[],
   onItem?: (current: number, total: number, reason?: string) => void,
   signal?: AbortSignal,
+  roster?: string[],
 ): Promise<AnalyzedBeat[]> {
   const context = allChunks ?? targets;
   const passing = targets.filter((r) => r.passesThreshold && r.primaryEmotion);
@@ -437,7 +446,7 @@ export async function analyzeChunks(
       const analysis = await analyzeChunk(result, idx === -1 ? undefined : {
         before: context[idx - 1],
         after:  context[idx + 1],
-      });
+      }, roster);
       if (analysis) {
         output.push({ result, analysis });
         onItem?.(i, total);

@@ -3373,7 +3373,10 @@ async function checkForNewMessage() {
 
     const result = await memFetch("/api/process-turn", {
       method: "POST",
-      body: JSON.stringify({ characterId, chatId, turnNumber: msgs.length, messageText: content, userMessageText: userContent }),
+      // characterName matters: without it the sidecar falls back to the identity
+      // key ("professor_mari") as the chunk speaker, and the analyzer mirrors
+      // that identifier style back into subject names and thread labels.
+      body: JSON.stringify({ characterId, characterName: currentSession?.characterName, chatId, turnNumber: msgs.length, messageText: content, userMessageText: userContent }),
     });
     dbg(`checkForNewMessage: process-turn response memoryBlock length=${result?.memoryBlock?.length ?? "null"} created=${result?.created} bookmarks=${result?.bookmarksExtracted}`);
     if (!result?.memoryBlock) { dbg("checkForNewMessage: no memoryBlock in response — aborting"); return; }

@@ -85,7 +85,10 @@ export async function resolveOrMintThread(
   label: string,
   participantKey: string,
 ): Promise<ThreadResolution | null> {
-  const clean = label.replace(/\s+/g, " ").trim().slice(0, 80);
+  // Models sometimes emit identifier-style labels ("mari_and_priya") despite
+  // the prompt — normalize separators to spaces so display and fuzzy matching
+  // both see natural phrases.
+  const clean = label.replace(/[_]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
   if (!clean || !chatId) return null;
   let resolution: ThreadResolution | null = null;
   await mutateYamlFile<ThreadRegistry>(registryPath(), emptyRegistry, (reg) => {

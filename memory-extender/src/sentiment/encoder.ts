@@ -88,6 +88,10 @@ export interface BeatIndexEntry {
   sourceType: "chat" | "story";
   sourceChatId?: string;
   threadId?: string;  // narrative thread membership (nthr-* — see threads.ts)
+  // Per-character monotonic sequence (recap watermark ordering — see
+  // recap-ceiling-data-model.md Resolved #1). Assigned once on first insert
+  // under the per-character write lock; never reassigned on re-encode.
+  seq?: number;
   turnStart: number;
   turnEnd: number;
   tokens: number;
@@ -96,6 +100,8 @@ export interface BeatIndexEntry {
 export interface BeatIndex {
   characterId: string;
   lastUpdated: string;
+  // Next seq to assign — persisted so ordering survives restarts.
+  nextSeq?: number;
   entries: BeatIndexEntry[];
 }
 
@@ -124,8 +130,17 @@ async function upsertBeatIndex(characterId: string, entry: BeatIndexEntry): Prom
       entries: [],
     };
     const i = index.entries.findIndex((e) => e.id === entry.id);
-    if (i >= 0) index.entries[i] = entry;
-    else index.entries.push(entry);
+    if (i >= 0) {
+      // seq is write-once: a re-encode (idempotent import resume) must not
+      // renumber history.
+      index.entries[i] = { ...entry, seq: index.entries[i]!.seq ?? entry.seq };
+    } else {
+      const seq = index.nextSeq ?? (index.entries.length > 0
+        ? Math.max(...index.entries.map((e) => e.seq ?? 0)) + 1
+        : 1);
+      index.nextSeq = seq + 1;
+      index.entries.push({ ...entry, seq });
+    }
     index.lastUpdated = new Date().toISOString();
     await writeYaml(beatIndexPath(characterId), index);
   });

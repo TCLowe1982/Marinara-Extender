@@ -69,6 +69,7 @@ import {
   looksCastList,
 } from "./threads.js";
 import { csrfRejection, csrfToken, CSRF_HEADER } from "./csrf.js";
+import { ingestSceneRecap, readArcs, readArcMemberships } from "./arcs.js";
 import { classifyChunks } from "./sentiment/classifier.js";
 import { analyzeChunks } from "./sentiment/analyzer.js";
 import { encodeBeat } from "./sentiment/encoder.js";
@@ -623,7 +624,9 @@ export function registerApiRoutes(app: FastifyInstance): void {
               }
             }
             console.info(`[ME:tier2] subject="${subject ?? "(none)"}" → ${targetKey}${threadId ? ` | thread=${threadId}` : ""}`);
-            const beat = await encodeBeat(targetKey, attributed, analysis, "chat", undefined, threadId);
+            // chatId provenance: scene-recap ingestion cites a scene's beats as
+            // footnotes by sourceChatId (and threadId) — live beats need it too.
+            const beat = await encodeBeat(targetKey, attributed, analysis, "chat", chatId, threadId);
 
             // Prefer the LLM's nuanced primary emotion for the human-facing tag;
             // fall back to the classifier's keyword lane when the model omits it.
@@ -1394,6 +1397,42 @@ export function registerApiRoutes(app: FastifyInstance): void {
   app.get("/api/supersessions", async (_req, reply) => {
     return reply.send({ candidates: await readSupersessionCandidates() });
   });
+
+  // ── Scene recaps — recap-layer FLOOR (MarinaraExtender-2cu) ───────────────
+  // The extension detects engine scene-conclude summaries (narrator return
+  // messages in the origin chat) and feeds them here, once per participant.
+  // Idempotent per (character, scene).
+
+  app.post<{
+    Body: {
+      characterId: string;
+      characterName?: string;
+      summary: string;
+      sceneChatId?: string;
+      sceneName?: string;
+      concludedAt?: string;
+    };
+  }>("/api/scene-recap", async (req, reply) => {
+    const { characterId, characterName, summary, sceneChatId, sceneName, concludedAt } = req.body ?? {};
+    if (!characterId || !summary?.trim()) {
+      return reply.code(400).send({ error: "characterId and summary are required" });
+    }
+    const identityKey = await resolveIdentity(characterId, characterName);
+    const result = await ingestSceneRecap({ identityKey, summary, sceneChatId, sceneName, concludedAt });
+    if (!result) return reply.code(400).send({ error: "summary too short to ingest" });
+    return reply.send({ ok: true, ...result });
+  });
+
+  app.get<{ Querystring: { characterId?: string; identityKey?: string; characterName?: string } }>(
+    "/api/arcs",
+    async (req, reply) => {
+      const { characterId, identityKey: directKey, characterName } = req.query ?? {};
+      if (!characterId && !directKey) return reply.code(400).send({ error: "characterId or identityKey is required" });
+      const identityKey = directKey ?? await resolveIdentity(characterId!, characterName);
+      const [file, memberships] = await Promise.all([readArcs(identityKey), readArcMemberships(identityKey)]);
+      return reply.send({ arcs: file.arcs, memberships, ingestedScenes: file.ingestedScenes });
+    },
+  );
 
   // ── Speaker resolution (holding pool + alias table) ───────────────────────
   // GET  /api/pending-speakers   — unresolved speaker labels + counts + suggestion

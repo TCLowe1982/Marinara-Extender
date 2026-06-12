@@ -3234,6 +3234,83 @@ const lastSurfaced = {};   // chatId → entries surfaced into context on the PR
 // Last-turn memory activity for the panel (MarinaraExtender-15y): what the
 // character had in context this turn, visible without reading sidecar logs.
 let lastTurnActivity = null; // { at, chatId, surfaced: [{id,summary,scope}], created, bookmarks }
+
+// ── Scene-recap sync — recap-layer FLOOR (MarinaraExtender-2cu) ───────────────
+// The engine persists each concluded scene's prose summary as a narrator
+// "returned from their scene" message in the ORIGIN chat. This pass finds
+// concluded scenes, pairs them with their summaries, and feeds the sidecar
+// once per participant. The sidecar is idempotent per (character, scene), so
+// re-running is free; throttled to avoid hammering the engine API.
+
+const SCENE_SYNC_INTERVAL_MS = 10 * 60 * 1000;
+let lastSceneSync = 0;
+
+function chatMeta(c) {
+  const m = c?.metadata ?? parseData(c)?.metadata;
+  if (typeof m === "string") { try { return JSON.parse(m); } catch { return {}; } }
+  return m ?? {};
+}
+
+async function syncSceneRecaps(force = false) {
+  if (!force && Date.now() - lastSceneSync < SCENE_SYNC_INTERVAL_MS) return;
+  lastSceneSync = Date.now();
+  try {
+    const chatsRes = await marinara.apiFetch("/chats");
+    const list = Array.isArray(chatsRes) ? chatsRes : (chatsRes?.chats ?? chatsRes?.data ?? []);
+    const concluded = list.filter(c => chatMeta(c).sceneStatus === "concluded");
+    if (concluded.length === 0) return;
+
+    await loadAllCharacters();
+    const nameById = new Map((panelState.allCharacters ?? []).map(c => [String(c.id), c.name]));
+
+    // Group scenes by origin chat so each origin's messages are fetched once.
+    const byOrigin = new Map();
+    for (const s of concluded) {
+      const origin = chatMeta(s).sceneOriginChatId;
+      if (!origin) continue;
+      if (!byOrigin.has(origin)) byOrigin.set(origin, []);
+      byOrigin.get(origin).push(s);
+    }
+
+    let ingested = 0;
+    for (const [originId, scenes] of byOrigin) {
+      const res = await marinara.apiFetch(`/chats/${originId}/messages`).catch(() => null);
+      const msgs = Array.isArray(res) ? res : (res?.messages ?? res?.data ?? []);
+      const returns = msgs
+        .map(m => ({ role: m.role ?? parseData(m).role, content: String(m.content ?? parseData(m).content ?? ""), createdAt: String(m.createdAt ?? parseData(m).createdAt ?? "") }))
+        .filter(m => m.role === "narrator" && /returned from .{0,30}scene/i.test(m.content.slice(0, 120)));
+      if (returns.length === 0) continue;
+
+      for (const scene of scenes) {
+        // Pair the scene with the return message nearest its last activity.
+        const sceneTime = Date.parse(scene.updatedAt ?? parseData(scene).updatedAt ?? scene.createdAt ?? "") || 0;
+        const best = returns.reduce((a, b) =>
+          Math.abs((Date.parse(b.createdAt) || 0) - sceneTime) < Math.abs((Date.parse(a.createdAt) || 0) - sceneTime) ? b : a);
+        // Strip the "*…returned from their scene…*" lead; the body is the summary.
+        const summary = best.content.replace(/^\*[^*]*\*\s*/s, "").trim();
+        if (summary.length < 20) continue;
+
+        const sceneId = String(scene.id ?? parseData(scene).id);
+        const sceneName = String(scene.name ?? scene.title ?? parseData(scene).name ?? "");
+        for (const pid of getChatParticipantIds(scene)) {
+          const r = await memFetch("/api/scene-recap", {
+            method: "POST",
+            body: JSON.stringify({
+              characterId: pid,
+              characterName: nameById.get(String(pid)),
+              summary,
+              sceneChatId: sceneId,
+              sceneName,
+              concludedAt: best.createdAt,
+            }),
+          }).catch(() => null);
+          if (r?.ok && !r.alreadyIngested) ingested++;
+        }
+      }
+    }
+    if (ingested > 0) console.info(`[ME:recap] synced ${ingested} scene recap ingestion(s)`);
+  } catch (e) { dbg("syncSceneRecaps failed:", e); }
+}
                            // (recitation compares the current response against the memory
                            //  that was actually live when that response was generated)
 const SNAPSHOT_KEY = `${marinara.extensionId}:snapshot-time`;
@@ -3523,6 +3600,10 @@ async function checkForNewMessage() {
       detectRecitations(priorSurfaced, content).catch(() => {});
     }
     if (Array.isArray(result.surfaced)) lastSurfaced[chatId] = result.surfaced;
+
+    // Scene-recap floor: opportunistically sync concluded scenes (throttled;
+    // sidecar is idempotent). Fire-and-forget — never blocks the turn.
+    syncSceneRecaps().catch(() => {});
 
     // Panel observability: record what this turn put in context, and refresh
     // the panel if it's open so the activity line updates live.

@@ -87,8 +87,17 @@ function Start-Sidecar {
         $script:SidecarProc = $null
         return
     }
-    $script:SidecarProc = Start-Process "cmd.exe" `
-        -ArgumentList "/c npm.cmd $script:RunCmd" `
+    # Launch in its own window but tee every line to a persistent UTF-8 log,
+    # so there's something to paste after the window is gone. stderr is merged
+    # by cmd (not PowerShell) — PS 5.1 wraps native stderr in NativeCommandError
+    # noise when it does the merge itself. The worker runs via -EncodedCommand
+    # to sidestep nested-quoting breakage. $sidecarDir / $logPath / $RunCmd are
+    # interpolated now; the backtick-escaped vars ($_, $log) run in the child.
+    $logPath = Join-Path $sidecarDir "logs\sidecar.log"
+    $worker = "`$ErrorActionPreference='SilentlyContinue'; Set-Location '$sidecarDir'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; `$log='$logPath'; if(-not (Test-Path (Split-Path `$log))){New-Item -ItemType Directory (Split-Path `$log)|Out-Null}; Add-Content -Path `$log -Value ('===== session start '+(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')+' =====') -Encoding UTF8; cmd /c 'npm.cmd $script:RunCmd 2>&1' | ForEach-Object { `$_; Add-Content -Path `$log -Value `$_ -Encoding UTF8 }; Write-Host ''; Write-Host 'Sidecar stopped. You can close this window. Log: memory-extender\logs\sidecar.log'"
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($worker))
+    $script:SidecarProc = Start-Process "powershell.exe" `
+        -ArgumentList "-NoLogo","-ExecutionPolicy","Bypass","-EncodedCommand",$enc `
         -WorkingDirectory $sidecarDir `
         -WindowStyle Normal -PassThru
 }

@@ -3235,12 +3235,29 @@ async function preTurnRefresh(rawBody) {
   const chatId = body?.chatId ? String(body.chatId) : null;
   const userText = typeof body?.userMessage === "string" ? body.userMessage : "";
   if (!chatId || !userText.trim()) return;
-  // Only refresh for the session we know; a brand-new chat skips (no lag to fix).
-  if (!currentSession || String(currentSession.chatId) !== chatId) {
-    dbg(`pre-turn skipped — session chat ${currentSession?.chatId} != generating chat ${chatId}`);
-    return;
+  // Resolve the generating chat's character. currentSession is the fast path,
+  // but the FIRST message of a new or freshly-switched chat generates before
+  // the session tracker catches up — and that turn is where a stale block
+  // bites hardest, because the lorebook only holds the generic chat-load
+  // block (found live: total porsche blackout on the first question of a
+  // fresh chat). So instead of skipping, resolve from the chat row itself.
+  let characterId, characterName;
+  if (currentSession && String(currentSession.chatId) === chatId) {
+    ({ characterId, characterName } = currentSession);
+  } else {
+    try {
+      const chat = await marinara.apiFetch(`/chats/${chatId}`);
+      characterId = getChatCharacterId(chat);
+      if (characterId) {
+        const char = await marinara.apiFetch(`/characters/${characterId}`).catch(() => null);
+        characterName = char?.name ?? parseData(char)?.name ?? null;
+      }
+    } catch { /* engine API hiccup — fall through to the skip below */ }
+    if (!characterId) {
+      dbg(`pre-turn skipped — could not resolve character for chat ${chatId}`);
+      return;
+    }
   }
-  const { characterId, characterName } = currentSession;
 
   // The time budget applies to the SIDECAR call only. Once a fresh block
   // exists, the lorebook write runs to completion unconditionally — it nukes

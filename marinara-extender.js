@@ -3430,16 +3430,49 @@ async function syncSceneRecaps(force = false) {
         .filter(m => m.role === "narrator" && /returned from .{0,30}scene/i.test(m.content.slice(0, 120)));
       if (returns.length === 0) continue;
 
+      // Pair scenes with return summaries by CONTENT, not timestamp. The
+      // return message never names its scene, and a scene chat's updatedAt
+      // drifts whenever the chat is touched — nearest-timestamp pairing was
+      // found live attaching wrong summaries to 36 of 56 recaps (the "Test
+      // Drive Transgression" recap described a couch morning). The right
+      // summary shares distinctive vocabulary with its scene's transcript,
+      // so score every (scene, return) pair by content-word overlap and
+      // assign greedily best-first. Timestamp survives only as the fallback
+      // when a scene's transcript can't be fetched.
+      const pairByContent = new Map(); // sceneId -> return message
+      if (scenes.length > 1 || returns.length > 1) {
+        const scored = [];
+        for (const scene of scenes) {
+          const sid = String(scene.id ?? parseData(scene).id);
+          const sres = await marinara.apiFetch(`/chats/${sid}/messages`).catch(() => null);
+          const smsgs = Array.isArray(sres) ? sres : (sres?.messages ?? sres?.data ?? []);
+          const sceneText = smsgs.map(m => String(m.content ?? parseData(m).content ?? "")).join("\n").toLowerCase();
+          if (!sceneText) continue;
+          for (let i = 0; i < returns.length; i++) {
+            const words = [...new Set(returns[i].content.toLowerCase().match(/[a-z]{4,}/g) ?? [])];
+            const hits = words.filter(w => sceneText.includes(w)).length;
+            scored.push({ sid, ri: i, score: words.length ? hits / words.length : 0 });
+          }
+        }
+        scored.sort((a, b) => b.score - a.score);
+        const takenScene = new Set(), takenReturn = new Set();
+        for (const { sid, ri, score } of scored) {
+          if (score < 0.3) break; // below this, content gives no verdict
+          if (takenScene.has(sid) || takenReturn.has(ri)) continue;
+          takenScene.add(sid); takenReturn.add(ri);
+          pairByContent.set(sid, returns[ri]);
+        }
+      }
+
       for (const scene of scenes) {
-        // Pair the scene with the return message nearest its last activity.
+        const sceneId = String(scene.id ?? parseData(scene).id);
         const sceneTime = Date.parse(scene.updatedAt ?? parseData(scene).updatedAt ?? scene.createdAt ?? "") || 0;
-        const best = returns.reduce((a, b) =>
+        const best = pairByContent.get(sceneId) ?? returns.reduce((a, b) =>
           Math.abs((Date.parse(b.createdAt) || 0) - sceneTime) < Math.abs((Date.parse(a.createdAt) || 0) - sceneTime) ? b : a);
         // Strip the "*…returned from their scene…*" lead; the body is the summary.
         const summary = best.content.replace(/^\*[^*]*\*\s*/s, "").trim();
         if (summary.length < 20) continue;
 
-        const sceneId = String(scene.id ?? parseData(scene).id);
         const sceneName = String(scene.name ?? scene.title ?? parseData(scene).name ?? "");
         for (const pid of getChatParticipantIds(scene)) {
           const r = await memFetch("/api/scene-recap", {

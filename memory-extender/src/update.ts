@@ -14,7 +14,7 @@
 import { readFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { spawn } from "child_process";
+import { spawn, execSync } from "child_process";
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -27,10 +27,30 @@ export function currentVersion(): string {
   }
 }
 
+// Release version + short commit, e.g. "1.1.1+cba43f8". The release number
+// only bumps when a GitHub release is cut, so between releases every build
+// looked identical in the panel — undiagnosable when master is ahead of the
+// tag. The commit suffix makes each code change visibly change the version
+// string (and the tab/server match check compares the FULL string, so a tab
+// served by an older build alarms even within the same release).
+let _build: string | null = null;
+export function buildVersion(): string {
+  if (_build) return _build;
+  let sha = "";
+  try {
+    sha = execSync("git rev-parse --short HEAD", { cwd: PKG_ROOT, timeout: 3_000 }).toString().trim();
+  } catch {
+    // not a git checkout (or git missing) — plain release version is fine
+  }
+  _build = sha ? `${currentVersion()}+${sha}` : currentVersion();
+  return _build;
+}
+
 // Plain numeric dotted compare: 1 if a > b, -1 if a < b, 0 if equal.
+// Build-metadata suffixes ("1.1.1+cba43f8") are ignored.
 export function compareVersions(a: string, b: string): number {
-  const pa = a.replace(/^v/i, "").split(".").map((n) => parseInt(n, 10) || 0);
-  const pb = b.replace(/^v/i, "").split(".").map((n) => parseInt(n, 10) || 0);
+  const pa = a.replace(/^v/i, "").replace(/\+.*$/, "").split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = b.replace(/^v/i, "").replace(/\+.*$/, "").split(".").map((n) => parseInt(n, 10) || 0);
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
     const d = (pa[i] ?? 0) - (pb[i] ?? 0);
     if (d !== 0) return d > 0 ? 1 : -1;
@@ -62,12 +82,13 @@ export async function latestVersion(): Promise<string | null> {
 }
 
 export async function updateStatus(): Promise<{ version: string; latest: string | null; updateAvailable: boolean }> {
-  const version = currentVersion();
   const latest = await latestVersion();
   return {
-    version,
+    // The panel displays (and the tab/server match check compares) the full
+    // build string; release comparison ignores the +sha suffix.
+    version: buildVersion(),
     latest,
-    updateAvailable: !!latest && compareVersions(latest, version) > 0,
+    updateAvailable: !!latest && compareVersions(latest, currentVersion()) > 0,
   };
 }
 

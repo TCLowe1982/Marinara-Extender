@@ -6,7 +6,7 @@
 // button — it must never offer a downgrade or same-version "update".
 
 import { describe, it, expect } from "vitest";
-import { compareVersions, currentVersion } from "../update.js";
+import { compareVersions, currentVersion, buildVersion } from "../update.js";
 
 describe("compareVersions", () => {
   it("orders plain semver correctly", () => {
@@ -21,11 +21,23 @@ describe("compareVersions", () => {
     expect(compareVersions("v1.1.0", "1.1")).toBe(0);
     expect(compareVersions("v1.2", "v1.1.9")).toBe(1);
   });
+
+  it("ignores build-metadata suffixes — a +sha build of a release is not an update", () => {
+    expect(compareVersions("1.1.1+cba43f8", "1.1.1")).toBe(0);
+    expect(compareVersions("1.1.2", "1.1.1+cba43f8")).toBe(1);
+  });
 });
 
 describe("currentVersion", () => {
   it("reads a real dotted version from package.json", () => {
     expect(currentVersion()).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+});
+
+describe("buildVersion", () => {
+  it("starts with the release version, optionally followed by +commit", () => {
+    expect(buildVersion()).toMatch(/^\d+\.\d+\.\d+(\+[0-9a-f]+)?$/);
+    expect(buildVersion().startsWith(currentVersion())).toBe(true);
   });
 });
 

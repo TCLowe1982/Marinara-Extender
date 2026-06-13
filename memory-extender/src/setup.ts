@@ -10,7 +10,7 @@ import type { FastifyInstance } from "fastify";
 import { readFile } from "fs/promises";
 import { defaultEnvPath, extensionJsCandidates } from "./paths.js";
 import { atomicWriteFile } from "./storage.js";
-import { currentVersion } from "./update.js";
+import { buildVersion } from "./update.js";
 
 // ── Extension file lookup ─────────────────────────────────────────────────────
 
@@ -267,7 +267,9 @@ export function registerSetupRoutes(
     // hard way: a shipped fix "didn't work" because it was never loaded).
     // split/join, NOT replace: the placeholder appears more than once and
     // String.replace with a string pattern only hits the first occurrence.
-    return reply.send(code.split("__ME_VERSION__").join(currentVersion()));
+    // buildVersion (release+commit) so builds within a release are
+    // distinguishable and the stale-tab check catches mid-release drift.
+    return reply.send(code.split("__ME_VERSION__").join(buildVersion()));
   });
 
   // Saves the API key to sidecar/.env and applies it immediately.

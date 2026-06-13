@@ -10,7 +10,7 @@
 #
 # Steps: stop the running sidecar -> git pull --ff-only -> npm install ->
 # npm run build -> ensure the embedding model is pulled (best effort) ->
-# relaunch via Marinara_Extender_Start.bat.
+# relaunch via Extender_start.bat.
 
 $ErrorActionPreference = "Continue"
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -87,7 +87,7 @@ if ($ollama) {
 
 # 5. Relaunch.
 Step "Starting the memory server..."
-Start-Process (Join-Path $repoRoot "Marinara_Extender_Start.bat")
+Start-Process (Join-Path $repoRoot "Extender_start.bat")
 Start-Sleep -Seconds 3
 
 Write-Host ""

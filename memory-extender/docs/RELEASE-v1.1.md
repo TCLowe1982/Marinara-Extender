@@ -72,8 +72,9 @@ deliberate re-imports fully re-analyze so redistribution is real.
   per-entry retrieved/recited counters.
 - Import tab: shared scenes appear in every participant's list (marked
   "(shared)"), completed rows get a ↻ re-import button.
-- Console launcher (`Marinara_Extender_Start.bat`): visible window + a
-  persistent UTF-8 log at `memory-extender/logs/sidecar.log`.
+- Console launcher (`Extender_start.bat`): one window that checks Ollama,
+  builds, starts the sidecar (refusing a second copy on the same port), and
+  shows live readiness + an `[R] Restart` command.
 - Routing decisions are logged: `subject="…" → ledger`, `thread=nthr-…`,
   dedup-skip targets.
 
@@ -112,8 +113,8 @@ v1.0 has no update button, so **this hop is the last manual one**:
    (The updater also pulls the embedding model for you; doing it by hand:
    `ollama pull nomic-embed-text`, or set `MARINARA_EXTENDER_EMBED_MODEL=0`
    to opt out.)
-2. **Start with the launcher**: `Marinara_Extender_Start.bat` (repo root) —
-   visible console + persistent log.
+2. **Start with the launcher**: `Extender_start.bat` (repo root) — checks
+   Ollama, builds, starts the sidecar, and shows live readiness.
 3. **Reload your Marinara tab.** Required: the CSRF guard rejects the old
    in-page extension until the reload pulls the new one (you'll see
    `[ME:csrf] blocked` lines until you do). The loader stub you pasted into

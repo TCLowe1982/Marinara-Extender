@@ -76,6 +76,17 @@ function Test-Sidecar {
 }
 
 function Start-Sidecar {
+    # Port guard: if something already owns 3001, do NOT spawn a second npm
+    # window. An unguarded launch races the running instance, loses the bind
+    # with EADDRINUSE, and the cmd window snaps shut a beat later — which reads
+    # as "the extender keeps closing" when two launchers (or two copies of this
+    # script) are open at once. The running server is fine; just attach to it.
+    $busy = Get-NetTCPConnection -LocalPort $SIDECAR_PORT -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($busy) {
+        Write-Host "  [OK] Memory Extender already running on port $SIDECAR_PORT (PID $($busy.OwningProcess)) - using it." -ForegroundColor Green
+        $script:SidecarProc = $null
+        return
+    }
     $script:SidecarProc = Start-Process "cmd.exe" `
         -ArgumentList "/c npm.cmd $script:RunCmd" `
         -WorkingDirectory $sidecarDir `

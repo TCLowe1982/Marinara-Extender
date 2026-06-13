@@ -100,7 +100,19 @@ registerApiRoutes(app);
 
 app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
   if (err) {
-    console.error(err);
+    // The common failure is EADDRINUSE: another sidecar already owns the port.
+    // A raw stack dump in a console window that closes a beat later is useless
+    // ("the extender keeps closing") — say plainly what happened and how to
+    // fix it. The guarded launcher (Marinara_Extender_Start.bat) catches this
+    // earlier; `npm start` and double-launches land here.
+    if ((err as NodeJS.ErrnoException).code === "EADDRINUSE") {
+      console.error(`\n  Marinara Extender is already running on port ${PORT}.`);
+      console.error(`  This window is a DUPLICATE — the running one is fine; close this one.`);
+      console.error(`  If memory seems dead, fully close every sidecar window, then launch once`);
+      console.error(`  with Marinara_Extender_Start.bat (it refuses to start a second copy).\n`);
+    } else {
+      console.error(err);
+    }
     process.exit(1);
   }
   const apiKey = process.env.MARINARA_EXTENDER_API_KEY;

@@ -3552,6 +3552,14 @@ function splitMemoryBlock(memoryBlock) {
 
 // Find or create the lorebook container for this character. Returns lorebookId.
 // No caching — always does a fresh lookup so deletions are handled correctly.
+// The engine enforces a per-lorebook injection budget (default 2048 tokens)
+// and silently DROPS entries that would exceed it. Our memory block grows
+// with the ledger — Priya's crossed ~2300 tokens and her memory entry simply
+// stopped being injected, with every upstream link (pre-turn, loader, write)
+// green. The budget must be guaranteed, not assumed: set on create, healed
+// on every lookup of a pre-existing lorebook.
+const ME_LOREBOOK_TOKEN_BUDGET = 16384;
+
 async function ensureLorebook(characterId, characterName) {
   const lorebookName = `Marinara Extender — ${characterName ?? characterId}`;
   let lorebookId = null;
@@ -3565,6 +3573,14 @@ async function ensureLorebook(characterId, characterName) {
       const charId = String(lb.characterId ?? d.characterId ?? "");
       if (name.startsWith("Marinara Extender") && charId === String(characterId)) {
         lorebookId = String(lb.id ?? d.id);
+        const budget = Number(lb.tokenBudget ?? d.tokenBudget ?? 0);
+        if (budget < ME_LOREBOOK_TOKEN_BUDGET) {
+          await marinara.apiFetch(`/lorebooks/${lorebookId}`, {
+            method: "PATCH",
+            body: JSON.stringify({ tokenBudget: ME_LOREBOOK_TOKEN_BUDGET }),
+          }).catch(() => {});
+          console.info(`[ME] lorebook ${lorebookId} tokenBudget raised ${budget} → ${ME_LOREBOOK_TOKEN_BUDGET} (entries above the budget are silently dropped by the engine)`);
+        }
         break;
       }
     }
@@ -3575,7 +3591,7 @@ async function ensureLorebook(characterId, characterName) {
     try {
       const res = await marinara.apiFetch("/lorebooks", {
         method: "POST",
-        body: JSON.stringify({ name: lorebookName, characterId, enabled: true }),
+        body: JSON.stringify({ name: lorebookName, characterId, enabled: true, tokenBudget: ME_LOREBOOK_TOKEN_BUDGET }),
       });
       dbg(`ensureLorebook: POST response keys=${Object.keys(res ?? {}).join(",")} raw=${JSON.stringify(res).slice(0, 200)}`);
       const d = parseData(res);

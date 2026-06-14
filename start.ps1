@@ -329,7 +329,8 @@ if ($ollamaOk) { Initialize-Model; Write-Host "" }
 # ── Command console ─────────────────────────────────────────────────────────
 
 $autoState = if (Test-Path $autostartFile) { "ON" } else { "off" }
-Write-Host "  Commands:  [R] Restart server   [A] Auto-start on login ($autoState)   [Q] Quit (services keep running)" -ForegroundColor Cyan
+$logPath = Join-Path $sidecarDir "logs\sidecar.log"
+Write-Host "  Commands:  [R] Restart   [L] View log   [A] Auto-start ($autoState)   [Q] Quit (services keep running)" -ForegroundColor Cyan
 Write-Host ""
 
 while ($true) {
@@ -341,6 +342,15 @@ while ($true) {
         break
     } elseif ($cmd -eq 'r') {
         Restart-Sidecar
+    } elseif ($cmd -eq 'l') {
+        if (Test-Path $logPath) {
+            Write-Host "  Last 30 lines of $logPath :" -ForegroundColor DarkGray
+            Get-Content $logPath -Tail 30 | ForEach-Object { Write-Host "    $_" }
+            Write-Host "  Opening full log in Notepad (close it when done)..." -ForegroundColor DarkGray
+            Start-Process notepad.exe $logPath
+        } else {
+            Write-Host "  No log yet at $logPath - it appears once the server has started." -ForegroundColor Yellow
+        }
     } elseif ($cmd -eq 'a') {
         if (Test-Path $autostartFile) {
             Remove-Item $autostartFile -Force -ErrorAction SilentlyContinue
@@ -356,6 +366,6 @@ while ($true) {
             }
         }
     } else {
-        Write-Host "  Unknown command. [R] restart  [A] auto-start  [Q] quit." -ForegroundColor DarkGray
+        Write-Host "  Unknown command. [R] restart  [L] view log  [A] auto-start  [Q] quit." -ForegroundColor DarkGray
     }
 }

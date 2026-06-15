@@ -4,6 +4,9 @@
 
 import Fastify from "fastify";
 import { readFile } from "fs/promises";
+import { writeFileSync, mkdirSync, existsSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import { allowedCorsOrigin } from "./cors.js";
 import { defaultEnvPath } from "./paths.js";
 import { getDataDir } from "./storage.js";
@@ -95,6 +98,47 @@ registerSetupRoutes(app, { port: PORT });
 // ── Management API ────────────────────────────────────────────────────────────
 
 registerApiRoutes(app);
+
+// ── Crash breadcrumb ────────────────────────────────────────────────────────
+// A blind crash — the node process vanishing with nothing in the log — once
+// cost ~2 hours of stale context: the sidecar died, the engine kept injecting
+// the frozen lorebook, and nothing said so. These handlers write a final line
+// to the same log the launcher tees to, so the next death names itself.
+//
+// The write MUST be synchronous: process.on("exit") runs synchronous work only,
+// so an async writeFile never flushes before the process is gone — writeFileSync
+// or it never lands. Hard kills (taskkill /F, a native V8 fault) still can't log
+// from inside the dying process; the launcher watchdog is what catches those.
+const BREADCRUMB_LOG = join(dirname(fileURLToPath(import.meta.url)), "..", "logs", "sidecar.log");
+
+function localStamp(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function breadcrumb(reason: string): void {
+  try {
+    const dir = dirname(BREADCRUMB_LOG);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(BREADCRUMB_LOG, `[${localStamp()}] [breadcrumb] sidecar exiting — ${reason}\n`, { flag: "a" });
+  } catch {
+    // An exit handler that throws is worse than a missing breadcrumb.
+  }
+}
+
+process.on("uncaughtException", (err) => {
+  breadcrumb(`uncaughtException: ${err?.stack ?? err}`);
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  breadcrumb(`unhandledRejection: ${reason instanceof Error ? reason.stack : String(reason)}`);
+  process.exit(1);
+});
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.on(sig, () => { breadcrumb(`signal ${sig}`); process.exit(0); });
+}
+process.on("exit", (code) => breadcrumb(`process exit (code ${code})`));
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 

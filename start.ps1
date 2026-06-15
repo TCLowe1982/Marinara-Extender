@@ -332,40 +332,90 @@ $autoState = if (Test-Path $autostartFile) { "ON" } else { "off" }
 $logPath = Join-Path $sidecarDir "logs\sidecar.log"
 Write-Host "  Commands:  [R] Restart   [L] View log   [A] Auto-start ($autoState)   [Q] Quit (services keep running)" -ForegroundColor Cyan
 Write-Host ""
+Write-Host "  A watchdog re-launches the server within ~15s if it dies, so a crash no" -ForegroundColor DarkGray
+Write-Host "  longer means hours of stale memory. Leave this window open." -ForegroundColor DarkGray
+Write-Host ""
+
+# Non-blocking console + sidecar watchdog. The blocking ReadKey this replaced
+# meant start.ps1 fired the server once and then slept forever on input — if the
+# server died (window closed, crash, OOM) nothing noticed and the engine kept
+# injecting a frozen lorebook for hours (the blind-crash bug). Now we poll for
+# keypresses AND health-check on a timer. Two consecutive failed probes confirm
+# death before acting (the /api/health probe has a 6s timeout, so this is
+# ~12-16s), so a momentarily busy server is never killed by mistake.
+$watchInterval = [TimeSpan]::FromSeconds(5)
+$lastCheck = Get-Date
+$downCount = 0
+
+function Write-Prompt { Write-Host -NoNewline "  extender> " -ForegroundColor Cyan }
+Write-Prompt
 
 while ($true) {
-    Write-Host -NoNewline "  extender> " -ForegroundColor Cyan
-    $key = [Console]::ReadKey($true)
-    $cmd = $key.KeyChar.ToString().ToLower()
-    Write-Host $cmd
-    if ($cmd -eq 'q') {
-        break
-    } elseif ($cmd -eq 'r') {
-        Restart-Sidecar
-    } elseif ($cmd -eq 'l') {
-        if (Test-Path $logPath) {
-            Write-Host "  Last 30 lines of $logPath :" -ForegroundColor DarkGray
-            Get-Content $logPath -Tail 30 | ForEach-Object { Write-Host "    $_" }
-            Write-Host "  Opening full log in Notepad (close it when done)..." -ForegroundColor DarkGray
-            Start-Process notepad.exe $logPath
+    if ([Console]::KeyAvailable) {
+        $key = [Console]::ReadKey($true)
+        $cmd = $key.KeyChar.ToString().ToLower()
+        Write-Host $cmd
+        if ($cmd -eq 'q') {
+            break
+        } elseif ($cmd -eq 'r') {
+            Restart-Sidecar
+            $lastCheck = Get-Date; $downCount = 0
+        } elseif ($cmd -eq 'l') {
+            if (Test-Path $logPath) {
+                Write-Host "  Last 30 lines of $logPath :" -ForegroundColor DarkGray
+                Get-Content $logPath -Tail 30 | ForEach-Object { Write-Host "    $_" }
+                Write-Host "  Opening full log in Notepad (close it when done)..." -ForegroundColor DarkGray
+                Start-Process notepad.exe $logPath
+            } else {
+                Write-Host "  No log yet at $logPath - it appears once the server has started." -ForegroundColor Yellow
+            }
+        } elseif ($cmd -eq 'a') {
+            if (Test-Path $autostartFile) {
+                Remove-Item $autostartFile -Force -ErrorAction SilentlyContinue
+                Write-Host "  [OK] Auto-start on login DISABLED." -ForegroundColor Green
+            } else {
+                try {
+                    if (-not (Test-Path $startupDir)) { New-Item -ItemType Directory -Force -Path $startupDir | Out-Null }
+                    $launcher = "@echo off`r`nstart `"`" /min powershell -ExecutionPolicy Bypass -NoExit -File `"$(Join-Path $scriptDir 'start.ps1')`""
+                    Set-Content -Path $autostartFile -Value $launcher -Encoding ASCII
+                    Write-Host "  [OK] Auto-start on login ENABLED (launches minimized). Press A again to disable." -ForegroundColor Green
+                } catch {
+                    Write-Host "  [!!] Could not write the startup launcher: $_" -ForegroundColor Red
+                }
+            }
         } else {
-            Write-Host "  No log yet at $logPath - it appears once the server has started." -ForegroundColor Yellow
+            Write-Host "  Unknown command. [R] restart  [L] view log  [A] auto-start  [Q] quit." -ForegroundColor DarkGray
         }
-    } elseif ($cmd -eq 'a') {
-        if (Test-Path $autostartFile) {
-            Remove-Item $autostartFile -Force -ErrorAction SilentlyContinue
-            Write-Host "  [OK] Auto-start on login DISABLED." -ForegroundColor Green
+        Write-Prompt
+    }
+
+    if (((Get-Date) - $lastCheck) -ge $watchInterval) {
+        $lastCheck = Get-Date
+        if (Test-Sidecar) {
+            $downCount = 0
         } else {
-            try {
-                if (-not (Test-Path $startupDir)) { New-Item -ItemType Directory -Force -Path $startupDir | Out-Null }
-                $launcher = "@echo off`r`nstart `"`" /min powershell -ExecutionPolicy Bypass -NoExit -File `"$(Join-Path $scriptDir 'start.ps1')`""
-                Set-Content -Path $autostartFile -Value $launcher -Encoding ASCII
-                Write-Host "  [OK] Auto-start on login ENABLED (launches minimized). Press A again to disable." -ForegroundColor Green
-            } catch {
-                Write-Host "  [!!] Could not write the startup launcher: $_" -ForegroundColor Red
+            $downCount++
+            if ($downCount -ge 2) {
+                $downCount = 0
+                Write-Host ""
+                Write-Host "  [watchdog] Memory Extender stopped responding - relaunching..." -ForegroundColor Red
+                Add-Content -Path $logPath -Value ("[" + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + "] [watchdog] sidecar unreachable - relaunching") -Encoding UTF8 -ErrorAction SilentlyContinue
+                Stop-Sidecar          # frees the port whether the process died or just wedged
+                Start-Sleep -Milliseconds 500
+                Start-Sidecar
+                $w = 0
+                while (-not (Test-Sidecar) -and $w -lt 30) { Start-Sleep -Milliseconds 500; $w++ }
+                if (Test-Sidecar) {
+                    Write-Host "  [watchdog] back up." -ForegroundColor Green
+                    Add-Content -Path $logPath -Value ("[" + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + "] [watchdog] sidecar back up") -Encoding UTF8 -ErrorAction SilentlyContinue
+                } else {
+                    Write-Host "  [watchdog] still down - check the sidecar window for errors." -ForegroundColor Yellow
+                }
+                $lastCheck = Get-Date
+                Write-Prompt
             }
         }
-    } else {
-        Write-Host "  Unknown command. [R] restart  [L] view log  [A] auto-start  [Q] quit." -ForegroundColor DarkGray
     }
+
+    Start-Sleep -Milliseconds 200
 }

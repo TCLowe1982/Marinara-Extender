@@ -99,8 +99,22 @@ That's it. The extension detects the active character and chat automatically and
 | `MARINARA_EXTENDER_ALLOWED_ORIGIN` | — | Extra CORS origin to allow, if you run Marinara on a non-loopback URL. |
 | `MARINARA_EXTENDER_TIMESENSE` | `0` | Conversational time-sense (narrative time + presence). Off for v1.0. |
 | `MARINARA_EXTENDER_PROGRESS` | `1` | Console progress bar during imports. |
-| `MARINARA_EXTENDER_BUDGET_CHAT` / `_CHARACTER` / `_GLOBAL` | `4000` / `2000` / `1000` | Per-scope token budgets for the memory loaded each turn. |
+| `MARINARA_EXTENDER_BUDGET_CHAT` / `_CHARACTER` / `_GLOBAL` | `4000` / `2000` / `1000` | Per-scope token budgets for the memory loaded each turn. See [Tuning how much memory is injected](#tuning-how-much-memory-is-injected-token-budget). |
 | `MARINARA_EXTENDER_EIDETIC` | `0` | Inject every entry regardless of budget (testing only). |
+
+### Tuning how much memory is injected (token budget)
+
+The extender deliberately keeps its footprint small. Each turn it injects up to a per-scope token budget — chat **4000**, character **2000**, global **1000** (≈7k tokens total by default). To change it, set the three budget variables in `memory-extender/.env`:
+
+```ini
+MARINARA_EXTENDER_BUDGET_CHAT=4000
+MARINARA_EXTENDER_BUDGET_CHARACTER=2000
+MARINARA_EXTENDER_BUDGET_GLOBAL=1000
+```
+
+- **Read live — no restart needed.** The budgets are re-read on every turn, so a change takes effect on your next message. The launcher's **`[L] View log`** command shows the effective usage per turn (e.g. `char:45/2000 tokens`), so you can see what your setting actually costs.
+- **Lower** them to shrink token cost and latency; **raise** them to let characters carry more context per turn.
+- **Keep the total under the engine's lorebook injection budget.** The Marinara Engine silently drops lorebook entries that exceed a lorebook's `tokenBudget` (the extender sets this to **16384**). Your three budgets plus the instruction header must fit under that ceiling, or memory quietly stops being injected. The defaults (~7k) sit well below it; if you raise the total past ~15k, raise the engine lorebook's token budget to match.
 
 ---
 

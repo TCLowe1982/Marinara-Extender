@@ -338,14 +338,22 @@ Write-Host ""
 
 # Non-blocking console + sidecar watchdog. The blocking ReadKey this replaced
 # meant start.ps1 fired the server once and then slept forever on input — if the
-# server died (window closed, crash, OOM) nothing noticed and the engine kept
-# injecting a frozen lorebook for hours (the blind-crash bug). Now we poll for
-# keypresses AND health-check on a timer. Two consecutive failed probes confirm
-# death before acting (the /api/health probe has a 6s timeout, so this is
-# ~12-16s), so a momentarily busy server is never killed by mistake.
+# server died nothing noticed and the engine served a frozen lorebook for hours
+# (the blind-crash bug).
+#
+# LIVENESS = THE PORT, NOT THE HTTP PROBE. The first cut used a 6s /api/health
+# timeout as the death signal, but the sidecar runs the local model for
+# tier-2/3 analysis WHILE the chat is generating, so a heavy turn makes the box
+# compute-bound and the probe slow — and the watchdog was executing healthy-but-
+# busy servers (~1 false restart/hour). A bound port is proof the process is
+# alive; we only relaunch when 3001 has NO listener (the process is genuinely
+# gone). A separate, deliberately patient guard covers the rare wedge (port
+# bound but the server hung): only a long unbroken streak of failed probes —
+# never a brief slow patch — counts as wedged.
 $watchInterval = [TimeSpan]::FromSeconds(5)
 $lastCheck = Get-Date
-$downCount = 0
+$portDown = 0      # consecutive checks with no listener on 3001 -> true death
+$healthDown = 0    # consecutive failed probes while the port IS bound -> wedge
 
 function Write-Prompt { Write-Host -NoNewline "  extender> " -ForegroundColor Cyan }
 Write-Prompt
@@ -359,7 +367,7 @@ while ($true) {
             break
         } elseif ($cmd -eq 'r') {
             Restart-Sidecar
-            $lastCheck = Get-Date; $downCount = 0
+            $lastCheck = Get-Date; $portDown = 0; $healthDown = 0
         } elseif ($cmd -eq 'l') {
             if (Test-Path $logPath) {
                 Write-Host "  Last 30 lines of $logPath :" -ForegroundColor DarkGray
@@ -391,29 +399,44 @@ while ($true) {
 
     if (((Get-Date) - $lastCheck) -ge $watchInterval) {
         $lastCheck = Get-Date
-        if (Test-Sidecar) {
-            $downCount = 0
+        $portUp = [bool](Get-NetTCPConnection -LocalPort $SIDECAR_PORT -State Listen -ErrorAction SilentlyContinue)
+
+        $dead = $false; $why = ""
+        if (-not $portUp) {
+            # Nothing is listening — the process is genuinely gone. Two checks
+            # (~10s) to ride out the instant between a deliberate restart and the
+            # new bind, then relaunch.
+            $portDown++; $healthDown = 0
+            if ($portDown -ge 2) { $dead = $true; $why = "process gone (no listener on port $SIDECAR_PORT)" }
         } else {
-            $downCount++
-            if ($downCount -ge 2) {
-                $downCount = 0
-                Write-Host ""
-                Write-Host "  [watchdog] Memory Extender stopped responding - relaunching..." -ForegroundColor Red
-                Add-Content -Path $logPath -Value ("[" + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + "] [watchdog] sidecar unreachable - relaunching") -Encoding UTF8 -ErrorAction SilentlyContinue
-                Stop-Sidecar          # frees the port whether the process died or just wedged
-                Start-Sleep -Milliseconds 500
-                Start-Sidecar
-                $w = 0
-                while (-not (Test-Sidecar) -and $w -lt 30) { Start-Sleep -Milliseconds 500; $w++ }
-                if (Test-Sidecar) {
-                    Write-Host "  [watchdog] back up." -ForegroundColor Green
-                    Add-Content -Path $logPath -Value ("[" + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + "] [watchdog] sidecar back up") -Encoding UTF8 -ErrorAction SilentlyContinue
-                } else {
-                    Write-Host "  [watchdog] still down - check the sidecar window for errors." -ForegroundColor Yellow
-                }
-                $lastCheck = Get-Date
-                Write-Prompt
+            # Port is bound = process alive. A slow probe here just means busy
+            # (local model + chat generation contending), NOT dead — do not kill.
+            # Only a long unbroken failure streak means a wedged server: 12 checks
+            # at a 6s timeout is ~75s+ of continuous unresponsiveness, far beyond
+            # any normal heavy turn.
+            $portDown = 0
+            if (Test-Sidecar) { $healthDown = 0 }
+            else { $healthDown++; if ($healthDown -ge 12) { $dead = $true; $why = "wedged (port bound but /api/health failed $healthDown times)" } }
+        }
+
+        if ($dead) {
+            $portDown = 0; $healthDown = 0
+            Write-Host ""
+            Write-Host "  [watchdog] Memory Extender down - $why - relaunching..." -ForegroundColor Red
+            Add-Content -Path $logPath -Value ("[" + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + "] [watchdog] $why - relaunching") -Encoding UTF8 -ErrorAction SilentlyContinue
+            Stop-Sidecar          # frees the port whether the process died or just wedged
+            Start-Sleep -Milliseconds 500
+            Start-Sidecar
+            $w = 0
+            while (-not (Test-Sidecar) -and $w -lt 30) { Start-Sleep -Milliseconds 500; $w++ }
+            if (Test-Sidecar) {
+                Write-Host "  [watchdog] back up." -ForegroundColor Green
+                Add-Content -Path $logPath -Value ("[" + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + "] [watchdog] sidecar back up") -Encoding UTF8 -ErrorAction SilentlyContinue
+            } else {
+                Write-Host "  [watchdog] still down - check the sidecar window for errors." -ForegroundColor Yellow
             }
+            $lastCheck = Get-Date
+            Write-Prompt
         }
     }
 

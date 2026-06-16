@@ -598,7 +598,15 @@ async function memFetch(path, options = {}) {
   if (r.status === 403 && method !== "GET") {
     r = await doFetch(await getCsrfToken(true)); // sidecar restarted — fresh token
   }
-  return r.json();
+  // Tolerate a non-JSON or empty body (a bare 500, a proxy error page, a 204).
+  // r.json() would throw, and not every caller wraps memFetch in .catch — return
+  // null so a bad response degrades to "no data" instead of an exception.
+  try {
+    const text = await r.text();
+    return text ? JSON.parse(text) : null;
+  } catch {
+    return null;
+  }
 }
 
 // ── Toggle button — injected into the sticky chat header ─────────────────────
@@ -3286,6 +3294,13 @@ async function preTurnRefresh(rawBody) {
 }
 
 (function installPreTurnHook() {
+  // Install exactly once per page context. If the loader ever re-evaluates this
+  // script in the same window (re-injection without a full reload), a second
+  // wrap would fire preTurnRefresh once PER layer on every /api/generate — and
+  // each wrap has its own _lorebookWriteChain, so the nuke-and-recreate cycles
+  // race and the lorebook can be empty/partial exactly when generation runs.
+  if (window.__marinaraExtenderFetchHooked) return;
+  window.__marinaraExtenderFetchHooked = true;
   const origFetch = window.fetch.bind(window);
   window.fetch = async (input, init) => {
     try {

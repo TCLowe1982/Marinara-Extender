@@ -37,10 +37,22 @@ let _build: string | null = null;
 export function buildVersion(): string {
   if (_build) return _build;
   let sha = "";
-  try {
-    sha = execSync("git rev-parse --short HEAD", { cwd: PKG_ROOT, timeout: 3_000 }).toString().trim();
-  } catch {
-    // not a git checkout (or git missing) — plain release version is fine
+  // Only attempt git when this is actually a checkout. Release installs (a zip
+  // download) have no .git, and shelling out there makes git print
+  // "fatal: not a git repository" to stderr — which execSync forwards to the
+  // parent's stderr by default, so it surfaces in the console/log even though
+  // we recover. The existsSync guard avoids the spawn entirely; stdio ignoring
+  // stderr is the backstop (e.g. git missing from PATH).
+  if (existsSync(join(PKG_ROOT, ".git"))) {
+    try {
+      sha = execSync("git rev-parse --short HEAD", {
+        cwd: PKG_ROOT,
+        timeout: 3_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).toString().trim();
+    } catch {
+      // not resolvable — plain release version is fine
+    }
   }
   _build = sha ? `${currentVersion()}+${sha}` : currentVersion();
   return _build;

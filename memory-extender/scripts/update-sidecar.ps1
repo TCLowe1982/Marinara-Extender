@@ -40,6 +40,25 @@ Add-Content -Path $log -Value ("===== update started " + (Get-Date -Format "yyyy
 Write-Host "Marinara Extender updater" -ForegroundColor Green
 Write-Host ""
 
+# 0. Pre-flight: the one-click updater pulls via git, which only works on a git
+#    checkout. A release-zip / Download-ZIP install has no .git. Detect that
+#    BEFORE stopping the server (otherwise a non-git user is left with a stopped
+#    sidecar and the misleading 'commit or stash' message). stderr is silenced
+#    so git's "fatal: not a git repository" never reaches the console.
+git -C $repoRoot rev-parse --is-inside-work-tree 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "This install is not a git checkout, so the one-click updater cannot pull updates." -ForegroundColor Yellow
+  Write-Host ""
+  Write-Host "To update a downloaded (ZIP) install: download the latest release and copy the new"
+  Write-Host "files over your install - your memory-extender\data folder and .env are kept (the"
+  Write-Host "release does not include them, so they are not overwritten)."
+  Write-Host ""
+  Write-Host "For automatic one-click updates in future, reinstall with:  git clone <repo-url>" -ForegroundColor Cyan
+  Add-Content -Path $log -Value "aborted: not a git checkout - manual update required (server left running)" -Encoding UTF8
+  pause
+  exit 1
+}
+
 # 1. Stop the running sidecar (it relaunches at the end).
 Step "Stopping the memory server..."
 $busy = Get-NetTCPConnection -LocalPort 3001 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1

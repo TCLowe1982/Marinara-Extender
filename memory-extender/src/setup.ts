@@ -62,6 +62,11 @@ function buildLoaderJs(port: number): string {
     if (!res.ok) throw new Error("HTTP " + res.status);
     const code = await res.text();
     window.__marinaraExtender = marinara;
+    // Single source of truth for where the sidecar lives: the extension reads
+    // this instead of hardcoding its own address, so a remote/Tailscale install
+    // is configured in ONE place — the SIDECAR line of this pasted loader — and
+    // both the fetch above and every memory call inside the extension follow it.
+    window.__meSidecar = SIDECAR;
     // Wrap so the fetched code sees 'marinara'; leading newline guards against the
     // file starting with a // comment swallowing the wrapper line.
     const wrapped = "(function(marinara){\\n" + code + "\\n})(window.__marinaraExtender);";

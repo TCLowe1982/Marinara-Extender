@@ -14,7 +14,12 @@
 // ║  Then open http://127.0.0.1:3001/setup for the full setup guide.        ║
 // ╚══════════════════════════════════════════════════════════════════════════╝
 
-const MEMORY_EXTENDER = "http://127.0.0.1:3001";
+// Where the sidecar lives. The loader stub (setup.ts) sets window.__meSidecar to
+// the address it fetched THIS file from, so a remote/Tailscale install is
+// configured in one place (the loader's SIDECAR line) and both the loader's
+// fetch and every memory call here follow it. Falls back to localhost for the
+// standard same-machine setup, so nothing changes for the 99% on 127.0.0.1.
+const MEMORY_EXTENDER = (typeof window !== "undefined" && window.__meSidecar) || "http://127.0.0.1:3001";
 // Stamped by the sidecar at serve time (setup.ts) — shows what's ACTUALLY
 // loaded in this tab. "dev" = running from a copy the sidecar didn't serve.
 const ME_VERSION = ("__ME_VERSION__".startsWith("__") ? "dev" : "__ME_VERSION__");

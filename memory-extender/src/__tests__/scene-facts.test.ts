@@ -116,6 +116,6 @@ describe("ingestSceneFacts", () => {
       { text: "x", fact: "should not be saved", lane: "character_topics", scope: "character", subject: "Mari" },
     ];
     const res = await ingestSceneFacts({ characterId: "mari", characterName: "Mari", chunks, roster: ["Mari"], classify });
-    expect(res).toEqual({ saved: 0, facts: 0 });
+    expect(res).toEqual({ saved: 0, facts: 0, planned: [] });
   });
 });

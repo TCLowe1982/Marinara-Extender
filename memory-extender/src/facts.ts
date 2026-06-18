@@ -13,8 +13,8 @@
 // salience, reusing the tier-3 ambient classifier, and routes each one to the
 // right subject's ledger through the same dedup matrix the live path uses.
 
-import type { AmbientFact, AmbientInput } from "./ambient.js";
-import { classifyAmbient } from "./ambient.js";
+import type { AmbientFact } from "./ambient.js";
+import { classifySceneFacts } from "./ambient.js";
 import type { Chunk } from "./sentiment/types.js";
 import type { Entry } from "./storage.js";
 import { createEntryIfUnique } from "./dedup.js";
@@ -98,7 +98,8 @@ export async function saveFact(
 
 // ── Scene-wide fact pass ───────────────────────────────────────────────────────
 
-export type FactClassifier = (input: AmbientInput) => Promise<AmbientFact[]>;
+// (sceneText, roster) — prose-aware, unlike the live candidate classifier.
+export type FactClassifier = (sceneText: string, roster: string[]) => Promise<AmbientFact[]>;
 
 // Off by default? No — on by default (like the live ambient pass), with an env
 // kill switch, because silent feature degradation is worse than the cost. It
@@ -108,9 +109,10 @@ export function sceneFactsEnabled(): boolean {
   return !(v === "0" || v?.toLowerCase() === "off");
 }
 
-// Chunks per classify call. Bounds the prompt so a long scene can't blow the
-// local model's context in a single request.
-const SCENE_FACTS_BATCH = 25;
+// Chunks of PROSE per classify call. Lower than a sentence-candidate batch
+// because each chunk is a full merged turn; keeps the window inside a small
+// local model's context.
+const SCENE_FACTS_BATCH = 10;
 
 export interface IngestSceneFactsInput {
   characterId: string;
@@ -119,13 +121,23 @@ export interface IngestSceneFactsInput {
   roster: string[];         // known character names, for subject attribution
   sourceChatId?: string;    // so a re-import cleanly replaces these facts
   classify?: FactClassifier; // injectable for tests
+  dryRun?: boolean;          // resolve + plan, but never write (backfill preview)
+}
+
+// What a fact WOULD become — surfaced for dry-run previews (the backfill script).
+export interface PlannedFact {
+  subject?: string;
+  lane: AmbientFact["lane"];
+  scope: "character" | "chat";
+  scopeId: string;
+  summary: string;
 }
 
 export async function ingestSceneFacts(
   input: IngestSceneFactsInput,
-): Promise<{ saved: number; facts: number }> {
-  if (!sceneFactsEnabled() || input.chunks.length === 0) return { saved: 0, facts: 0 };
-  const classify = input.classify ?? classifyAmbient;
+): Promise<{ saved: number; facts: number; planned: PlannedFact[] }> {
+  if (!sceneFactsEnabled() || input.chunks.length === 0) return { saved: 0, facts: 0, planned: [] };
+  const classify = input.classify ?? classifySceneFacts;
   const ctx: FactContext = {
     identityKey: input.characterId,
     fallbackChatId: input.sourceChatId ?? input.characterId,
@@ -134,17 +146,19 @@ export async function ingestSceneFacts(
 
   let saved = 0;
   let factCount = 0;
+  const planned: PlannedFact[] = [];
   const seen = new Set<string>(); // de-dupe identical facts across batches before any disk work
 
   for (let i = 0; i < input.chunks.length; i += SCENE_FACTS_BATCH) {
     const batch = input.chunks.slice(i, i + SCENE_FACTS_BATCH);
-    const userText = batch.filter((c) => normalizeLabel(c.speaker) === "user").map((c) => c.text).join("\n");
-    const charText = batch.filter((c) => normalizeLabel(c.speaker) !== "user").map((c) => c.text).join("\n");
-    if (!userText && !charText) continue;
+    // Speaker-prefixed prose so the model has turn context but attributes by
+    // content (a character often states a fact about someone else).
+    const sceneText = batch.map((c) => `${c.speaker}: ${c.text}`).join("\n\n").trim();
+    if (!sceneText) continue;
 
     let facts: AmbientFact[];
     try {
-      facts = await classify({ userText, characterText: charText, roster: input.roster });
+      facts = await classify(sceneText, input.roster);
     } catch {
       continue; // one bad batch never aborts the pass
     }
@@ -154,6 +168,10 @@ export async function ingestSceneFacts(
       if (seen.has(key)) continue;
       seen.add(key);
       factCount++;
+      const target = await resolveFactTarget(fact, ctx);
+      if (!target) continue;
+      planned.push({ subject: fact.subject, lane: fact.lane, ...target });
+      if (input.dryRun) continue;
       const entry = await saveFact(fact, ctx, input.sourceChatId);
       if (entry) saved++;
     }
@@ -162,5 +180,5 @@ export async function ingestSceneFacts(
   if (saved > 0) {
     console.info(`[ME:scene-facts] ${input.characterName}: saved ${saved} durable fact(s) from ${input.chunks.length} chunks`);
   }
-  return { saved, facts: factCount };
+  return { saved, facts: factCount, planned };
 }

@@ -75,7 +75,7 @@ Return a JSON object of this exact shape:
 {"facts":[{"text":"<original sentence>","fact":"<concise fact>","lane":"user_topics|character_topics","scope":"character|chat","subject":"<user or character name>"}]}
 Return {"facts":[]} if nothing qualifies. Raw JSON only — no explanation, no markdown.`;
 
-async function callLocal(prompt: string): Promise<string | null> {
+async function callLocal(prompt: string, system: string = SYSTEM_PROMPT): Promise<string | null> {
   if (!localEnabled()) return null;
   const base = localUrl();
   const model = localModel();
@@ -87,7 +87,7 @@ async function callLocal(prompt: string): Promise<string | null> {
       body: JSON.stringify({
         model,
         messages: [
-          { role: "system", content: SYSTEM_PROMPT },
+          { role: "system", content: system },
           { role: "user", content: prompt },
         ],
         temperature: 0.1,
@@ -145,7 +145,7 @@ export interface AmbientInput {
   roster?: string[];
 }
 
-async function callExternal(prompt: string): Promise<string | null> {
+async function callExternal(prompt: string, system: string = SYSTEM_PROMPT): Promise<string | null> {
   const { getCachedAuth } = await import("./auth-cache.js");
   const auth = getCachedAuth();
   if (!auth) return null;
@@ -157,7 +157,7 @@ async function callExternal(prompt: string): Promise<string | null> {
       headers: { "Content-Type": "application/json", Authorization: auth },
       body: JSON.stringify({
         model,
-        messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: prompt }],
+        messages: [{ role: "system", content: system }, { role: "user", content: prompt }],
         temperature: 0.1,
         max_tokens: 800,
       }),
@@ -203,4 +203,53 @@ export async function classifyAmbient(input: AmbientInput): Promise<AmbientFact[
   }
 
   return facts;
+}
+
+// ── Scene fact extraction (1dn) ─────────────────────────────────────────────────
+// classifyAmbient pre-filters to short candidate sentences — right for live
+// throwaway lines, wrong for dense scene prose, where a durable fact spans
+// fragments ("Warlock. Pact of the Tome. My patron is the Narrative.") and the
+// candidate filter drops the load-bearing pieces. This reads the prose directly
+// and assembles facts, reusing the same output shape, routing, and dedup.
+
+const SCENE_FACTS_SYSTEM_PROMPT = `You are reading a roleplay scene transcript and extracting DURABLE FACTS — things that stay true after the scene ends and are worth remembering long-term.
+
+EXTRACT facts about:
+- identity & self-concept (a class/archetype a character claims, their role, what they call themselves)
+- stable preferences, tastes, strongly-held opinions
+- backstory & history (where they grew up, defining past events, things they've done)
+- relationships and dynamics that persist
+- worldbuilding / lore the characters establish as true
+
+A durable fact may span SEVERAL sentences — assemble it into one. Example: from
+"Warlock. Pact of the Tome. My patron is the Narrative itself." extract one fact:
+the speaker's D&D class is a Pact of the Tome Warlock whose patron is the Narrative.
+
+DO NOT extract:
+- moment-to-moment physical action or scene choreography (who touched whom, who moved)
+- transient states (currently aroused, crying, holding a cup)
+- pure dialogue with no lasting information
+
+SUBJECT = who the fact is ABOUT: "user" for the human player, otherwise the
+character's name (prefer a name from the Known characters list). Lines are
+prefixed with the speaker, but attribute by CONTENT — a character often states a
+fact about ANOTHER character or about the user.
+SCOPE = "character" (permanent) or "chat" (only relevant to this conversation).
+LANE = user_topics for facts about the user/player; character_topics for facts about a character.
+
+Return JSON only: {"facts":[{"text":"<short supporting quote/paraphrase>","fact":"<the durable fact>","lane":"user_topics|character_topics","scope":"character|chat","subject":"<user or name>"}]}
+Return {"facts":[]} if nothing durable is stated. No markdown, no explanation.`;
+
+// Reads a window of scene prose (speaker-prefixed lines) and returns durable
+// facts. Same AmbientFact shape, so the caller routes/dedups identically.
+export async function classifySceneFacts(sceneText: string, roster: string[] = []): Promise<AmbientFact[]> {
+  if (!sceneText.trim()) return [];
+  const rosterLine = roster.length > 0 ? `Known characters: ${roster.join(", ")}\n\n` : "";
+  const prompt = `${rosterLine}Scene transcript:\n${sceneText}`;
+
+  let raw = await callLocal(prompt, SCENE_FACTS_SYSTEM_PROMPT);
+  if (raw !== null && !looksLikeJson(raw)) raw = null;
+  if (raw === null) raw = await callExternal(prompt, SCENE_FACTS_SYSTEM_PROMPT);
+
+  return parseFactsJson(raw);
 }

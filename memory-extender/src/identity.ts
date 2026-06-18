@@ -166,7 +166,19 @@ export async function resolveNameToKey(label: string): Promise<string | null> {
   const map = await readMapFile();
   const byName = map.entries.filter((e) => normalizeLabel(e.name) === normalized);
   const keys = new Set(byName.map((e) => e.identityKey));
-  return keys.size === 1 ? byName[0]!.identityKey : null;
+  if (keys.size === 1) return byName[0]!.identityKey;
+  if (keys.size > 1) return null;
+
+  // Token-containment fallback: a name variant like "Mari Zielińska" should
+  // resolve to "Dr. Mari Zielińska". Routes ONLY when exactly one character's
+  // labels contain the query's significant tokens — never guesses between two
+  // people (an ambiguous match returns null and falls to the holding pool).
+  const contained = new Set<string>();
+  for (const [identityKey, rec] of Object.entries(aliases)) {
+    const labels = [rec.canonicalName, ...(rec.aliases ?? [])];
+    if (labels.some((l) => tokenContainment(normalized, normalizeLabel(l)))) contained.add(identityKey);
+  }
+  return contained.size === 1 ? [...contained][0]! : null;
 }
 
 // Does a subject name refer to the session character? Exact normalized match,

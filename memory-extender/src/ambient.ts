@@ -229,10 +229,16 @@ Be EXHAUSTIVE. A passage usually contains several durable facts, about different
 people and topics. List every one — do not stop at the most prominent; a quiet
 identity fact (a class, a hometown, a job) matters as much as a vivid one.
 
-DO NOT extract:
-- moment-to-moment physical action or scene choreography (who touched whom, who moved)
-- transient states (currently aroused, crying, holding a cup)
-- pure dialogue with no lasting information
+DO NOT extract anything that is merely what is happening right now. LITMUS TEST:
+"would this still be true next week, in a completely different scene?" If no, SKIP it.
+Skip:
+- physical action / choreography (who touched, kissed, moved, is lying down)
+- transient bodily or emotional states (aroused, wet, crying, pupils dilated, holding a cup)
+- where someone is or what they are wearing AT THIS MOMENT (in his bed, wearing his shirt)
+- agreeing to or about to do something in this scene (agrees to a threesome tonight)
+- pure dialogue or narration with no lasting information
+A durable fact is identity, history, preference, relationship, or lore — it outlives
+the scene. "Mari grew up in Kraków" survives; "Mari is being kissed" does not.
 
 SUBJECT = who the fact is ABOUT: "user" for the human player, otherwise the
 character's name (prefer a name from the Known characters list). Lines are

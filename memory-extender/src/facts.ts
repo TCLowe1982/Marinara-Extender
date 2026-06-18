@@ -19,7 +19,32 @@ import type { Chunk } from "./sentiment/types.js";
 import type { Entry } from "./storage.js";
 import { createEntryIfUnique } from "./dedup.js";
 import { resolveNameToKey, matchesSessionName } from "./identity.js";
-import { normalizeLabel } from "./aliases.js";
+import { normalizeLabel, readAliasTable, USER_IDENTITY_KEY } from "./aliases.js";
+
+// Scope the subject roster to characters actually MENTIONED in the scene, not
+// the whole cast. With the global cast in the prompt the model attributed a
+// present character's lines to an absent one (it tagged Priya's lines "Aurora").
+// A character counts as present if any of its alias labels (len >= 3, to avoid
+// 1-2 char false hits) appears in the transcript. Falls back to the caller's
+// roster if nothing matches (e.g. an empty alias table in tests).
+async function scopeRosterToScene(chunks: Chunk[], fallback: string[]): Promise<string[]> {
+  const text = chunks.map((c) => c.text).join("\n").toLowerCase();
+  let table;
+  try { table = await readAliasTable(); } catch { return fallback; }
+  // Whole-word match (letter boundaries, unicode-aware) so a name doesn't match
+  // as a substring of another word — "Lara" must not match "exhiLARAtion".
+  const mentioned = (label: string): boolean => {
+    const esc = label.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(^|[^\\p{L}])${esc}([^\\p{L}]|$)`, "u").test(text);
+  };
+  const present: string[] = [];
+  for (const [key, rec] of Object.entries(table)) {
+    if (key === USER_IDENTITY_KEY) continue;
+    const labels = [rec.canonicalName, ...(rec.aliases ?? [])].filter((l) => l.trim().length >= 3);
+    if (labels.some(mentioned)) present.push(rec.canonicalName);
+  }
+  return present.length > 0 ? present : fallback;
+}
 
 // Local copies of the summary/content sizers (kept small and identical to the
 // live path in api.ts; a future cleanup can hoist both into one util).
@@ -146,6 +171,10 @@ export async function ingestSceneFacts(
     characterName: input.characterName,
   };
 
+  // Only the characters present in this scene, so the model can't attribute a
+  // fact to an absent cast member.
+  const roster = await scopeRosterToScene(input.chunks, input.roster);
+
   let saved = 0;
   let factCount = 0;
   const planned: PlannedFact[] = [];
@@ -167,7 +196,7 @@ export async function ingestSceneFacts(
 
     let facts: AmbientFact[];
     try {
-      facts = await classify(sceneText, input.roster);
+      facts = await classify(sceneText, roster);
     } catch {
       continue; // one bad batch never aborts the pass
     }

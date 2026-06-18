@@ -21,7 +21,7 @@
 //
 // Run from the memory-extender/ directory (needs the built dist + Ollama up).
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
@@ -52,7 +52,7 @@ if (existsSync(envPath)) {
 }
 
 const imp = (p) => import(pathToFileURL(join(DIST, p)).href);
-const { ingestSceneFacts } = await imp("facts.js");
+const { ingestSceneFacts, saveFact } = await imp("facts.js");
 const { chunkMessages } = await imp("sentiment/chunker.js");
 const { buildSubjectRoster } = await imp("identity.js");
 const { getDataDir } = await imp("storage.js");
@@ -108,25 +108,51 @@ if (ONLY_SCENE) {
 } else {
   scenes = chats.filter((c) => meta(c).sceneStatus === "concluded");
 }
-console.log(`${APPLY ? "APPLY" : "DRY RUN"} — ${scenes.length} scene(s)\n`);
+// The LEDGER (MarinaraExtender-1dn / Ledger Pattern): dry-run EXTRACTS + JUDGES
+// and persists the durable facts to a per-scene file. --apply writes THAT file —
+// it never re-extracts. LLM extraction is nondeterministic, so re-extracting on
+// apply produced a different (noisier) set than the human reviewed; persisting
+// the intermediate makes apply == the previewed result, and makes it resumable.
+const LEDGER_DIR = join(getDataDir(), "fact-ledger");
+const ledgerPath = (sceneId) => join(LEDGER_DIR, `${sceneId.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
 
-let totalPlanned = 0;
+console.log(`${APPLY ? "APPLY (from ledger)" : "DRY RUN (builds ledger)"} — ${scenes.length} scene(s)\n`);
+
+let totalFacts = 0;
 let totalSaved = 0;
 
 for (const scene of scenes) {
   const sceneId = String(scene.id);
+
+  if (APPLY) {
+    // Write exactly what the dry-run reviewed — read the ledger, never re-extract.
+    const lp = ledgerPath(sceneId);
+    if (!existsSync(lp)) {
+      console.log(`(skip) ${scene.name ?? sceneId} — no ledger; run the dry-run first to build it.`);
+      continue;
+    }
+    const ledger = JSON.parse(readFileSync(lp, "utf8"));
+    const ctx = { identityKey: ledger.primaryKey, fallbackChatId: sceneId, characterName: ledger.primaryName };
+    let written = 0;
+    for (const fact of ledger.facts ?? []) {
+      const entry = await saveFact(fact, ctx, sceneId);
+      if (entry) written++;
+    }
+    totalFacts += (ledger.facts ?? []).length;
+    totalSaved += written;
+    console.log(`=== ${ledger.sceneName ?? sceneId} — ${(ledger.facts ?? []).length} from ledger, ${written} written ===`);
+    continue;
+  }
+
+  // DRY RUN — extract, judge, persist the durable set to the ledger.
   const raw = (msgsByChat.get(sceneId) ?? [])
-    .map((m) => ({
-      role: m.role ?? "assistant",
-      content: typeof m.content === "string" ? m.content : "",
-      createdAt: m.createdAt ?? "",
-    }))
+    .map((m) => ({ role: m.role ?? "assistant", content: typeof m.content === "string" ? m.content : "" }))
     .filter((m) => m.content.trim());
   if (raw.length === 0) continue;
 
-  // Participants: scenes don't carry characterIds in metadata, but every
-  // message is tagged with its characterId and the scene records its initiator.
-  // Resolve those against the extender's identity map (read-only).
+  // Participants: scenes don't carry characterIds in metadata, but every message
+  // is tagged with its characterId and the scene records its initiator. Resolve
+  // those against the extender's identity map (read-only).
   const m = meta(scene);
   const msgCharIds = [...new Set((msgsByChat.get(sceneId) ?? []).map((x) => x.characterId).filter(Boolean).map(String))];
   const candidateIds = [...new Set([...msgCharIds, m.sceneInitiatorCharId, scene.characterId].filter(Boolean).map(String))];
@@ -137,27 +163,23 @@ for (const scene of scenes) {
   }
   const primaryKey = participants[0].key;
   const primaryName = cleanName(participants[0].name, primaryKey);
-  const participantNames = participants.map((p) => cleanName(p.name, p.key));
 
-  const digestMsgs = raw.map((r) => ({ role: r.role, content: r.content }));
-  const chunks = await chunkMessages(digestMsgs, primaryName);
-  // Rich roster (cast + aliases) so subjects resolve to the right ledgers.
+  const chunks = await chunkMessages(raw.map((r) => ({ role: r.role, content: r.content })), primaryName);
   const roster = await buildSubjectRoster(primaryName);
 
   const res = await ingestSceneFacts({
-    characterId: primaryKey,
-    characterName: primaryName,
-    chunks,
-    roster,
-    sourceChatId: sceneId,
-    dryRun: !APPLY,
+    characterId: primaryKey, characterName: primaryName, chunks, roster, sourceChatId: sceneId, dryRun: true,
   });
 
-  if (res.planned.length > 0) {
-    totalPlanned += res.planned.length;
-    totalSaved += res.saved;
-    console.log(`=== ${scene.name ?? sceneId} (${sceneId}) — ${res.planned.length} fact(s)${APPLY ? `, ${res.saved} written` : ""} ===`);
-    console.log(`    participants: ${participantNames.join(", ") || "(none)"}`);
+  if (res.durable.length > 0) {
+    mkdirSync(LEDGER_DIR, { recursive: true });
+    writeFileSync(ledgerPath(sceneId), JSON.stringify({
+      sceneId, sceneName: scene.name ?? sceneId, primaryKey, primaryName,
+      builtAt: new Date().toISOString(), facts: res.durable,
+    }, null, 2));
+    totalFacts += res.durable.length;
+    console.log(`=== ${scene.name ?? sceneId} (${sceneId}) — ${res.durable.length} durable fact(s) [ledger written] ===`);
+    console.log(`    participants: ${participants.map((p) => cleanName(p.name, p.key)).join(", ")}`);
     for (const p of res.planned) {
       console.log(`    [${p.lane} · ${p.scope}:${p.scopeId}${p.subject ? ` · about:${p.subject}` : ""}] ${p.summary}`);
     }
@@ -165,5 +187,9 @@ for (const scene of scenes) {
   }
 }
 
-console.log(`\n${APPLY ? "applied" : "would capture"}: ${totalPlanned} fact(s) across ${scenes.length} scene(s)${APPLY ? ` (${totalSaved} newly written, the rest deduped)` : ""}`);
-if (!APPLY && totalPlanned > 0) console.log("dry run — re-run with --apply to write (idempotent: createEntryIfUnique dedups).");
+if (APPLY) {
+  console.log(`\napplied: ${totalSaved} written from ledgers (${totalFacts} in ledgers; the rest deduped).`);
+} else {
+  console.log(`\nledger built: ${totalFacts} durable fact(s) across ${scenes.length} scene(s).`);
+  if (totalFacts > 0) console.log("review the list above, then re-run with --apply to write EXACTLY these (no re-extraction).");
+}

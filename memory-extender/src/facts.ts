@@ -166,8 +166,8 @@ export interface PlannedFact {
 
 export async function ingestSceneFacts(
   input: IngestSceneFactsInput,
-): Promise<{ saved: number; facts: number; planned: PlannedFact[] }> {
-  if (!sceneFactsEnabled() || input.chunks.length === 0) return { saved: 0, facts: 0, planned: [] };
+): Promise<{ saved: number; facts: number; planned: PlannedFact[]; durable: AmbientFact[] }> {
+  if (!sceneFactsEnabled() || input.chunks.length === 0) return { saved: 0, facts: 0, planned: [], durable: [] };
   const classify = input.classify ?? classifySceneFacts;
   const judge = input.judge ?? judgeDurableFacts;
   const ctx: FactContext = {
@@ -229,5 +229,5 @@ export async function ingestSceneFacts(
   if (saved > 0) {
     console.info(`[ME:scene-facts] ${input.characterName}: saved ${saved} durable fact(s) (${candidates.length} candidates) from ${input.chunks.length} chunks`);
   }
-  return { saved, facts: candidates.length, planned };
+  return { saved, facts: candidates.length, planned, durable };
 }

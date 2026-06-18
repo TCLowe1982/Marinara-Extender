@@ -42,14 +42,36 @@ small:
 | --- | --- | --- |
 | Prompt / instructions | ~1/6 | system prompt, schema, examples |
 | Input chunk | ~1/6 | the slice being processed |
-| Headroom | ~2/3 | the model's room to reason + produce output |
+| Remainder | ~2/3 | the answer (see task-dependency below) |
 
-The load-bearing constraint: **the input slice should be ≤ ~1/6 of the context
-window, and prompt + chunk together ≤ ~1/3.** A model operating near its limit
-degrades; leaving 2/3 free is what keeps extraction exhaustive instead of
-triaged. The window therefore **scales with the model**: a 200k-context model
-takes far larger slices than an 8k local model — sizing by a fixed chunk count
-(as the first 1dn cut did) is the anti-pattern.
+The load-bearing constraint is the same for every task: **the input slice should
+be ≤ ~1/6 of the context window, and prompt + chunk together ≤ ~1/3.** It
+**scales with the model**: a 200k-context model takes far larger slices than an
+8k local model — sizing by a fixed chunk count (as the first 1dn cut did) is the
+anti-pattern.
+
+### What the 2/3 is *for* depends on the task
+
+The reservation is real but its purpose flips by task type, and conflating them
+causes the classic regression below:
+
+- **Output-heavy tasks** (generation: arc rendering, scene prose) — the 2/3 is
+  literally the **output**. The hard token budget binds: a big answer needs room,
+  which is *why* the input must stay small.
+- **Extraction / classification** (fact capture, beat analysis, digest) — the
+  output is tiny (a few JSON facts), so the 2/3 is **not** output; it is mostly
+  free space. The input still stays ≤ ~1/6, but for a different reason:
+  **recall**. A model handed a large input *triages* — it returns the salient
+  results and silently drops the quiet ones — even when everything fits in
+  context. That is an attention limit, not a token-budget limit.
+
+> The trap: "extraction output is tiny, so I can make the input huge." No. The
+> Warlock fact was lost in a 10-chunk window that fit comfortably in context —
+> the failure was triage, not truncation. The ≤ ~1/6 input cap holds for
+> extraction *because of recall*, independent of how small the output is.
+
+So the cap is the invariant; the remainder is output-reserve when you generate
+and recall-slack when you extract.
 
 ## Applicability
 

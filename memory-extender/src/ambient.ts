@@ -284,3 +284,72 @@ export async function classifySceneFacts(sceneText: string, roster: string[] = [
   }
   return [];
 }
+
+// ── Durability judge (1dn, verify-before-assemble) ──────────────────────────────
+// classifySceneFacts has high recall but leaks: transient states, in-scene
+// dialogue, over-attribution. A second pass audits the candidates and keeps only
+// the durable ones before they're written to permanent memory. Prefers the same
+// strong model; fails OPEN (keeps all) if unavailable, so a judge hiccup never
+// silently drops everything — the dry-run preview is the human backstop.
+
+const JUDGE_SYSTEM_PROMPT = `You audit candidate facts pulled from a roleplay scene and keep ONLY the durable ones for long-term memory. Permanent memory must stay clean, so when in doubt, DROP.
+
+KEEP only a fact that would still be true next week, in a completely different scene:
+- identity / self-concept (a class, role, or archetype someone claims; what they are)
+- biography & history (where they grew up, their job, a past event that defines them — e.g. "exposed the Hargrove experiments", "named her Elden Ring character after MGS3's The Boss")
+- a STABLE preference or habit stated as a general truth ("prefers cold weather", "always wakes with one eye open")
+- a persistent relationship or piece of world/lore
+
+DROP (these are NOT durable, no matter how fact-like the phrasing):
+- anything describing THIS MOMENT: in his bed, wearing his shirt now, holding a pencil, hair disheveled right now
+- bodily/emotional states: aroused, "body responding with arousal", dick stiffening, turned on by X, wet, crying
+- something happening or agreed to within this scene only (agrees to a threesome; uses an endearment right now)
+- raw dialogue or introspection quoted as if it were a fact ("Yes, that's the joy of science", "You did it last night too", "I feel…")
+- a "preference" that is really just current arousal ("he is aroused by her in his shirt" — DROP)
+- vague, narrative, or empty statements
+
+Test each one: strip the scene away — is there a standalone fact about who someone IS or what happened in their life? If it only makes sense inside this moment, DROP it.
+
+You are given a numbered list. Return ONLY the indices to keep.
+Return JSON: {"keep":[<indices>]}. No prose, no markdown.`;
+
+function parseKeepIndices(raw: string | null): number[] | null {
+  if (!raw) return null;
+  const attempts = [raw.trim(), raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim() ?? ""];
+  for (const attempt of attempts) {
+    if (!attempt) continue;
+    try {
+      const parsed = JSON.parse(attempt) as unknown;
+      const arr = Array.isArray(parsed)
+        ? parsed
+        : (Array.isArray((parsed as { keep?: unknown })?.keep) ? (parsed as { keep: unknown[] }).keep : null);
+      if (!arr) continue;
+      return arr.map(Number).filter((n) => Number.isInteger(n));
+    } catch { /* try next */ }
+  }
+  return null;
+}
+
+export async function judgeDurableFacts(facts: AmbientFact[]): Promise<AmbientFact[]> {
+  if (facts.length === 0) return facts;
+  const list = facts.map((f, i) => `${i}. [about: ${f.subject ?? "?"}] ${f.fact}`).join("\n");
+  const prompt = `Candidate facts:\n${list}`;
+
+  const ext = () => callExternal(prompt, JUDGE_SYSTEM_PROMPT);
+  const loc = () => callLocal(prompt, JUDGE_SYSTEM_PROMPT);
+  const order = factsPreferExternal() ? [ext, loc] : [loc, ext];
+
+  let keep: number[] | null = null;
+  for (const call of order) {
+    keep = parseKeepIndices(await call());
+    if (keep !== null) break;
+  }
+  if (keep === null) {
+    console.warn(`[ME:facts-judge] judge unavailable — keeping all ${facts.length} (fail-open)`);
+    return facts;
+  }
+  const set = new Set(keep);
+  const kept = facts.filter((_, i) => set.has(i));
+  console.info(`[ME:facts-judge] kept ${kept.length}/${facts.length} as durable`);
+  return kept;
+}

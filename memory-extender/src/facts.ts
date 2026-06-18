@@ -14,7 +14,7 @@
 // right subject's ledger through the same dedup matrix the live path uses.
 
 import type { AmbientFact } from "./ambient.js";
-import { classifySceneFacts } from "./ambient.js";
+import { classifySceneFacts, judgeDurableFacts } from "./ambient.js";
 import type { Chunk } from "./sentiment/types.js";
 import type { Entry } from "./storage.js";
 import { createEntryIfUnique } from "./dedup.js";
@@ -125,6 +125,9 @@ export async function saveFact(
 
 // (sceneText, roster) — prose-aware, unlike the live candidate classifier.
 export type FactClassifier = (sceneText: string, roster: string[]) => Promise<AmbientFact[]>;
+// Verify-before-assemble: filters candidates to durable-only before they hit
+// permanent memory. Injectable so tests stay offline.
+export type FactJudge = (facts: AmbientFact[]) => Promise<AmbientFact[]>;
 
 // Off by default? No — on by default (like the live ambient pass), with an env
 // kill switch, because silent feature degradation is worse than the cost. It
@@ -148,6 +151,7 @@ export interface IngestSceneFactsInput {
   roster: string[];         // known character names, for subject attribution
   sourceChatId?: string;    // so a re-import cleanly replaces these facts
   classify?: FactClassifier; // injectable for tests
+  judge?: FactJudge;         // injectable for tests; default = durability judge
   dryRun?: boolean;          // resolve + plan, but never write (backfill preview)
 }
 
@@ -165,6 +169,7 @@ export async function ingestSceneFacts(
 ): Promise<{ saved: number; facts: number; planned: PlannedFact[] }> {
   if (!sceneFactsEnabled() || input.chunks.length === 0) return { saved: 0, facts: 0, planned: [] };
   const classify = input.classify ?? classifySceneFacts;
+  const judge = input.judge ?? judgeDurableFacts;
   const ctx: FactContext = {
     identityKey: input.characterId,
     fallbackChatId: input.sourceChatId ?? input.characterId,
@@ -175,11 +180,9 @@ export async function ingestSceneFacts(
   // fact to an absent cast member.
   const roster = await scopeRosterToScene(input.chunks, input.roster);
 
-  let saved = 0;
-  let factCount = 0;
-  const planned: PlannedFact[] = [];
-  const seen = new Set<string>(); // de-dupe identical facts across batches before any disk work
-
+  // Pass 1 — collect candidates across windows (high recall, some noise).
+  const candidates: AmbientFact[] = [];
+  const seen = new Set<string>(); // de-dupe identical facts across batches before any work
   for (let i = 0; i < input.chunks.length; i += SCENE_FACTS_BATCH) {
     const batch = input.chunks.slice(i, i + SCENE_FACTS_BATCH);
     // Label by ROLE, not character name. In a chat-imported scene every
@@ -193,30 +196,38 @@ export async function ingestSceneFacts(
       .join("\n\n")
       .trim();
     if (!sceneText) continue;
-
     let facts: AmbientFact[];
     try {
       facts = await classify(sceneText, roster);
     } catch {
-      continue; // one bad batch never aborts the pass
+      continue; // one bad window never aborts the pass
     }
-
     for (const fact of facts) {
       const key = `${fact.lane}|${fact.fact.trim().toLowerCase()}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      factCount++;
-      const target = await resolveFactTarget(fact, ctx);
-      if (!target) continue;
-      planned.push({ subject: fact.subject, lane: fact.lane, ...target });
-      if (input.dryRun) continue;
-      const entry = await saveFact(fact, ctx, input.sourceChatId);
-      if (entry) saved++;
+      candidates.push(fact);
     }
   }
 
-  if (saved > 0) {
-    console.info(`[ME:scene-facts] ${input.characterName}: saved ${saved} durable fact(s) from ${input.chunks.length} chunks`);
+  // Pass 2 — verify-before-assemble: filter candidates to durable-only over the
+  // FULL set in one judgment, before anything is written to permanent memory.
+  const durable = await judge(candidates);
+
+  // Pass 3 — route + persist the survivors.
+  let saved = 0;
+  const planned: PlannedFact[] = [];
+  for (const fact of durable) {
+    const target = await resolveFactTarget(fact, ctx);
+    if (!target) continue;
+    planned.push({ subject: fact.subject, lane: fact.lane, ...target });
+    if (input.dryRun) continue;
+    const entry = await saveFact(fact, ctx, input.sourceChatId);
+    if (entry) saved++;
   }
-  return { saved, facts: factCount, planned };
+
+  if (saved > 0) {
+    console.info(`[ME:scene-facts] ${input.characterName}: saved ${saved} durable fact(s) (${candidates.length} candidates) from ${input.chunks.length} chunks`);
+  }
+  return { saved, facts: candidates.length, planned };
 }

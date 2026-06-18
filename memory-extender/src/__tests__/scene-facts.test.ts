@@ -91,7 +91,7 @@ describe("ingestSceneFacts", () => {
       { text: "soft spot for paladins since 13", fact: "User has played a paladin since age 13", lane: "user_topics", scope: "character", subject: "user" },
       { text: "Warlock. Pact of the Tome.", fact: "Mari's D&D class is a Pact of the Tome Warlock", lane: "character_topics", scope: "character", subject: "Mari" },
     ];
-    const res = await ingestSceneFacts({ characterId: "mari", characterName: "Mari", chunks, roster: ["Mari"], sourceChatId: "scene-9", classify });
+    const res = await ingestSceneFacts({ characterId: "mari", characterName: "Mari", chunks, roster: ["Mari"], sourceChatId: "scene-9", classify, judge: async (f) => f });
     expect(res.saved).toBe(2);
 
     const idx = await readIndex("character", "mari");
@@ -104,8 +104,8 @@ describe("ingestSceneFacts", () => {
     const classify = async (): Promise<AmbientFact[]> => [
       { text: "Warlock", fact: "Mari is a Warlock", lane: "character_topics", scope: "character", subject: "Mari" },
     ];
-    // 30 chunks / batch 25 = 2 batches, each returns the same fact.
-    const res = await ingestSceneFacts({ characterId: "mari", characterName: "Mari", chunks: many, roster: ["Mari"], classify });
+    // 30 chunks / batch 5 = 6 batches, each returns the same fact.
+    const res = await ingestSceneFacts({ characterId: "mari", characterName: "Mari", chunks: many, roster: ["Mari"], classify, judge: async (f) => f });
     expect(res.facts).toBe(1); // counted once despite two batches
     expect(res.saved).toBe(1);
   });
@@ -115,7 +115,7 @@ describe("ingestSceneFacts", () => {
     const classify = async (): Promise<AmbientFact[]> => [
       { text: "x", fact: "should not be saved", lane: "character_topics", scope: "character", subject: "Mari" },
     ];
-    const res = await ingestSceneFacts({ characterId: "mari", characterName: "Mari", chunks, roster: ["Mari"], classify });
+    const res = await ingestSceneFacts({ characterId: "mari", characterName: "Mari", chunks, roster: ["Mari"], classify, judge: async (f) => f });
     expect(res).toEqual({ saved: 0, facts: 0, planned: [] });
   });
 });

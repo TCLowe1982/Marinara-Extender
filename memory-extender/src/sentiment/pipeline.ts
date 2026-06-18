@@ -16,6 +16,7 @@ import { Progress, progressEnabled } from "../progress.js";
 import { buildSubjectRoster, resolveNameToKey, matchesSessionName } from "../identity.js";
 import { normalizeLabel } from "../aliases.js";
 import { addPending } from "../holding-pool.js";
+import { ingestSceneFacts } from "../facts.js";
 
 export interface PipelineOptions {
   sourceType?: "chat" | "story";
@@ -266,6 +267,16 @@ export async function runSentimentPipeline(
     (failed ? `, ${failed} failed` : "") +
     `, ${passing.length - filtered.length} off-speaker`,
   );
+
+  // Durable-fact pass (1dn): identity/lore facts live BELOW the salience
+  // threshold that gates beats, so they never become beats. Run over the FULL
+  // chunk set (not just `filtered`/salient) so they're captured anyway. Guarded
+  // — a fact-pass failure must never fail an import that already saved its beats.
+  try {
+    await ingestSceneFacts({ characterId, characterName, chunks, roster, sourceChatId: options.sourceChatId });
+  } catch (err) {
+    console.warn("[ME:pipeline] scene-fact pass failed:", err);
+  }
 
   return {
     beats,

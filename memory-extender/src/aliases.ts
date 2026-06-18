@@ -171,18 +171,45 @@ export function findFuzzySuggestion(
 
 // ── Mutate ───────────────────────────────────────────────────────────────────
 
+// A compound label names more than one entity ("Mari and TC", "Priya, Mari",
+// "Mari & TC") and must never become a single character's alias — it poisons
+// routing for every name it contains. "and"/"with"/"plus" are matched only as
+// whole space-delimited words so a name like "Anderson" or "Sandra" is safe.
+export function isCompoundLabel(label: string): boolean {
+  const padded = ` ${label.toLowerCase()} `;
+  return /\s(and|with|plus)\s/.test(padded) || /[&,/+]/.test(label);
+}
+
 // Add a label as an alias of identityKey (creating the record if new). Dedups
 // on normalized form; bumps nothing if already present. canonicalName sets/keeps
 // the display name.
+//
+// Two guards (MarinaraExtender-50e): the learner had recorded "Mari and TC" (a
+// compound) and "Thomas" (the player) as aliases of a character, so the player's
+// own facts routed into that character's ledger. We refuse (a) compound labels
+// and (b) any label already claimed by the user/persona — a player name is never
+// a character alias.
 export async function addAlias(
   identityKey: string,
   canonicalName: string,
   label: string,
 ): Promise<void> {
+  if (isCompoundLabel(label)) {
+    console.info(`[ME:alias] refused compound label "${label}" for ${identityKey} (names more than one entity)`);
+    return;
+  }
   await mutateYamlFile<AliasTable>(aliasTablePath(), () => ({}), (table) => {
+    const norm = normalizeLabel(label);
+    // Never let a player/persona name become a CHARACTER alias.
+    if (identityKey !== USER_IDENTITY_KEY) {
+      const userRec = table[USER_IDENTITY_KEY];
+      if (userRec && recordLabels(userRec).has(norm)) {
+        console.info(`[ME:alias] refused "${label}" for ${identityKey} — it is a player/persona name (belongs to ${USER_IDENTITY_KEY})`);
+        return;
+      }
+    }
     const rec = (table[identityKey] ??= { canonicalName, aliases: [], aliasMeta: {} });
     rec.canonicalName = canonicalName || rec.canonicalName;
-    const norm = normalizeLabel(label);
     const known = recordLabels(rec);
     if (!known.has(norm)) {
       rec.aliases.push(label.trim());

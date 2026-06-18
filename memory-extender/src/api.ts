@@ -56,6 +56,7 @@ import {
   removeAlias,
   findExactMatches,
   normalizeLabel,
+  USER_IDENTITY_KEY,
 } from "./aliases.js";
 import { chunkMessages } from "./sentiment/chunker.js";
 import {
@@ -468,6 +469,14 @@ export function registerApiRoutes(app: FastifyInstance): void {
     }
 
     const identityKey = await resolveIdentity(characterId, characterName);
+
+    // Register the player's persona name under the reserved user key so the
+    // alias-learner can refuse to ever attach it to a character (50e: "Thomas"
+    // had been learned as an alias of Mari, routing the player's facts into her
+    // ledger). Best-effort, fire-and-forget; compound names are refused inside.
+    if (personaName?.trim()) {
+      void addAlias(USER_IDENTITY_KEY, personaName.trim(), personaName.trim()).catch(() => {});
+    }
 
     // Update soft clock — AI text drives time-of-day; the user's message drives
     // explicit presence ("I'm leaving" / "I'm back"). Gated behind the time-sense

@@ -73,6 +73,37 @@ causes the classic regression below:
 So the cap is the invariant; the remainder is output-reserve when you generate
 and recall-slack when you extract.
 
+## Assembly discipline: aggregate by consensus, not union
+
+The assemble step (4) is not free, and it has its own anti-pattern. When you
+process the same input multiple times to beat single-pass variance, **naive
+union — OR every pass's output together — is the wrong way to combine them.**
+Union keeps near-duplicates (the same item reworded), overwhelms any downstream
+filter, and, worst, preserves a one-off error from a single pass as if it were
+signal.
+
+> Worked example (this is how the corollary was found — by violating it): a
+> 3-pass fact extraction produced 74 candidates, the durability judge kept ~71
+> (its filter overwhelmed), and a mis-attribution present in only **1 of 3**
+> passes survived the union — "Priya's D&D class is a Pact of the Tome Warlock"
+> (it is Mari's). More passes produced *more* noise, the opposite of the intent.
+
+The discipline is **consensus in a normalized space**:
+
+1. **Normalize before counting.** "Mari's class is Pact of the Tome Warlock" and
+   "Mari is a Pact of the Tome Warlock" are the same fact; counted raw they are
+   two singletons and neither reaches consensus. Collapse to a canonical identity
+   first — embedding-similarity clustering, or a cheap LLM normalization pass.
+2. **Count occurrences in normalized space.**
+3. **Keep on majority.** Keep an item only if it recurs in `consensus_count ≥
+   floor(N/2)+1` passes **with consistent attribution**. A one-off (the 1/3
+   mis-attribution) drops out; a real item (Warlock-as-Mari, 3/3) stays. On
+   conflicting attribution across passes, take the majority subject or drop.
+
+Done this way, **more passes = higher confidence**. Union does the reverse — so
+the multi-pass *count* and the multi-pass *aggregation* are two separate
+disciplines, and skipping the second negates the first.
+
 ## Applicability
 
 Use it whenever:

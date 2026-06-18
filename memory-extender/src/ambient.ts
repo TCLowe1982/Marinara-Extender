@@ -225,6 +225,10 @@ A durable fact may span SEVERAL sentences — assemble it into one. Example: fro
 "Warlock. Pact of the Tome. My patron is the Narrative itself." extract one fact:
 the speaker's D&D class is a Pact of the Tome Warlock whose patron is the Narrative.
 
+Be EXHAUSTIVE. A passage usually contains several durable facts, about different
+people and topics. List every one — do not stop at the most prominent; a quiet
+identity fact (a class, a hometown, a job) matters as much as a vivid one.
+
 DO NOT extract:
 - moment-to-moment physical action or scene choreography (who touched whom, who moved)
 - transient states (currently aroused, crying, holding a cup)

@@ -109,10 +109,12 @@ export function sceneFactsEnabled(): boolean {
   return !(v === "0" || v?.toLowerCase() === "off");
 }
 
-// Chunks of PROSE per classify call. Lower than a sentence-candidate batch
-// because each chunk is a full merged turn; keeps the window inside a small
-// local model's context.
-const SCENE_FACTS_BATCH = 10;
+// Chunks of PROSE per classify call. Kept SMALL: in a large window the model
+// triages to a few salient facts and crowds out the quiet ones (a 10-chunk
+// window dropped "Mari is a Pact of the Tome Warlock" that the same model
+// extracted cleanly from a focused window). Smaller windows = more attention
+// per fact = higher recall, at the cost of more (still bounded) calls.
+const SCENE_FACTS_BATCH = 5;
 
 export interface IngestSceneFactsInput {
   characterId: string;
@@ -151,9 +153,16 @@ export async function ingestSceneFacts(
 
   for (let i = 0; i < input.chunks.length; i += SCENE_FACTS_BATCH) {
     const batch = input.chunks.slice(i, i + SCENE_FACTS_BATCH);
-    // Speaker-prefixed prose so the model has turn context but attributes by
-    // content (a character often states a fact about someone else).
-    const sceneText = batch.map((c) => `${c.speaker}: ${c.text}`).join("\n\n").trim();
+    // Label by ROLE, not character name. In a chat-imported scene every
+    // assistant message is tagged with the ONE session character, so prefixing
+    // the speaker name lies — it labels another character's dialogue with the
+    // bucket name and the model mis-attributes (it called Mari's Warlock class
+    // "Priya's"). The user/scene split is reliable; specific characters are
+    // attributed from in-text cues ("…Mari says…") + the roster.
+    const sceneText = batch
+      .map((c) => `${normalizeLabel(c.speaker) === "user" ? "User" : "Scene"}: ${c.text}`)
+      .join("\n\n")
+      .trim();
     if (!sceneText) continue;
 
     let facts: AmbientFact[];

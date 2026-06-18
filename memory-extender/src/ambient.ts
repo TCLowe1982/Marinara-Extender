@@ -159,7 +159,7 @@ async function callExternal(prompt: string, system: string = SYSTEM_PROMPT): Pro
         model,
         messages: [{ role: "system", content: system }, { role: "user", content: prompt }],
         temperature: 0.1,
-        max_tokens: 800,
+        max_tokens: 1500,
       }),
       signal: AbortSignal.timeout(30_000),
     });
@@ -240,6 +240,18 @@ LANE = user_topics for facts about the user/player; character_topics for facts a
 Return JSON only: {"facts":[{"text":"<short supporting quote/paraphrase>","fact":"<the durable fact>","lane":"user_topics|character_topics","scope":"character|chat","subject":"<user or name>"}]}
 Return {"facts":[]} if nothing durable is stated. No markdown, no explanation.`;
 
+// Fact extraction is RARE (once per scene/import) and QUALITY-critical, unlike
+// per-turn beats (frequent, latency-sensitive — local is right there). So facts
+// prefer the strongest model available. MARINARA_EXTENDER_FACTS_MODEL:
+//   "external" — always the configured API   "local" — always the local model
+//   "auto" (default) — external when an API key is set, else local.
+export function factsPreferExternal(): boolean {
+  const v = process.env.MARINARA_EXTENDER_FACTS_MODEL?.trim().toLowerCase();
+  if (v === "external") return true;
+  if (v === "local") return false;
+  return !!process.env.MARINARA_EXTENDER_API_KEY; // auto
+}
+
 // Reads a window of scene prose (speaker-prefixed lines) and returns durable
 // facts. Same AmbientFact shape, so the caller routes/dedups identically.
 export async function classifySceneFacts(sceneText: string, roster: string[] = []): Promise<AmbientFact[]> {
@@ -247,9 +259,18 @@ export async function classifySceneFacts(sceneText: string, roster: string[] = [
   const rosterLine = roster.length > 0 ? `Known characters: ${roster.join(", ")}\n\n` : "";
   const prompt = `${rosterLine}Scene transcript:\n${sceneText}`;
 
-  let raw = await callLocal(prompt, SCENE_FACTS_SYSTEM_PROMPT);
-  if (raw !== null && !looksLikeJson(raw)) raw = null;
-  if (raw === null) raw = await callExternal(prompt, SCENE_FACTS_SYSTEM_PROMPT);
+  // Try the preferred model, then fall back to the other so a missing key or a
+  // down endpoint still yields whatever the available model can manage. Parse
+  // each result with parseFactsJson (which already unwraps ```json fences and
+  // bare arrays) rather than pre-gating on looksLikeJson — a frontier model
+  // routinely fences or prefaces its JSON, and gating threw that away.
+  const ext = () => callExternal(prompt, SCENE_FACTS_SYSTEM_PROMPT);
+  const loc = () => callLocal(prompt, SCENE_FACTS_SYSTEM_PROMPT);
+  const order = factsPreferExternal() ? [ext, loc] : [loc, ext];
 
-  return parseFactsJson(raw);
+  for (const call of order) {
+    const facts = parseFactsJson(await call());
+    if (facts.length > 0) return facts;
+  }
+  return [];
 }

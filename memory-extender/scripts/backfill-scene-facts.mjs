@@ -35,11 +35,30 @@ const APPLY = process.argv.includes("--apply");
 const sceneArgIdx = process.argv.indexOf("--scene");
 const ONLY_SCENE = sceneArgIdx !== -1 ? process.argv[sceneArgIdx + 1] : null;
 
+// Load .env so the API key / upstream / model are available in this separate
+// process — the sidecar does this at startup; the script is not the sidecar, so
+// without it the external (strong) model path silently can't authenticate.
+const envPath = join(PKG, ".env");
+if (existsSync(envPath)) {
+  for (const line of readFileSync(envPath, "utf8").split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const eq = t.indexOf("=");
+    if (eq < 1) continue;
+    const k = t.slice(0, eq).trim();
+    const v = t.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
+    if (k && !(k in process.env)) process.env[k] = v;
+  }
+}
+
 const imp = (p) => import(pathToFileURL(join(DIST, p)).href);
 const { ingestSceneFacts } = await imp("facts.js");
 const { chunkMessages } = await imp("sentiment/chunker.js");
 const { buildSubjectRoster } = await imp("identity.js");
 const { getDataDir } = await imp("storage.js");
+const { factsPreferExternal } = await imp("ambient.js");
+const { externalModel, localModel } = await imp("llm-config.js");
+console.log(`facts model: ${factsPreferExternal() ? `external (${externalModel()})` : `local (${localModel()})`}`);
 
 // READ-ONLY identity resolution. resolveIdentity() would CREATE map entries and
 // migrate data dirs for unknown IDs — unacceptable in a dry run — so we read the

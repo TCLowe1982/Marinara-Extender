@@ -110,6 +110,23 @@ describe("ingestSceneFacts", () => {
     expect(res.saved).toBe(1);
   });
 
+  it("unions facts across multiple passes (the recall fix)", async () => {
+    // A single window, extracted twice, returns a DIFFERENT fact each pass —
+    // exactly the variance the union exists to beat. Both must survive.
+    let call = 0;
+    const classify = async (): Promise<AmbientFact[]> => {
+      call++;
+      return call % 2 === 1
+        ? [{ text: "a", fact: "Mari is a Pact of the Tome Warlock", lane: "character_topics", scope: "character", subject: "Mari" }]
+        : [{ text: "b", fact: "Mari grew up in Kraków", lane: "character_topics", scope: "character", subject: "Mari" }];
+    };
+    const res = await ingestSceneFacts({
+      characterId: "mari", characterName: "Mari", chunks: chunks.slice(1, 2), roster: ["Mari"],
+      classify, judge: async (f) => f, passes: 2,
+    });
+    expect(res.facts).toBe(2); // one window × two passes → two distinct facts unioned
+  });
+
   it("honors the MARINARA_EXTENDER_SCENE_FACTS=0 kill switch", async () => {
     process.env.MARINARA_EXTENDER_SCENE_FACTS = "0";
     const classify = async (): Promise<AmbientFact[]> => [

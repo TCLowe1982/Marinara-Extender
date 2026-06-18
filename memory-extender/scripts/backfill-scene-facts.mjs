@@ -34,6 +34,8 @@ const TABLES = process.env.MARINARA_ENGINE_TABLES
 const APPLY = process.argv.includes("--apply");
 const sceneArgIdx = process.argv.indexOf("--scene");
 const ONLY_SCENE = sceneArgIdx !== -1 ? process.argv[sceneArgIdx + 1] : null;
+const passesArgIdx = process.argv.indexOf("--passes");
+const PASSES = passesArgIdx !== -1 ? Math.max(1, Math.min(5, parseInt(process.argv[passesArgIdx + 1], 10) || 1)) : undefined;
 
 // Load .env so the API key / upstream / model are available in this separate
 // process — the sidecar does this at startup; the script is not the sidecar, so
@@ -168,7 +170,8 @@ for (const scene of scenes) {
   const roster = await buildSubjectRoster(primaryName);
 
   const res = await ingestSceneFacts({
-    characterId: primaryKey, characterName: primaryName, chunks, roster, sourceChatId: sceneId, dryRun: true,
+    characterId: primaryKey, characterName: primaryName, chunks, roster, sourceChatId: sceneId,
+    ...(PASSES ? { passes: PASSES } : {}), dryRun: true,
   });
 
   if (res.durable.length > 0) {

@@ -137,6 +137,17 @@ export function sceneFactsEnabled(): boolean {
   return !(v === "0" || v?.toLowerCase() === "off");
 }
 
+// How many extraction passes per window to UNION. A single pass is a
+// high-variance sample — it drops a different subset of facts each run — so
+// running each window N times and unioning the results dramatically raises
+// recall (a fact you want appears in most passes). Default 1: this multiplies
+// model calls (best case ~3 frontier calls/window when set to 3), so it is
+// opt-in via MARINARA_EXTENDER_FACTS_PASSES for the quality/backfill use case.
+export function factsPasses(): number {
+  const v = parseInt(process.env.MARINARA_EXTENDER_FACTS_PASSES ?? "", 10);
+  return Number.isFinite(v) && v >= 1 && v <= 5 ? v : 1;
+}
+
 // Chunks of PROSE per classify call. Kept SMALL: in a large window the model
 // triages to a few salient facts and crowds out the quiet ones (a 10-chunk
 // window dropped "Mari is a Pact of the Tome Warlock" that the same model
@@ -152,6 +163,7 @@ export interface IngestSceneFactsInput {
   sourceChatId?: string;    // so a re-import cleanly replaces these facts
   classify?: FactClassifier; // injectable for tests
   judge?: FactJudge;         // injectable for tests; default = durability judge
+  passes?: number;           // extraction passes to union; default = factsPasses()
   dryRun?: boolean;          // resolve + plan, but never write (backfill preview)
 }
 
@@ -181,8 +193,12 @@ export async function ingestSceneFacts(
   const roster = await scopeRosterToScene(input.chunks, input.roster);
 
   // Pass 1 — collect candidates across windows (high recall, some noise).
+  // Each window is extracted `passes` times and the results UNIONED: a single
+  // pass drops a different subset each run, so unioning N passes catches facts
+  // any one missed (the recall fix). Default 1 pass; opt-in to more.
+  const passes = Math.max(1, input.passes ?? factsPasses());
   const candidates: AmbientFact[] = [];
-  const seen = new Set<string>(); // de-dupe identical facts across batches before any work
+  const seen = new Set<string>(); // de-dupe identical facts across passes + windows
   for (let i = 0; i < input.chunks.length; i += SCENE_FACTS_BATCH) {
     const batch = input.chunks.slice(i, i + SCENE_FACTS_BATCH);
     // Label by ROLE, not character name. In a chat-imported scene every
@@ -196,17 +212,19 @@ export async function ingestSceneFacts(
       .join("\n\n")
       .trim();
     if (!sceneText) continue;
-    let facts: AmbientFact[];
-    try {
-      facts = await classify(sceneText, roster);
-    } catch {
-      continue; // one bad window never aborts the pass
-    }
-    for (const fact of facts) {
-      const key = `${fact.lane}|${fact.fact.trim().toLowerCase()}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      candidates.push(fact);
+    for (let p = 0; p < passes; p++) {
+      let facts: AmbientFact[];
+      try {
+        facts = await classify(sceneText, roster);
+      } catch {
+        continue; // one bad pass/window never aborts the rest
+      }
+      for (const fact of facts) {
+        const key = `${fact.lane}|${fact.fact.trim().toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        candidates.push(fact);
+      }
     }
   }
 

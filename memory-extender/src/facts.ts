@@ -20,6 +20,7 @@ import type { Entry } from "./storage.js";
 import { createEntryIfUnique } from "./dedup.js";
 import { resolveNameToKey, matchesSessionName } from "./identity.js";
 import { normalizeLabel, readAliasTable, USER_IDENTITY_KEY } from "./aliases.js";
+import { fetchEmbeddings, cosineSim } from "./embeddings.js";
 
 // Scope the subject roster to characters actually MENTIONED in the scene, not
 // the whole cast. With the global cast in the prompt the model attributed a
@@ -121,6 +122,77 @@ export async function saveFact(
   });
 }
 
+// ── Consensus aggregation (967, the assembly discipline) ────────────────────────
+// Multiple extraction passes beat single-pass variance, but naive UNION is the
+// anti-pattern: it keeps near-dupes, drowns the judge, and preserves a one-off
+// mis-attribution from a single pass as if it were signal. Consensus instead:
+// cluster candidates by MEANING (so "Mari's class is X" and "Mari is X" are one
+// item), count distinct passes per cluster, and keep only clusters that recur in
+// a majority of passes — with the majority attribution. One-offs drop out.
+
+const CONSENSUS_TAU = 0.85; // cosine similarity to treat two facts as the same
+
+type EmbedFn = (texts: string[]) => Promise<number[][] | null>;
+
+export async function consensusFilter(
+  perPass: AmbientFact[][],
+  minPasses: number,
+  embed: EmbedFn = fetchEmbeddings,
+): Promise<AmbientFact[]> {
+  const items: { f: AmbientFact; pass: number }[] = [];
+  perPass.forEach((facts, p) => facts.forEach((f) => items.push({ f, pass: p })));
+  if (items.length === 0) return [];
+
+  // Cluster. Embedding space if available (collapses rephrasings); otherwise fall
+  // back to normalized-exact text (degraded — near-dupes won't merge, so semantic
+  // clustering needs the embed model pulled to reach full recall).
+  const vectors = await embed(items.map((it) => it.f.fact)).catch(() => null);
+  const clusters: number[][] = [];
+  if (vectors && vectors.length === items.length) {
+    const centroids: number[][] = [];
+    for (let i = 0; i < items.length; i++) {
+      let best = -1;
+      let bestSim = CONSENSUS_TAU;
+      for (let c = 0; c < clusters.length; c++) {
+        const sim = cosineSim(vectors[i]!, centroids[c]!);
+        if (sim >= bestSim) { bestSim = sim; best = c; }
+      }
+      if (best === -1) { clusters.push([i]); centroids.push(vectors[i]!); }
+      else clusters[best]!.push(i);
+    }
+  } else {
+    console.warn("[ME:consensus] embeddings unavailable — clustering on exact text (lower recall; pull the embed model for semantic consensus)");
+    const byKey = new Map<string, number>();
+    for (let i = 0; i < items.length; i++) {
+      const key = `${items[i]!.f.lane}|${normalizeLabel(items[i]!.f.fact)}`;
+      const at = byKey.get(key);
+      if (at !== undefined) clusters[at]!.push(i);
+      else { byKey.set(key, clusters.length); clusters.push([i]); }
+    }
+  }
+
+  const kept: AmbientFact[] = [];
+  for (const cluster of clusters) {
+    const passes = new Set(cluster.map((i) => items[i]!.pass));
+    if (passes.size < minPasses) continue; // one-off — not consensus
+    // Majority attribution across the cluster; tie broken by first seen.
+    const subjCount = new Map<string, number>();
+    for (const i of cluster) {
+      const s = items[i]!.f.subject ?? "?";
+      subjCount.set(s, (subjCount.get(s) ?? 0) + 1);
+    }
+    const majSubject = [...subjCount.entries()].sort((a, b) => b[1] - a[1])[0]![0];
+    // Representative: the most complete phrasing carrying the majority subject.
+    const rep = cluster
+      .map((i) => items[i]!.f)
+      .filter((f) => (f.subject ?? "?") === majSubject)
+      .sort((a, b) => b.fact.length - a.fact.length)[0]!;
+    kept.push(rep);
+  }
+  console.info(`[ME:consensus] ${kept.length}/${clusters.length} cluster(s) reached consensus (>=${minPasses} of ${perPass.length} passes)`);
+  return kept;
+}
+
 // ── Scene-wide fact pass ───────────────────────────────────────────────────────
 
 // (sceneText, roster) — prose-aware, unlike the live candidate classifier.
@@ -163,7 +235,8 @@ export interface IngestSceneFactsInput {
   sourceChatId?: string;    // so a re-import cleanly replaces these facts
   classify?: FactClassifier; // injectable for tests
   judge?: FactJudge;         // injectable for tests; default = durability judge
-  passes?: number;           // extraction passes to union; default = factsPasses()
+  passes?: number;           // extraction passes; default = factsPasses()
+  embed?: EmbedFn;           // injectable for tests; default = fetchEmbeddings
   dryRun?: boolean;          // resolve + plan, but never write (backfill preview)
 }
 
@@ -192,13 +265,12 @@ export async function ingestSceneFacts(
   // fact to an absent cast member.
   const roster = await scopeRosterToScene(input.chunks, input.roster);
 
-  // Pass 1 — collect candidates across windows (high recall, some noise).
-  // Each window is extracted `passes` times and the results UNIONED: a single
-  // pass drops a different subset each run, so unioning N passes catches facts
-  // any one missed (the recall fix). Default 1 pass; opt-in to more.
+  // Pass 1 — collect candidates. Each window is extracted `passes` times, kept
+  // SEPARATED by pass (no cross-pass dedup) so consensus can count how many
+  // passes agree. Default 1 pass; opt-in to more for the recall/quality boost.
   const passes = Math.max(1, input.passes ?? factsPasses());
-  const candidates: AmbientFact[] = [];
-  const seen = new Set<string>(); // de-dupe identical facts across passes + windows
+  const perPass: AmbientFact[][] = Array.from({ length: passes }, () => []);
+  const seenPerPass: Set<string>[] = Array.from({ length: passes }, () => new Set());
   for (let i = 0; i < input.chunks.length; i += SCENE_FACTS_BATCH) {
     const batch = input.chunks.slice(i, i + SCENE_FACTS_BATCH);
     // Label by ROLE, not character name. In a chat-imported scene every
@@ -221,12 +293,19 @@ export async function ingestSceneFacts(
       }
       for (const fact of facts) {
         const key = `${fact.lane}|${fact.fact.trim().toLowerCase()}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        candidates.push(fact);
+        if (seenPerPass[p]!.has(key)) continue; // dedup WITHIN a pass only
+        seenPerPass[p]!.add(key);
+        perPass[p]!.push(fact);
       }
     }
   }
+
+  // Aggregate. Single pass: use as-is. Multi-pass: CONSENSUS — keep only facts
+  // that recur in a majority of passes (floor(N/2)+1), clustered by meaning, with
+  // the majority attribution. Naive union (the anti-pattern) would keep one-offs.
+  const candidates = passes === 1
+    ? perPass[0]!
+    : await consensusFilter(perPass, Math.floor(passes / 2) + 1, input.embed);
 
   // Pass 2 — verify-before-assemble: filter candidates to durable-only over the
   // FULL set in one judgment, before anything is written to permanent memory.

@@ -110,21 +110,25 @@ describe("ingestSceneFacts", () => {
     expect(res.saved).toBe(1);
   });
 
-  it("unions facts across multiple passes (the recall fix)", async () => {
-    // A single window, extracted twice, returns a DIFFERENT fact each pass —
-    // exactly the variance the union exists to beat. Both must survive.
+  it("multi-pass keeps the CONSENSUS fact and drops the one-off (recall + precision)", async () => {
+    // 3 passes of one window: the Warlock fact appears every pass (consensus),
+    // a mis-attribution appears in ONE pass (must be dropped). embed injected to
+    // force the exact-text fallback (deterministic, offline).
     let call = 0;
     const classify = async (): Promise<AmbientFact[]> => {
       call++;
-      return call % 2 === 1
-        ? [{ text: "a", fact: "Mari is a Pact of the Tome Warlock", lane: "character_topics", scope: "character", subject: "Mari" }]
-        : [{ text: "b", fact: "Mari grew up in Kraków", lane: "character_topics", scope: "character", subject: "Mari" }];
+      const facts: AmbientFact[] = [
+        { text: "w", fact: "Mari is a Pact of the Tome Warlock", lane: "character_topics", scope: "character", subject: "Mari" },
+      ];
+      if (call === 1) facts.push({ text: "x", fact: "Priya is a Pact of the Tome Warlock", lane: "character_topics", scope: "character", subject: "Priya" });
+      return facts;
     };
     const res = await ingestSceneFacts({
-      characterId: "mari", characterName: "Mari", chunks: chunks.slice(1, 2), roster: ["Mari"],
-      classify, judge: async (f) => f, passes: 2,
+      characterId: "mari", characterName: "Mari", chunks: chunks.slice(1, 2), roster: ["Mari", "Priya"],
+      classify, judge: async (f) => f, passes: 3, embed: async () => null, // null -> exact-text clustering
     });
-    expect(res.facts).toBe(2); // one window × two passes → two distinct facts unioned
+    // Warlock-as-Mari: 3/3 passes -> kept. Priya mis-attribution: 1/3 -> dropped.
+    expect(res.durable.map((f) => f.fact)).toEqual(["Mari is a Pact of the Tome Warlock"]);
   });
 
   it("honors the MARINARA_EXTENDER_SCENE_FACTS=0 kill switch", async () => {

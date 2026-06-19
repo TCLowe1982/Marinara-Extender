@@ -36,6 +36,10 @@ const sceneArgIdx = process.argv.indexOf("--scene");
 const ONLY_SCENE = sceneArgIdx !== -1 ? process.argv[sceneArgIdx + 1] : null;
 const passesArgIdx = process.argv.indexOf("--passes");
 const PASSES = passesArgIdx !== -1 ? Math.max(1, Math.min(5, parseInt(process.argv[passesArgIdx + 1], 10) || 1)) : undefined;
+// --judge-passes N: multi-pass durability-judge consensus (8jw). Set into the env
+// the judge reads at call time; default 1 (single pass) leaves the path unchanged.
+const judgePassesArgIdx = process.argv.indexOf("--judge-passes");
+if (judgePassesArgIdx !== -1) process.env.MARINARA_EXTENDER_JUDGE_PASSES = String(process.argv[judgePassesArgIdx + 1] ?? "1");
 
 // Load .env so the API key / upstream / model are available in this separate
 // process — the sidecar does this at startup; the script is not the sidecar, so

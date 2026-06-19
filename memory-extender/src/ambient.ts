@@ -344,26 +344,69 @@ function parseKeepIndices(raw: string | null): number[] | null {
   return null;
 }
 
-export async function judgeDurableFacts(facts: AmbientFact[]): Promise<AmbientFact[]> {
-  if (facts.length === 0) return facts;
-  const list = facts.map((f, i) => `${i}. [about: ${f.subject ?? "?"}] ${f.fact}`).join("\n");
-  const prompt = `Candidate facts:\n${list}`;
+// How many independent judge passes to run and combine by majority vote (8jw).
+// A single judge pass is high-variance on borderline candidates — abstract
+// durables get dropped and identity-masked transients survive, both flipping
+// run-to-run. Voting over N passes and keeping only on a strict majority
+// stabilizes recall AND precision at once. Default 1 (no consensus; behaviour and
+// cost unchanged) — opt in via MARINARA_EXTENDER_JUDGE_PASSES for backfill/quality.
+export function judgePasses(): number {
+  const v = parseInt(process.env.MARINARA_EXTENDER_JUDGE_PASSES ?? "", 10);
+  return Number.isFinite(v) && v >= 1 && v <= 5 ? v : 1;
+}
 
+// One judge pass over the candidate list → kept indices, or null if no model was
+// reachable (so a dead pass ABSTAINS from the vote rather than voting everything
+// down). Injectable so the consensus aggregation is testable offline.
+export type JudgePass = (prompt: string) => Promise<number[] | null>;
+const defaultJudgePass: JudgePass = async (prompt) => {
   const ext = () => callExternal(prompt, JUDGE_SYSTEM_PROMPT);
   const loc = () => callLocal(prompt, JUDGE_SYSTEM_PROMPT);
   const order = factsPreferExternal() ? [ext, loc] : [loc, ext];
-
-  let keep: number[] | null = null;
   for (const call of order) {
-    keep = parseKeepIndices(await call());
-    if (keep !== null) break;
+    const keep = parseKeepIndices(await call());
+    if (keep !== null) return keep;
   }
-  if (keep === null) {
-    console.warn(`[ME:facts-judge] judge unavailable — keeping all ${facts.length} (fail-open)`);
+  return null;
+};
+
+export async function judgeDurableFacts(
+  facts: AmbientFact[],
+  opts?: { passes?: number; judgePass?: JudgePass },
+): Promise<AmbientFact[]> {
+  if (facts.length === 0) return facts;
+  const list = facts.map((f, i) => `${i}. [about: ${f.subject ?? "?"}] ${f.fact}`).join("\n");
+  const prompt = `Candidate facts:\n${list}`;
+  const passes = Math.max(1, opts?.passes ?? judgePasses());
+  const judgePass = opts?.judgePass ?? defaultJudgePass;
+
+  // Run N independent passes; each REACHABLE pass votes its keep-set. A pass that
+  // can't reach a model abstains (null) — it does not vote everything down.
+  const votes = new Array(facts.length).fill(0);
+  let okPasses = 0;
+  for (let p = 0; p < passes; p++) {
+    const keep = await judgePass(prompt);
+    if (keep === null) continue;
+    okPasses++;
+    for (const i of keep) if (Number.isInteger(i) && i >= 0 && i < facts.length) votes[i]++;
+  }
+
+  if (okPasses === 0) {
+    console.warn(`[ME:facts-judge] judge unavailable across ${passes} pass(es) — keeping all ${facts.length} (fail-open)`);
     return facts;
   }
-  const set = new Set(keep);
-  const kept = facts.filter((_, i) => set.has(i));
-  console.info(`[ME:facts-judge] kept ${kept.length}/${facts.length} as durable`);
+
+  // Keep on a strict majority of the SUCCESSFUL passes (floor(ok/2)+1). okPasses=1
+  // reduces to the old single-pass behaviour exactly. Majority — not unanimous —
+  // is deliberate: an over-DROP is silent data loss (the fact never reaches the
+  // ledger), an over-keep is caught by the apply-review gate, so we bias toward
+  // recall. An abstract durable kept 2/3 survives; a transient kept 1/3 drops.
+  const threshold = Math.floor(okPasses / 2) + 1;
+  const kept = facts.filter((_, i) => votes[i] >= threshold);
+  console.info(
+    okPasses > 1
+      ? `[ME:facts-judge] consensus kept ${kept.length}/${facts.length} (>=${threshold} of ${okPasses} passes)`
+      : `[ME:facts-judge] kept ${kept.length}/${facts.length} as durable`,
+  );
   return kept;
 }

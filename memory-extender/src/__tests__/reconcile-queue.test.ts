@@ -104,13 +104,35 @@ describe("drainReconcileQueue", () => {
     expect(idx?.entries.length ?? 0).toBe(0);
   });
 
-  it("APPLY: executes the verdict (CREATE writes the recovered fact)", async () => {
+  it("APPLY (gated): a high-confidence, non-sensitive verdict auto-applies", async () => {
     await seedTask("Mari mains a blood-elf warlock in WoW", "ctopic-old");
-    const curate = async (): Promise<CuratorDecision> => ({ verdict: "CREATE", rationale: "distinct, was wrongly dropped" });
+    const curate = async (): Promise<CuratorDecision> => ({ verdict: "CREATE", rationale: "distinct, was wrongly dropped", confidence: "high" });
     const res = await drainReconcileQueue({ apply: true, curate });
-    expect(res).toMatchObject({ processed: 1, decided: 1, applied: 1 });
+    expect(res).toMatchObject({ processed: 1, decided: 1, applied: 1, held: 0 });
     const idx = await readIndex("character", "mari");
     expect((idx?.entries ?? []).some((e) => /blood-elf warlock/.test(e.summary))).toBe(true);
+  });
+
+  it("APPLY (gated): a below-confidence verdict is HELD, not applied", async () => {
+    await seedTask("Mari prefers tea over coffee", "ctopic-old");
+    const curate = async (): Promise<CuratorDecision> => ({ verdict: "CREATE", rationale: "maybe new", confidence: "medium" });
+    const res = await drainReconcileQueue({ apply: true, curate });
+    expect(res).toMatchObject({ applied: 0, held: 1 });
+    expect((await readIndex("character", "mari"))?.entries?.length ?? 0).toBe(0); // nothing written
+  });
+
+  it("APPLY (gated): a trauma-adjacent verdict is HELD even at high confidence", async () => {
+    await seedTask("Mari's PTSD flashbacks from the deployment", "ctopic-old");
+    const curate = async (): Promise<CuratorDecision> => ({ verdict: "CREATE", rationale: "x", confidence: "high" });
+    const res = await drainReconcileQueue({ apply: true, curate });
+    expect(res).toMatchObject({ applied: 0, held: 1 }); // domain flag overrides high confidence
+  });
+
+  it("APPLY (ungated): applies regardless of confidence", async () => {
+    await seedTask("Mari prefers tea over coffee", "ctopic-old");
+    const curate = async (): Promise<CuratorDecision> => ({ verdict: "CREATE", rationale: "new", confidence: "medium" });
+    const res = await drainReconcileQueue({ apply: true, gated: false, curate });
+    expect(res).toMatchObject({ applied: 1, held: 0 });
   });
 
   it("a curator failure on a task is recorded (verdict null) and the task still clears", async () => {

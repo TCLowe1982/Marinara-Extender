@@ -38,7 +38,8 @@ import { readIndex, readEntry, supersedeEntry } from "./storage.js";
 import { jaccardSimilarity } from "./dedup.js";
 import type { AmbientFact } from "./ambient.js";
 import { resolveFactTarget, saveFact, type FactContext } from "./facts.js";
-import { readQueue, removeTasks, appendAudit, type ReconcileTask } from "./reconcile-queue.js";
+import { readQueue, removeTasks, appendAudit, appendHeld, type ReconcileTask } from "./reconcile-queue.js";
+import { applyGate } from "./apply-gate.js";
 
 // FR3 decision vocabulary (verbatim from 15x), plus the two no-collision cases.
 export type Verdict = "CREATE" | "UPDATE" | "EXPAND" | "DISTINCT" | "NEGATE" | "DUPLICATE";
@@ -384,16 +385,19 @@ export type CurateFn = (candidate: AmbientFact, ctx: FactContext, focusId?: stri
 // `curate` is injectable so the orchestration is testable offline.
 export async function drainReconcileQueue(opts?: {
   apply?: boolean;
+  gated?: boolean;
   limit?: number;
   curate?: CurateFn;
-}): Promise<{ processed: number; decided: number; applied: number }> {
+}): Promise<{ processed: number; decided: number; applied: number; held: number }> {
   const apply = opts?.apply ?? false;
+  const gated = opts?.gated ?? true; // mjp: the live path has no human review, so gate by default
   const curate = opts?.curate ?? runCurator;
   const all = await readQueue();
   const tasks = opts?.limit && opts.limit > 0 ? all.slice(0, opts.limit) : all;
 
   let decided = 0;
   let applied = 0;
+  let held = 0;
   const handled: string[] = [];
 
   for (const t of tasks) {
@@ -409,10 +413,25 @@ export async function drainReconcileQueue(opts?: {
     if (decision) decided++;
 
     let appliedRec: { createdId?: string; supersededId?: string } | undefined;
+    let heldReasons: string[] | undefined;
     if (decision && apply) {
-      const r = await applyDecision({ candidate, decision }, ctx, t.sourceChatId);
-      appliedRec = { createdId: r.createdId, supersededId: r.supersededId };
-      if (r.createdId || r.supersededId) applied++;
+      const gate = gated
+        ? applyGate({ confidence: decision.confidence, text: `${candidate.fact} ${t.againstSummary} ${decision.rationale}` })
+        : { lane: "auto" as const, reasons: [] };
+      if (gate.lane === "hold") {
+        held++;
+        heldReasons = gate.reasons;
+        await appendHeld({
+          source: "live", scope: t.scope, scopeId: t.scopeId,
+          summary: `${decision.verdict}: "${t.summary}"`,
+          confidence: decision.confidence, reasons: gate.reasons,
+          detail: { task: t, decision }, at: new Date().toISOString(),
+        });
+      } else {
+        const r = await applyDecision({ candidate, decision }, ctx, t.sourceChatId);
+        appliedRec = { createdId: r.createdId, supersededId: r.supersededId };
+        if (r.createdId || r.supersededId) applied++;
+      }
     }
 
     await appendAudit({
@@ -425,7 +444,7 @@ export async function drainReconcileQueue(opts?: {
       verdict: decision?.verdict ?? null,
       confidence: decision?.confidence,
       targetId: decision?.targetId,
-      rationale: decision?.rationale,
+      rationale: heldReasons ? `HELD for review (${heldReasons.join(", ")})` : decision?.rationale,
       applied: appliedRec,
       at: new Date().toISOString(),
     });
@@ -433,5 +452,5 @@ export async function drainReconcileQueue(opts?: {
   }
 
   await removeTasks(handled);
-  return { processed: handled.length, decided, applied };
+  return { processed: handled.length, decided, applied, held };
 }

@@ -22,6 +22,7 @@ import { pathToFileURL } from "node:url";
 
 const PKG = process.cwd();
 const APPLY = process.argv.includes("--apply");
+const UNGATED = process.argv.includes("--ungated"); // apply every decision; default gates by confidence + domain
 const limitIdx = process.argv.indexOf("--limit");
 const LIMIT = limitIdx !== -1 ? Math.max(1, parseInt(process.argv[limitIdx + 1], 10) || 0) : undefined;
 
@@ -42,7 +43,7 @@ if (existsSync(envPath)) {
 
 const imp = (p) => import(pathToFileURL(join(PKG, "dist", p)).href);
 const { drainReconcileQueue, loginHint } = await imp("reconcile.js");
-const { readQueue, auditFilePath } = await imp("reconcile-queue.js");
+const { readQueue, auditFilePath, heldFilePath } = await imp("reconcile-queue.js");
 
 const pending = await readQueue();
 if (pending.length === 0) {
@@ -55,13 +56,14 @@ console.log(`curator: Claude Agent SDK (CLI-session auth) · audit -> ${auditFil
 
 let res;
 try {
-  res = await drainReconcileQueue({ apply: APPLY, limit: LIMIT });
+  res = await drainReconcileQueue({ apply: APPLY, gated: !UNGATED, limit: LIMIT });
 } catch (e) {
   console.error(`\nDrain failed: ${e?.message ?? e}\n${loginHint?.() ?? ""}`);
   process.exit(1);
 }
 
-console.log(`\nprocessed ${res.processed} · curator decided ${res.decided}${APPLY ? ` · applied ${res.applied}` : " · (shadow: applied 0)"}`);
+console.log(`\nprocessed ${res.processed} · curator decided ${res.decided}${APPLY ? ` · applied ${res.applied} · held ${res.held}` : " · (shadow: applied 0)"}`);
+if (APPLY && res.held > 0) console.log(`held (domain-sensitive / below-confidence) -> ${heldFilePath()}`);
 console.log(APPLY
-  ? "verdicts executed; superseded entries are recoverable from cold storage."
+  ? "applied verdicts executed (superseded entries recoverable from cold); review held items before promoting them."
   : "review the proposed verdicts in audit.jsonl, then re-run with --apply when you trust them.");

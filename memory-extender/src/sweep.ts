@@ -19,8 +19,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import type { Scope } from "./storage.js";
 import { readIndex, readEntry, supersedeEntry, getDataDir, readYamlFile } from "./storage.js";
 import { clusterCurator, type ClusterMember, type ClusterVerdict } from "./reconcile.js";
-import { appendSweepAudit } from "./reconcile-queue.js";
+import { appendSweepAudit, appendHeld } from "./reconcile-queue.js";
 import { fetchEmbeddings } from "./embeddings.js";
+import { applyGate } from "./apply-gate.js";
 
 export const SWEEP_THRESHOLD = 0.5;        // jaccard (lexical fallback)
 export const SWEEP_EMBED_THRESHOLD = 0.87; // cosine — measured sweet spot on real data: catches reworded
@@ -129,6 +130,7 @@ export interface SweepMerge {
   redundantIds: string[];
   rationale: string;
   confidence?: string;
+  summaries?: string[]; // member summaries — for the apply gate + human readability
 }
 interface SweepLedgerFile { scope: Scope; scopeId: string; builtAt: string; merges: SweepMerge[] }
 
@@ -191,7 +193,7 @@ export async function buildSweepLedger(
     }
     if (verdict) adjudicated++;
     if (verdict?.verdict === "merge" && verdict.canonicalId && verdict.redundantIds?.length) {
-      merges.push({ clusterIds: c.memberIds, canonicalId: verdict.canonicalId, redundantIds: verdict.redundantIds, rationale: verdict.rationale, confidence: verdict.confidence });
+      merges.push({ clusterIds: c.memberIds, canonicalId: verdict.canonicalId, redundantIds: verdict.redundantIds, rationale: verdict.rationale, confidence: verdict.confidence, summaries: members.map((m) => m.summary) });
     }
 
     await appendSweepAudit({
@@ -215,15 +217,41 @@ export async function buildSweepLedger(
 // — no curator re-run. Supersedes each redundant entry by its canonical (FR2 tier
 // move, recoverable from cold). The ledger is hand-editable between build and
 // apply, so you can drop a merge you don't trust before running this.
-export async function applySweepLedger(scope: Scope, scopeId: string): Promise<{ merges: number; superseded: number } | null> {
+export async function applySweepLedger(
+  scope: Scope,
+  scopeId: string,
+  opts?: { gated?: boolean },
+): Promise<{ merges: number; applied: number; superseded: number; held: number } | null> {
   const led = await readSweepLedger(scope, scopeId);
   if (!led) return null;
+  const gated = opts?.gated ?? true; // mjp: safe by default — auto-apply only high-confidence, non-sensitive merges
+  let applied = 0;
   let superseded = 0;
+  let held = 0;
+
   for (const m of led.merges) {
+    if (gated) {
+      const gate = applyGate({ confidence: m.confidence, text: `${(m.summaries ?? []).join(" ")} ${m.rationale}` });
+      if (gate.lane === "hold") {
+        held++;
+        await appendHeld({
+          source: "sweep", scope, scopeId,
+          summary: `merge: keep ${m.canonicalId} ⟵ retire [${m.redundantIds.join(", ")}]`,
+          confidence: m.confidence, reasons: gate.reasons, detail: m, at: new Date().toISOString(),
+        });
+        await appendSweepAudit({
+          mode: "apply", scope, scopeId, clusterIds: m.clusterIds, verdict: "merge",
+          canonicalId: m.canonicalId, redundantIds: m.redundantIds, confidence: m.confidence,
+          rationale: `HELD for review (${gate.reasons.join(", ")})`, applied: { supersededIds: [] }, at: new Date().toISOString(),
+        });
+        continue;
+      }
+    }
     const done: string[] = [];
     for (const rid of m.redundantIds) {
       if (await supersedeEntry(scope, scopeId, rid, m.canonicalId)) { done.push(rid); superseded++; }
     }
+    applied++;
     await appendSweepAudit({
       mode: "apply", scope, scopeId,
       clusterIds: m.clusterIds, verdict: "merge",
@@ -232,5 +260,5 @@ export async function applySweepLedger(scope: Scope, scopeId: string): Promise<{
       applied: { supersededIds: done }, at: new Date().toISOString(),
     });
   }
-  return { merges: led.merges.length, superseded };
+  return { merges: led.merges.length, applied, superseded, held };
 }

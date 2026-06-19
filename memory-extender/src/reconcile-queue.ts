@@ -128,3 +128,29 @@ export async function appendSweepAudit(rec: SweepAuditRecord): Promise<void> {
 export function sweepAuditFilePath(): string {
   return sweepAuditPath();
 }
+
+// ── Held review lane (mjp) ───────────────────────────────────────────────────
+// When the apply gate withholds a verdict (domain-sensitive, or below the
+// confidence bar), it is NOT applied and NOT dropped — it lands here with the
+// reasons, for a human to confirm or discard.
+const heldPath = (): string => join(QUEUE_DIR(), "held.jsonl");
+
+export interface HeldRecord {
+  source: "sweep" | "live";
+  scope: Scope;
+  scopeId: string;
+  summary: string;       // human-readable description of what was withheld
+  confidence?: string;
+  reasons: string[];     // why held — e.g. ["domain:trauma", "confidence:medium"]
+  detail?: unknown;      // ids etc., enough to act on if a human promotes it
+  at: string;
+}
+
+export async function appendHeld(rec: HeldRecord): Promise<void> {
+  await mkdir(QUEUE_DIR(), { recursive: true });
+  await appendFile(heldPath(), JSON.stringify(rec) + "\n", "utf8");
+}
+
+export function heldFilePath(): string {
+  return heldPath();
+}

@@ -22,6 +22,7 @@ import { pathToFileURL } from "node:url";
 const PKG = process.cwd();
 const arg = (name, def) => { const i = process.argv.indexOf(name); return i !== -1 ? process.argv[i + 1] : def; };
 const APPLY = process.argv.includes("--apply");
+const UNGATED = process.argv.includes("--ungated"); // apply ALL merges (trust prior review); default gates by confidence + domain
 const LEXICAL = process.argv.includes("--lexical"); // force lexical clustering (default: embedding, lexical fallback)
 const SCOPE = arg("--scope", "character");
 const SCOPE_ID = arg("--scopeId", null);
@@ -45,15 +46,19 @@ if (existsSync(envPath)) {
 
 const imp = (p) => import(pathToFileURL(join(PKG, "dist", p)).href);
 const { buildSweepLedger, applySweepLedger } = await imp("sweep.js");
-const { sweepAuditFilePath } = await imp("reconcile-queue.js");
+const { sweepAuditFilePath, heldFilePath } = await imp("reconcile-queue.js");
 const { loginHint } = await imp("reconcile.js");
 
 if (APPLY) {
   // Replay the reviewed ledger verbatim — no curator re-run (preview == apply).
-  console.log(`APPLY (replay reviewed merges) — sweep ${SCOPE}:${SCOPE_ID}\n`);
-  const res = await applySweepLedger(SCOPE, SCOPE_ID);
+  // Gated by default: auto-applies high-confidence, non-sensitive merges; holds
+  // domain-sensitive (trauma) and below-bar merges for review. --ungated applies all.
+  console.log(`APPLY (${UNGATED ? "ungated — all merges" : "gated — auto-apply high & non-sensitive, hold the rest"}) — sweep ${SCOPE}:${SCOPE_ID}\n`);
+  const res = await applySweepLedger(SCOPE, SCOPE_ID, { gated: !UNGATED });
   if (!res) { console.error("No sweep ledger — run the shadow build first (without --apply) to produce it."); process.exit(1); }
-  console.log(`applied ${res.merges} merge(s): superseded ${res.superseded} redundant entr(ies) (recoverable from cold).`);
+  console.log(`${res.merges} merge(s): applied ${res.applied} (superseded ${res.superseded}), held ${res.held} for review.`);
+  if (res.held > 0) console.log(`held merges (domain-sensitive / below-confidence) -> ${heldFilePath()}`);
+  console.log("superseded entries are recoverable from cold.");
   process.exit(0);
 }
 

@@ -166,3 +166,31 @@ describe("buildSweepLedger clustering mode", () => {
     expect(res.clusters).toBe(1); // lexical caught the solution/fix pair
   });
 });
+
+describe("sweep apply gate (mjp)", () => {
+  let dir: string;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "me-sweepgate-")); process.env.MARINARA_EXTENDER_DATA = join(dir, "data"); });
+  afterEach(async () => { delete process.env.MARINARA_EXTENDER_DATA; await rm(dir, { recursive: true, force: true }); });
+  const activeIds = async () => ((await readIndex("character", "mari"))?.entries ?? []).filter((e) => !e.supersededBy).map((e) => e.id);
+  const trait = (s: string) => ({ lane: "character_topics" as const, summary: s, content: s, kind: "trait" as const });
+
+  it("gated apply holds the trauma cluster, applies the clean high-confidence one", async () => {
+    const a1 = await createEntry("character", "mari", trait("Mari has PTSD flashbacks from the deployment"));
+    const a2 = await createEntry("character", "mari", trait("Mari experiences PTSD flashbacks from the deployment"));
+    const b1 = await createEntry("character", "mari", trait("Mari founded the Venturecon conference"));
+    const b2 = await createEntry("character", "mari", trait("Mari founded the Venturecon conference event"));
+    // Merge whatever cluster is presented; high confidence, first member canonical.
+    const curate = async (members: { id: string }[]): Promise<ClusterVerdict> =>
+      ({ verdict: "merge", canonicalId: members[0]!.id, redundantIds: members.slice(1).map((m) => m.id), rationale: "same", confidence: "high" });
+
+    await buildSweepLedger("character", "mari", { clustering: "lexical", threshold: 0.4, curate });
+    const res = await applySweepLedger("character", "mari"); // gated by default
+    expect(res!.applied).toBe(1); // the clean Venturecon merge
+    expect(res!.held).toBe(1);    // the PTSD merge — domain-sensitive, held even at high confidence
+
+    const active = await activeIds();
+    expect(active).toContain(a1!.id); // trauma pair untouched
+    expect(active).toContain(a2!.id);
+    expect([b1!.id, b2!.id].filter((id) => active.includes(id)).length).toBe(1); // exactly one Venturecon retired
+  });
+});

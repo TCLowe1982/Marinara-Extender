@@ -20,9 +20,14 @@ import type { Scope } from "./storage.js";
 import { readIndex, readEntry, supersedeEntry, getDataDir, readYamlFile } from "./storage.js";
 import { clusterCurator, type ClusterMember, type ClusterVerdict } from "./reconcile.js";
 import { appendSweepAudit } from "./reconcile-queue.js";
+import { fetchEmbeddings } from "./embeddings.js";
 
-export const SWEEP_THRESHOLD = 0.5; // jaccard; the curator is the precision gate, so this trades recall vs cost
-export const SWEEP_CLUSTER_CAP = 12; // guardrail — skip pathological clusters (current data maxes at 4)
+export const SWEEP_THRESHOLD = 0.5;        // jaccard (lexical fallback)
+export const SWEEP_EMBED_THRESHOLD = 0.87; // cosine — measured sweet spot on real data: catches reworded
+                                           // dups lexical misses (10–28 real clusters), curator filters borderline
+export const SWEEP_CLUSTER_CAP = 12;       // guardrail — skip pathological clusters
+
+type EmbedFn = (texts: string[]) => Promise<number[][] | null>;
 
 // A fact the sweep may touch: active, durable, NOT a thread or anything with a
 // bracket-tag summary prefix. The broad `^[` test (not dedup's looksIncident,
@@ -80,6 +85,41 @@ export function clusterFacts(
   return [...groups.values()].filter((m) => m.length > 1).map((memberIds) => ({ memberIds, oversized: memberIds.length > cap }));
 }
 
+// Embedding-based clustering (`and`): catches SEMANTIC duplicates that lexical
+// jaccard misses (same fact, different words). Embeds the fact summaries once,
+// then union-finds by cosine ≥ threshold. Returns null if the embed model is
+// unavailable, so the caller falls back to lexical. `embed` is injectable.
+export async function clusterFactsEmbedding(
+  entries: { id: string; lane: string; summary: string; supersededBy?: string }[],
+  opts?: { threshold?: number; cap?: number; embed?: EmbedFn },
+): Promise<{ memberIds: string[]; oversized: boolean }[] | null> {
+  const T = opts?.threshold ?? SWEEP_EMBED_THRESHOLD;
+  const cap = opts?.cap ?? SWEEP_CLUSTER_CAP;
+  const embed = opts?.embed ?? fetchEmbeddings;
+  const facts = entries.filter(isFactEntry);
+  if (facts.length === 0) return [];
+
+  const vecs = await embed(facts.map((e) => e.summary));
+  if (!vecs || vecs.length !== facts.length) return null; // embed unavailable → signal fallback
+
+  // Normalize once so cosine is a plain dot product.
+  const norm = vecs.map((v) => { let s = 0; for (const x of v) s += x * x; s = Math.sqrt(s) || 1; return v.map((x) => x / s); });
+  const parent = facts.map((_, i) => i);
+  const find = (x: number): number => { while (parent[x] !== x) { parent[x] = parent[parent[x]!]!; x = parent[x]!; } return x; };
+  for (let i = 0; i < facts.length; i++) {
+    const vi = norm[i]!;
+    for (let j = i + 1; j < facts.length; j++) {
+      const vj = norm[j]!;
+      let d = 0;
+      for (let k = 0; k < vi.length; k++) d += vi[k]! * vj[k]!;
+      if (d >= T) parent[find(i)] = find(j);
+    }
+  }
+  const groups = new Map<number, string[]>();
+  facts.forEach((e, i) => { const r = find(i); const g = groups.get(r); if (g) g.push(e.id); else groups.set(r, [e.id]); });
+  return [...groups.values()].filter((m) => m.length > 1).map((memberIds) => ({ memberIds, oversized: memberIds.length > cap }));
+}
+
 export type ClusterCurateFn = (members: ClusterMember[]) => Promise<ClusterVerdict | null>;
 
 // One reviewed merge in the sweep ledger.
@@ -107,13 +147,25 @@ export async function readSweepLedger(scope: Scope, scopeId: string): Promise<Sw
 export async function buildSweepLedger(
   scope: Scope,
   scopeId: string,
-  opts?: { threshold?: number; cap?: number; limit?: number; curate?: ClusterCurateFn },
-): Promise<{ clusters: number; oversizedSkipped: number; adjudicated: number; merges: number }> {
+  opts?: { clustering?: "auto" | "lexical" | "embedding"; threshold?: number; cap?: number; limit?: number; curate?: ClusterCurateFn; embed?: EmbedFn },
+): Promise<{ clusters: number; oversizedSkipped: number; adjudicated: number; merges: number; mode: string }> {
   const curate = opts?.curate ?? clusterCurator;
   const idx = await readIndex(scope, scopeId);
   const entries = idx?.entries ?? [];
 
-  const all = clusterFacts(entries, { threshold: opts?.threshold, cap: opts?.cap });
+  // Prefer embedding clustering (catches semantic dups lexical misses); fall back
+  // to lexical jaccard when the embed model is unavailable. `threshold` applies to
+  // whichever mode runs (cosine for embedding, jaccard for lexical).
+  const requested = opts?.clustering ?? "auto";
+  let all: { memberIds: string[]; oversized: boolean }[] | null = null;
+  let mode = "lexical";
+  if (requested !== "lexical") {
+    all = await clusterFactsEmbedding(entries, { threshold: opts?.threshold, cap: opts?.cap, embed: opts?.embed });
+    if (all) mode = "embedding";
+    else if (requested === "embedding") { all = []; mode = "embedding (model unavailable)"; }
+  }
+  if (!all) { all = clusterFacts(entries, { threshold: opts?.threshold, cap: opts?.cap }); mode = "lexical"; }
+
   const oversizedSkipped = all.filter((c) => c.oversized).length;
   let clusters = all.filter((c) => !c.oversized);
   if (opts?.limit && opts.limit > 0) clusters = clusters.slice(0, opts.limit);
@@ -156,7 +208,7 @@ export async function buildSweepLedger(
 
   await mkdir(dirname(sweepLedgerPath(scope, scopeId)), { recursive: true });
   await writeFile(sweepLedgerPath(scope, scopeId), JSON.stringify({ scope, scopeId, builtAt: new Date().toISOString(), merges }, null, 2), "utf8");
-  return { clusters: clusters.length, oversizedSkipped, adjudicated, merges: merges.length };
+  return { clusters: clusters.length, oversizedSkipped, adjudicated, merges: merges.length, mode };
 }
 
 // APPLY / replay: execute EXACTLY the merges in the ledger a prior build produced

@@ -22,6 +22,7 @@ import { pathToFileURL } from "node:url";
 const PKG = process.cwd();
 const arg = (name, def) => { const i = process.argv.indexOf(name); return i !== -1 ? process.argv[i + 1] : def; };
 const APPLY = process.argv.includes("--apply");
+const LEXICAL = process.argv.includes("--lexical"); // force lexical clustering (default: embedding, lexical fallback)
 const SCOPE = arg("--scope", "character");
 const SCOPE_ID = arg("--scopeId", null);
 const THRESHOLD = arg("--threshold", null);
@@ -62,6 +63,7 @@ console.log(`curator: Claude Agent SDK (CLI-session auth) · audit -> ${sweepAud
 let res;
 try {
   res = await buildSweepLedger(SCOPE, SCOPE_ID, {
+    ...(LEXICAL ? { clustering: "lexical" } : {}),
     ...(THRESHOLD ? { threshold: Number(THRESHOLD) } : {}),
     ...(LIMIT ? { limit: Math.max(1, parseInt(LIMIT, 10) || 0) } : {}),
   });
@@ -69,5 +71,5 @@ try {
   console.error(`\nSweep failed: ${e?.message ?? e}\n${loginHint?.() ?? ""}`);
   process.exit(1);
 }
-console.log(`clusters: ${res.clusters} adjudicated (${res.oversizedSkipped} oversized skipped) · proposed merges: ${res.merges}`);
+console.log(`clustering: ${res.mode} · clusters: ${res.clusters} adjudicated (${res.oversizedSkipped} oversized skipped) · proposed merges: ${res.merges}`);
 console.log("review the proposed merges in sweep-audit.jsonl (and the sweep-ledger), then re-run with --apply to execute EXACTLY those.");

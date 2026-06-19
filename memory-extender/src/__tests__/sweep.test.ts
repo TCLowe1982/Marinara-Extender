@@ -12,7 +12,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { createEntry } from "../dedup.js";
 import { readIndex, readColdIndex } from "../storage.js";
-import { clusterFacts, buildSweepLedger, applySweepLedger, readSweepLedger } from "../sweep.js";
+import { clusterFacts, clusterFactsEmbedding, buildSweepLedger, applySweepLedger, readSweepLedger } from "../sweep.js";
 import type { ClusterVerdict } from "../reconcile.js";
 
 describe("clusterFacts (pure)", () => {
@@ -116,5 +116,53 @@ describe("buildSweepLedger + applySweepLedger", () => {
     const applied = await applySweepLedger("character", "mari");
     expect(applied).toMatchObject({ merges: 0, superseded: 0 });
     expect((await activeIds()).length).toBe(2); // nothing retired
+  });
+});
+
+describe("clusterFactsEmbedding (and — semantic clustering)", () => {
+  const E = (id: string, summary: string, lane = "character_topics") => ({ id, lane, summary });
+  // alpha≈beta (cosine ~0.98), gamma orthogonal.
+  const embed = async (texts: string[]) =>
+    texts.map((t) => (t.includes("alpha") ? [1, 0, 0] : t.includes("beta") ? [0.98, 0.2, 0] : [0, 0, 1]));
+
+  it("clusters by cosine — groups the semantically-close pair lexical would miss", async () => {
+    const cs = await clusterFactsEmbedding([E("a", "alpha one"), E("b", "beta two"), E("c", "gamma three")], { embed });
+    expect(cs).not.toBeNull();
+    expect(cs!.length).toBe(1);
+    expect(cs![0]!.memberIds.slice().sort()).toEqual(["a", "b"]);
+  });
+
+  it("returns null when the embed model is unavailable (caller falls back)", async () => {
+    expect(await clusterFactsEmbedding([E("a", "x"), E("b", "y")], { embed: async () => null })).toBeNull();
+  });
+
+  it("excludes incidents and threads before embedding", async () => {
+    expect(await clusterFactsEmbedding([E("a", "[fear] alpha"), E("b", "beta", "open_threads")], { embed })).toEqual([]);
+  });
+});
+
+describe("buildSweepLedger clustering mode", () => {
+  let dir: string;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "me-sweepmode-")); process.env.MARINARA_EXTENDER_DATA = join(dir, "data"); });
+  afterEach(async () => { delete process.env.MARINARA_EXTENDER_DATA; await rm(dir, { recursive: true, force: true }); });
+  const embed = async (texts: string[]) =>
+    texts.map((t) => (t.includes("alpha") ? [1, 0, 0] : t.includes("beta") ? [0.98, 0.2, 0] : [0, 0, 1]));
+
+  it("uses embedding clustering when embed is available (catches what lexical misses)", async () => {
+    const a = await createEntry("character", "mari", { lane: "character_topics", summary: "alpha trait", content: "alpha trait", kind: "trait" });
+    const b = await createEntry("character", "mari", { lane: "character_topics", summary: "beta trait", content: "beta trait", kind: "trait" });
+    const curate = async (): Promise<ClusterVerdict> => ({ verdict: "merge", canonicalId: a!.id, redundantIds: [b!.id], rationale: "same", confidence: "high" });
+    const res = await buildSweepLedger("character", "mari", { clustering: "auto", embed, curate });
+    expect(res.mode).toBe("embedding");
+    expect(res.merges).toBe(1); // alpha/beta cluster semantically (jaccard would NOT — they share only "trait")
+  });
+
+  it("falls back to lexical when the embed model is unavailable", async () => {
+    await createEntry("character", "mari", { lane: "character_topics", summary: "Mari sold a solution to someone", content: "x", kind: "trait" });
+    await createEntry("character", "mari", { lane: "character_topics", summary: "Mari sold a fix to someone", content: "y", kind: "trait" });
+    const curate = async (): Promise<ClusterVerdict> => ({ verdict: "distinct", rationale: "d", confidence: "high" });
+    const res = await buildSweepLedger("character", "mari", { clustering: "auto", embed: async () => null, threshold: 0.4, curate });
+    expect(res.mode).toBe("lexical");
+    expect(res.clusters).toBe(1); // lexical caught the solution/fix pair
   });
 });

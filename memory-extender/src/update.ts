@@ -12,9 +12,11 @@
 // relaunches — the user never opens a terminal.
 
 import { readFileSync, existsSync } from "fs";
+import { createHash } from "crypto";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { spawn, execSync } from "child_process";
+import { extensionJsCandidates } from "./paths.js";
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -36,25 +38,42 @@ export function currentVersion(): string {
 let _build: string | null = null;
 export function buildVersion(): string {
   if (_build) return _build;
-  let sha = "";
-  // Only attempt git when this is actually a checkout. Release installs (a zip
-  // download) have no .git, and shelling out there makes git print
-  // "fatal: not a git repository" to stderr — which execSync forwards to the
-  // parent's stderr by default, so it surfaces in the console/log even though
-  // we recover. The existsSync guard avoids the spawn entirely; stdio ignoring
-  // stderr is the backstop (e.g. git missing from PATH).
-  if (existsSync(join(PKG_ROOT, ".git"))) {
+  let code = "";
+  // 1. Git checkout — short HEAD sha. The .git lives at the REPO ROOT, but this
+  // package is memory-extender/ (PKG_ROOT), so .git is PKG_ROOT/.. — checking
+  // only PKG_ROOT silently missed every normal checkout, leaving the panel on a
+  // bare version with no build code (MarinaraExtender-4b2). Check both. The
+  // existsSync guard still avoids the spawn (and the "fatal: not a git
+  // repository" stderr) on real release installs; stdio ignoring stderr is the
+  // backstop (e.g. git missing from PATH).
+  const repoRoot = [PKG_ROOT, join(PKG_ROOT, "..")].find((d) => existsSync(join(d, ".git")));
+  if (repoRoot) {
     try {
-      sha = execSync("git rev-parse --short HEAD", {
-        cwd: PKG_ROOT,
+      code = execSync("git rev-parse --short HEAD", {
+        cwd: repoRoot,
         timeout: 3_000,
         stdio: ["ignore", "pipe", "ignore"],
       }).toString().trim();
     } catch {
-      // not resolvable — plain release version is fine
+      // not resolvable — fall through to the content hash
     }
   }
-  _build = sha ? `${currentVersion()}+${sha}` : currentVersion();
+  // 2. No .git (ZIP/release install) — there is no commit to name, but the build
+  // must still be identifiable, so hash the extension file the panel actually
+  // runs. A short content hash changes whenever the shipped code changes, which
+  // is exactly what "which build am I on?" needs. The 'c' prefix keeps a content
+  // hash from being misread as a git sha.
+  if (!code) {
+    for (const p of extensionJsCandidates()) {
+      try {
+        code = "c" + createHash("sha256").update(readFileSync(p)).digest("hex").slice(0, 8);
+        break;
+      } catch {
+        // try next candidate
+      }
+    }
+  }
+  _build = code ? `${currentVersion()}+${code}` : currentVersion();
   return _build;
 }
 

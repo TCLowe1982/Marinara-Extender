@@ -12,7 +12,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { createEntry } from "../dedup.js";
 import { readIndex, readColdIndex } from "../storage.js";
-import { clusterFacts, sweepLedger } from "../sweep.js";
+import { clusterFacts, buildSweepLedger, applySweepLedger, readSweepLedger } from "../sweep.js";
 import type { ClusterVerdict } from "../reconcile.js";
 
 describe("clusterFacts (pure)", () => {
@@ -58,7 +58,7 @@ describe("clusterFacts (pure)", () => {
   });
 });
 
-describe("sweepLedger", () => {
+describe("buildSweepLedger + applySweepLedger", () => {
   let dir: string;
   beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "me-sweep-")); process.env.MARINARA_EXTENDER_DATA = join(dir, "data"); });
   afterEach(async () => { delete process.env.MARINARA_EXTENDER_DATA; await rm(dir, { recursive: true, force: true }); });
@@ -69,11 +69,19 @@ describe("sweepLedger", () => {
   });
   const activeIds = async () => ((await readIndex("character", "mari"))?.entries ?? []).filter((e) => !e.supersededBy).map((e) => e.id);
 
-  it("APPLY merge: retires the redundant member, keeps the canonical (tier move)", async () => {
+  it("build writes a reviewable ledger and mutates nothing; apply replays it (preview == apply)", async () => {
     const { a, b } = await seedPair();
     const curate = async (): Promise<ClusterVerdict> => ({ verdict: "merge", canonicalId: a!.id, redundantIds: [b!.id], rationale: "same fact", confidence: "high" });
-    const res = await sweepLedger("character", "mari", { apply: true, threshold: 0.4, curate });
-    expect(res).toMatchObject({ clusters: 1, merges: 1, superseded: 1 });
+
+    const built = await buildSweepLedger("character", "mari", { threshold: 0.4, curate });
+    expect(built).toMatchObject({ clusters: 1, merges: 1 });
+    expect((await activeIds()).slice().sort()).toEqual([a!.id, b!.id].slice().sort()); // build mutates nothing
+    const led = await readSweepLedger("character", "mari");
+    expect(led?.merges).toHaveLength(1);
+    expect(led?.merges[0]).toMatchObject({ canonicalId: a!.id, redundantIds: [b!.id] });
+
+    const applied = await applySweepLedger("character", "mari");
+    expect(applied).toMatchObject({ merges: 1, superseded: 1 });
     const active = await activeIds();
     expect(active).toContain(a!.id);
     expect(active).not.toContain(b!.id);
@@ -81,20 +89,32 @@ describe("sweepLedger", () => {
     expect(cold?.entries.find((e) => e.id === b!.id)?.supersededBy).toBe(a!.id);
   });
 
-  it("SHADOW merge: audits the proposed merge, supersedes nothing", async () => {
-    const { a, b } = await seedPair();
-    const curate = async (): Promise<ClusterVerdict> => ({ verdict: "merge", canonicalId: a!.id, redundantIds: [b!.id], rationale: "same", confidence: "high" });
-    const res = await sweepLedger("character", "mari", { threshold: 0.4, curate });
-    expect(res).toMatchObject({ merges: 1, superseded: 0 });
-    expect((await activeIds()).slice().sort()).toEqual([a!.id, b!.id].slice().sort()); // both still active
-  });
-
-  it("distinct: keeps both members, supersedes nothing", async () => {
+  it("a distinct verdict writes no merge to the ledger; apply supersedes nothing", async () => {
     const { a, b } = await seedPair();
     const curate = async (): Promise<ClusterVerdict> => ({ verdict: "distinct", rationale: "different facts", confidence: "high" });
-    const res = await sweepLedger("character", "mari", { apply: true, threshold: 0.4, curate });
-    expect(res).toMatchObject({ merges: 0, superseded: 0 });
+    await buildSweepLedger("character", "mari", { threshold: 0.4, curate });
+    expect((await readSweepLedger("character", "mari"))?.merges).toHaveLength(0);
+    const applied = await applySweepLedger("character", "mari");
+    expect(applied).toMatchObject({ merges: 0, superseded: 0 });
     expect((await activeIds()).length).toBe(2);
     expect(a && b).toBeTruthy();
+  });
+
+  it("apply with no prior build is a no-op (null)", async () => {
+    expect(await applySweepLedger("character", "ghost")).toBeNull();
+  });
+
+  it("hand-editing the ledger before apply is honored (drop a merge -> not applied)", async () => {
+    const { a, b } = await seedPair();
+    const curate = async (): Promise<ClusterVerdict> => ({ verdict: "merge", canonicalId: a!.id, redundantIds: [b!.id], rationale: "same", confidence: "high" });
+    await buildSweepLedger("character", "mari", { threshold: 0.4, curate });
+    // Simulate the human trimming the ledger to empty before apply.
+    const { writeFile } = await import("node:fs/promises");
+    const { join: pj } = await import("node:path");
+    const led = await readSweepLedger("character", "mari");
+    await writeFile(pj(dir, "data", "reconcile-queue", "sweep-ledger", "character__mari.json"), JSON.stringify({ ...led, merges: [] }), "utf8");
+    const applied = await applySweepLedger("character", "mari");
+    expect(applied).toMatchObject({ merges: 0, superseded: 0 });
+    expect((await activeIds()).length).toBe(2); // nothing retired
   });
 });

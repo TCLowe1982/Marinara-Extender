@@ -14,8 +14,10 @@
 // Shadow-first like b4n: logs proposed merges, applies nothing; --apply executes
 // the supersessions (FR2 tier move, recoverable from cold).
 
+import { join, dirname } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
 import type { Scope } from "./storage.js";
-import { readIndex, readEntry, supersedeEntry } from "./storage.js";
+import { readIndex, readEntry, supersedeEntry, getDataDir, readYamlFile } from "./storage.js";
 import { clusterCurator, type ClusterMember, type ClusterVerdict } from "./reconcile.js";
 import { appendSweepAudit } from "./reconcile-queue.js";
 
@@ -80,15 +82,33 @@ export function clusterFacts(
 
 export type ClusterCurateFn = (members: ClusterMember[]) => Promise<ClusterVerdict | null>;
 
-// Sweep one ledger: cluster its facts, adjudicate each cluster, and (apply) retire
-// the redundant members. SHADOW by default (audit only). `curate` is injectable so
-// the orchestration is testable offline.
-export async function sweepLedger(
+// One reviewed merge in the sweep ledger.
+export interface SweepMerge {
+  clusterIds: string[];
+  canonicalId: string;
+  redundantIds: string[];
+  rationale: string;
+  confidence?: string;
+}
+interface SweepLedgerFile { scope: Scope; scopeId: string; builtAt: string; merges: SweepMerge[] }
+
+const sweepLedgerPath = (scope: Scope, scopeId: string): string =>
+  join(getDataDir(), "reconcile-queue", "sweep-ledger", `${scope}__${scopeId.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
+
+export async function readSweepLedger(scope: Scope, scopeId: string): Promise<SweepLedgerFile | null> {
+  return readYamlFile<SweepLedgerFile>(sweepLedgerPath(scope, scopeId));
+}
+
+// SHADOW / build: cluster the ledger, adjudicate each cluster, and PERSIST the
+// proposed merges to a reviewable ledger (+ audit). Applies NOTHING. The ledger is
+// the replayable artifact — apply replays it verbatim, so what you review is what
+// gets written (the preview==apply guarantee; an agent loop is non-deterministic,
+// so re-running on apply would diverge from review). `curate` is injectable.
+export async function buildSweepLedger(
   scope: Scope,
   scopeId: string,
-  opts?: { apply?: boolean; threshold?: number; cap?: number; limit?: number; curate?: ClusterCurateFn },
-): Promise<{ clusters: number; oversizedSkipped: number; adjudicated: number; merges: number; superseded: number }> {
-  const apply = opts?.apply ?? false;
+  opts?: { threshold?: number; cap?: number; limit?: number; curate?: ClusterCurateFn },
+): Promise<{ clusters: number; oversizedSkipped: number; adjudicated: number; merges: number }> {
   const curate = opts?.curate ?? clusterCurator;
   const idx = await readIndex(scope, scopeId);
   const entries = idx?.entries ?? [];
@@ -99,8 +119,7 @@ export async function sweepLedger(
   if (opts?.limit && opts.limit > 0) clusters = clusters.slice(0, opts.limit);
 
   let adjudicated = 0;
-  let merges = 0;
-  let superseded = 0;
+  const merges: SweepMerge[] = [];
 
   for (const c of clusters) {
     const members: ClusterMember[] = [];
@@ -119,33 +138,47 @@ export async function sweepLedger(
       verdict = null; // one cluster failing never aborts the sweep
     }
     if (verdict) adjudicated++;
-
-    let appliedRec: { supersededIds: string[] } | undefined;
     if (verdict?.verdict === "merge" && verdict.canonicalId && verdict.redundantIds?.length) {
-      merges++;
-      if (apply) {
-        const done: string[] = [];
-        for (const rid of verdict.redundantIds) {
-          if (await supersedeEntry(scope, scopeId, rid, verdict.canonicalId)) { done.push(rid); superseded++; }
-        }
-        appliedRec = { supersededIds: done };
-      }
+      merges.push({ clusterIds: c.memberIds, canonicalId: verdict.canonicalId, redundantIds: verdict.redundantIds, rationale: verdict.rationale, confidence: verdict.confidence });
     }
 
     await appendSweepAudit({
-      mode: apply ? "apply" : "shadow",
-      scope,
-      scopeId,
+      mode: "shadow", scope, scopeId,
       clusterIds: c.memberIds,
       verdict: verdict?.verdict ?? null,
       canonicalId: verdict?.canonicalId,
       redundantIds: verdict?.redundantIds,
       confidence: verdict?.confidence,
       rationale: verdict?.rationale,
-      applied: appliedRec,
       at: new Date().toISOString(),
     });
   }
 
-  return { clusters: clusters.length, oversizedSkipped, adjudicated, merges, superseded };
+  await mkdir(dirname(sweepLedgerPath(scope, scopeId)), { recursive: true });
+  await writeFile(sweepLedgerPath(scope, scopeId), JSON.stringify({ scope, scopeId, builtAt: new Date().toISOString(), merges }, null, 2), "utf8");
+  return { clusters: clusters.length, oversizedSkipped, adjudicated, merges: merges.length };
+}
+
+// APPLY / replay: execute EXACTLY the merges in the ledger a prior build produced
+// — no curator re-run. Supersedes each redundant entry by its canonical (FR2 tier
+// move, recoverable from cold). The ledger is hand-editable between build and
+// apply, so you can drop a merge you don't trust before running this.
+export async function applySweepLedger(scope: Scope, scopeId: string): Promise<{ merges: number; superseded: number } | null> {
+  const led = await readSweepLedger(scope, scopeId);
+  if (!led) return null;
+  let superseded = 0;
+  for (const m of led.merges) {
+    const done: string[] = [];
+    for (const rid of m.redundantIds) {
+      if (await supersedeEntry(scope, scopeId, rid, m.canonicalId)) { done.push(rid); superseded++; }
+    }
+    await appendSweepAudit({
+      mode: "apply", scope, scopeId,
+      clusterIds: m.clusterIds, verdict: "merge",
+      canonicalId: m.canonicalId, redundantIds: m.redundantIds,
+      confidence: m.confidence, rationale: m.rationale,
+      applied: { supersededIds: done }, at: new Date().toISOString(),
+    });
+  }
+  return { merges: led.merges.length, superseded };
 }

@@ -43,17 +43,25 @@ if (existsSync(envPath)) {
 }
 
 const imp = (p) => import(pathToFileURL(join(PKG, "dist", p)).href);
-const { sweepLedger } = await imp("sweep.js");
+const { buildSweepLedger, applySweepLedger } = await imp("sweep.js");
 const { sweepAuditFilePath } = await imp("reconcile-queue.js");
 const { loginHint } = await imp("reconcile.js");
 
-console.log(`${APPLY ? "APPLY" : "SHADOW (log proposed merges, apply nothing)"} — sweep ${SCOPE}:${SCOPE_ID}`);
-console.log(`curator: Claude Agent SDK (CLI-session auth) · audit -> ${sweepAuditFilePath()}\n`);
+if (APPLY) {
+  // Replay the reviewed ledger verbatim — no curator re-run (preview == apply).
+  console.log(`APPLY (replay reviewed merges) — sweep ${SCOPE}:${SCOPE_ID}\n`);
+  const res = await applySweepLedger(SCOPE, SCOPE_ID);
+  if (!res) { console.error("No sweep ledger — run the shadow build first (without --apply) to produce it."); process.exit(1); }
+  console.log(`applied ${res.merges} merge(s): superseded ${res.superseded} redundant entr(ies) (recoverable from cold).`);
+  process.exit(0);
+}
 
+// SHADOW build: curate clusters, write the reviewable ledger + audit, mutate nothing.
+console.log(`SHADOW (build reviewable ledger, apply nothing) — sweep ${SCOPE}:${SCOPE_ID}`);
+console.log(`curator: Claude Agent SDK (CLI-session auth) · audit -> ${sweepAuditFilePath()}\n`);
 let res;
 try {
-  res = await sweepLedger(SCOPE, SCOPE_ID, {
-    apply: APPLY,
+  res = await buildSweepLedger(SCOPE, SCOPE_ID, {
     ...(THRESHOLD ? { threshold: Number(THRESHOLD) } : {}),
     ...(LIMIT ? { limit: Math.max(1, parseInt(LIMIT, 10) || 0) } : {}),
   });
@@ -61,8 +69,5 @@ try {
   console.error(`\nSweep failed: ${e?.message ?? e}\n${loginHint?.() ?? ""}`);
   process.exit(1);
 }
-
-console.log(`clusters: ${res.clusters} adjudicated (${res.oversizedSkipped} oversized skipped) · curator merges: ${res.merges}${APPLY ? ` · superseded ${res.superseded}` : " · (shadow: superseded 0)"}`);
-console.log(APPLY
-  ? "redundant entries retired to cold (recoverable)."
-  : "review the proposed merges in sweep-audit.jsonl, then re-run with --apply.");
+console.log(`clusters: ${res.clusters} adjudicated (${res.oversizedSkipped} oversized skipped) · proposed merges: ${res.merges}`);
+console.log("review the proposed merges in sweep-audit.jsonl (and the sweep-ledger), then re-run with --apply to execute EXACTLY those.");

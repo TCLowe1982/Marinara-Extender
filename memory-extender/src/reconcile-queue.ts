@@ -154,3 +154,26 @@ export async function appendHeld(rec: HeldRecord): Promise<void> {
 export function heldFilePath(): string {
   return heldPath();
 }
+
+// ── Rollback audit (3pl) ─────────────────────────────────────────────────────
+// Human-initiated rollbacks are recorded too, so the audit trail covers undo as
+// well as apply.
+const rollbackAuditPath = (): string => join(QUEUE_DIR(), "rollback.jsonl");
+
+export interface RollbackRecord {
+  scope: Scope;
+  scopeId: string;
+  restored: string;        // the entry brought back to active
+  replacement: string | null; // the entry that had superseded it
+  flipped: boolean;        // true = the replacement was re-superseded by the restored entry
+  at: string;
+}
+
+export async function appendRollbackAudit(rec: RollbackRecord): Promise<void> {
+  await mkdir(QUEUE_DIR(), { recursive: true });
+  await appendFile(rollbackAuditPath(), JSON.stringify(rec) + "\n", "utf8");
+}
+
+export function rollbackAuditFilePath(): string {
+  return rollbackAuditPath();
+}

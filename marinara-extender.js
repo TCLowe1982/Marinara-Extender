@@ -738,6 +738,11 @@ const panelState = {
   relinkStatus: null,      // null | "ok" | string (error message)
   renameInput: "",
   renameStatus: null,      // null | "ok" | string (error message)
+  // Retired section (3pl) — character-scope superseded facts, for rollback
+  retiredExpanded: false,
+  retired: null,           // null = not loaded; array of { id, summary, supersededAt, replacedBy }
+  retiredLoading: false,
+  retiredBusy: null,       // id currently being rolled back (disables its row)
 };
 
 // ── Remembered speaker names (per character, persisted) ─────────────────────────
@@ -1383,6 +1388,7 @@ function renderPanel() {
       content.appendChild(renderLaneSection(lane, entries));
     }
     content.appendChild(renderBookmarksSection(panelState.bookmarks));
+    content.appendChild(renderRetiredSection());
   } else if (tabs === "import") {
     content.appendChild(renderImportSection());
     content.appendChild(renderStoryIngestSection());
@@ -1558,6 +1564,108 @@ function renderOnboarding(content) {
   later.addEventListener("click", (e) => { e.preventDefault(); skipOnboarding(); });
   wrap.append(later);
   content.appendChild(wrap);
+}
+
+// ── Retired section (3pl) ─────────────────────────────────────────────────────
+// Collapsible list of CHARACTER-scope facts the curator/sweep retired, with the
+// fact that replaced each, and a human-initiated rollback (undo, or flip). Lazy-
+// loads on first expand. Reuses the .me-section / .me-entry patterns (no new CSS).
+function renderRetiredSection() {
+  const section = el("div", "me-section");
+  const hdr = el("div", "me-section-header");
+  hdr.style.cursor = "pointer";
+  const dot_ = el("span", "me-section-dot");
+  dot_.style.background = "#6b7280"; // grey — retired/cold
+  const label = el("span", "me-section-label");
+  label.textContent = (panelState.retiredExpanded ? "▾ " : "▸ ") + "Retired (character memory)";
+  const count = el("span", "me-section-count");
+  count.textContent = panelState.retired ? panelState.retired.length : "";
+  hdr.append(dot_, label, count);
+  hdr.title = "Facts the reconciliation curator merged away. Restore one if it was wrong.";
+  hdr.addEventListener("click", () => {
+    panelState.retiredExpanded = !panelState.retiredExpanded;
+    if (panelState.retiredExpanded && panelState.retired === null && !panelState.retiredLoading) loadRetired();
+    renderPanel();
+  });
+  section.appendChild(hdr);
+
+  if (panelState.retiredExpanded) {
+    if (panelState.retiredLoading) {
+      section.appendChild(Object.assign(el("div", "me-section-empty"), { textContent: "Loading…" }));
+    } else if (!panelState.retired || panelState.retired.length === 0) {
+      section.appendChild(Object.assign(el("div", "me-section-empty"), { textContent: "No retired facts." }));
+    } else {
+      for (const r of panelState.retired) section.appendChild(renderRetiredRow(r));
+    }
+  }
+  return section;
+}
+
+function renderRetiredRow(r) {
+  const wrap = el("div", "me-entry");
+  const body = el("div", "me-entry-body");
+
+  const summary = el("span", "me-entry-summary");
+  summary.textContent = r.summary;
+  summary.title = r.summary;
+  body.appendChild(summary);
+
+  const meta = el("div", "me-entry-meta");
+  const when = el("span", "me-status-badge");
+  when.textContent = r.supersededAt ? `retired ${String(r.supersededAt).slice(0, 10)}` : "retired";
+  when.style.background = "transparent";
+  when.style.opacity = "0.7";
+  meta.appendChild(when);
+  body.appendChild(meta);
+
+  // Supersession history, inline: what replaced it.
+  const rep = el("div", "me-section-empty");
+  rep.textContent = r.replacedBy ? `↳ replaced by: ${r.replacedBy.summary}` : "↳ replacement no longer present";
+  rep.title = r.replacedBy ? r.replacedBy.summary : "";
+  body.appendChild(rep);
+
+  const actions = el("div", "me-entry-actions");
+  const busy = panelState.retiredBusy === r.id;
+  const restore = el("button", "me-btn-done");
+  restore.textContent = "Restore";
+  restore.title = "Bring this fact back; keep its replacement too (undo a false merge)";
+  restore.disabled = busy;
+  restore.addEventListener("click", () => doRollback(r.id, false));
+  const flip = el("button", "me-btn-done");
+  flip.textContent = "Restore as canonical ⇄";
+  flip.title = "Bring this back AND retire its replacement (the curator picked the wrong one)";
+  flip.disabled = busy;
+  flip.addEventListener("click", () => doRollback(r.id, true));
+  actions.append(restore, flip);
+
+  wrap.append(body, actions);
+  return wrap;
+}
+
+async function loadRetired() {
+  const session = panelState.session;
+  if (!session?.characterId) { panelState.retired = []; renderPanel(); return; }
+  panelState.retiredLoading = true;
+  renderPanel();
+  const nameParam = session.characterName ? `&characterName=${encodeURIComponent(session.characterName)}` : "";
+  const res = await memFetch(`/api/retired?characterId=${encodeURIComponent(session.characterId)}${nameParam}`).catch(() => null);
+  panelState.retired = res?.retired ?? [];
+  panelState.retiredLoading = false;
+  renderPanel();
+}
+
+async function doRollback(id, flip) {
+  const session = panelState.session;
+  if (!session?.characterId) return;
+  panelState.retiredBusy = id;
+  renderPanel();
+  await memFetch("/api/rollback", {
+    method: "POST",
+    body: JSON.stringify({ characterId: session.characterId, characterName: session.characterName, id, flip }),
+  }).catch(() => {});
+  panelState.retiredBusy = null;
+  panelState.retired = null; // force a fresh list (the restored fact drops out; a flip retires its replacement)
+  await loadRetired();
 }
 
 function renderLaneSection(lane, entries) {

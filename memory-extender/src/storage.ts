@@ -401,6 +401,40 @@ export async function promoteFromCold(scope: Scope, scopeId: string, id: string)
   return row;
 }
 
+// Inverse of supersedeEntry (FR4 / 3pl): bring a superseded entry back to active.
+// promoteFromCold restores the row with its supersededBy link STILL set (which
+// would keep it filtered out of the active set), so we then clear
+// supersededBy/supersededAt on both the hot index row AND the entry file. Returns
+// { replacedBy } (the id it had been superseded by, for an optional flip), or
+// null if the id isn't a superseded entry. Falls back to a hot row that still
+// carries the link, in case a prior cold-move didn't complete.
+export async function restoreSupersededEntry(
+  scope: Scope,
+  scopeId: string,
+  id: string,
+): Promise<{ replacedBy: string | null } | null> {
+  let row = await promoteFromCold(scope, scopeId, id);
+  let replacedBy: string | null = row?.supersededBy ?? null;
+  if (!row) {
+    const idx = await readIndex(scope, scopeId);
+    const hot = idx?.entries.find((e) => e.id === id && e.supersededBy);
+    if (!hot) return null; // not found, or not superseded
+    replacedBy = hot.supersededBy ?? null;
+    row = hot;
+  }
+  await mutateIndex(scope, scopeId, (index) => {
+    const r = index.entries.find((e) => e.id === id);
+    if (r) { delete r.supersededBy; delete r.supersededAt; }
+  });
+  const entry = await readEntry(scope, scopeId, row.path);
+  if (entry) {
+    const { supersededBy: _sb, supersededAt: _sa, ...rest } = entry;
+    await writeEntry(scope, scopeId, rest);
+  }
+  console.info(`[ME:restore] ${scope}:${scopeId} — ${id} restored to active${replacedBy ? ` (was superseded by ${replacedBy})` : ""}`);
+  return { replacedBy };
+}
+
 // ── Generic standalone-file YAML I/O ──────────────────────────────────────────
 // For sidecar-owned files outside the scope/index model (alias table, holding
 // pool). Reuses the same atomic-write + per-file lock so they get the same

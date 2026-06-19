@@ -37,6 +37,7 @@ import { processResponse, extractRememberTags } from "./writer.js";
 import { loadContext } from "./loader.js";
 import { runPromotion, runPromotionAll, recordRecitation } from "./promotion.js";
 import { runCleanup } from "./cleanup.js";
+import { listRetired, rollback } from "./rollback.js";
 import { updateSoftClock, makeTimeContext, timesenseEnabled } from "./soft-clock.js";
 import { runSentimentPipeline, collectPassingClassifications, speakerMatches } from "./sentiment/pipeline.js";
 import {
@@ -1422,6 +1423,28 @@ export function registerApiRoutes(app: FastifyInstance): void {
   // ── Fact supersession audit (FR2 → FR3/FR4 input) ─────────────────────────
   app.get("/api/supersessions", async (_req, reply) => {
     return reply.send({ candidates: await readSupersessionCandidates() });
+  });
+
+  // ── Retired facts + rollback (FR4 / 3pl) ──────────────────────────────────
+  // The "Retired" section of the ledger UI: list superseded CHARACTER-scope facts
+  // (where the curator/sweep operate) and let the user roll one back — undo (both
+  // active) or flip (re-supersede the replacement). Character-scoped via the same
+  // characterId -> identityKey resolution the other character routes use. Human-
+  // initiated only; the system never auto-rolls-back.
+  app.get<{ Querystring: { characterId?: string; characterName?: string } }>("/api/retired", async (req, reply) => {
+    const { characterId, characterName } = req.query;
+    if (!characterId) return reply.code(400).send({ error: "characterId is required" });
+    const identityKey = await resolveIdentity(characterId, characterName);
+    return reply.send({ retired: await listRetired("character", identityKey) });
+  });
+
+  app.post<{ Body: { characterId?: string; characterName?: string; id?: string; flip?: boolean } }>("/api/rollback", async (req, reply) => {
+    const { characterId, characterName, id, flip } = req.body ?? {};
+    if (!characterId || !id) return reply.code(400).send({ error: "characterId and id are required" });
+    const identityKey = await resolveIdentity(characterId, characterName);
+    const res = await rollback("character", identityKey, id, { flip: !!flip });
+    if (!res) return reply.code(404).send({ error: "not a superseded entry" });
+    return reply.send({ ok: true, ...res });
   });
 
   // ── Scene recaps — recap-layer FLOOR (MarinaraExtender-2cu) ───────────────

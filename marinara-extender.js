@@ -244,6 +244,22 @@ marinara.addStyle(`
     border-radius: 3px; font-size: 11px; cursor: pointer; padding: 1px 8px; line-height: 1; white-space: nowrap;
   }
   .me-btn-confirm-del:hover { background: #991b1b; }
+  /* Scope toggle (u19): Chat | Character */
+  .me-scope-toggle { display: flex; gap: 4px; margin: 6px 10px 8px; }
+  .me-scope-btn {
+    flex: 1; background: #1a1816; border: 1px solid #3d3a36; border-radius: 4px;
+    color: #9ca3af; font-size: 11px; font-family: inherit; cursor: pointer; padding: 4px 8px;
+  }
+  .me-scope-btn:hover { border-color: #6b7280; color: #e8e5e0; }
+  .me-scope-btn.active { background: #252320; border-color: #f97316; color: #f97316; font-weight: 600; }
+  /* Lane sort control */
+  .me-sort-row { display: flex; align-items: center; gap: 6px; margin: 0 10px 8px; }
+  .me-sort-label { font-size: 11px; color: #6b7280; }
+  .me-sort-select {
+    flex: 1; background: #1a1816; border: 1px solid #3d3a36; border-radius: 4px;
+    color: #e8e5e0; font-size: 11px; font-family: inherit; padding: 3px 6px; cursor: pointer;
+  }
+  .me-sort-select:focus { outline: none; border-color: #60a5fa; }
 
   /* Add button + form */
   .me-add-btn {
@@ -763,6 +779,9 @@ const panelState = {
   retiredBusy: null,       // id currently being rolled back (disables its row)
   retiredShowAll: false,   // false = show only the newest few; true = the whole list
   laneExpanded: {},        // lane.key -> bool; large lanes default collapsed (renderLaneSection)
+  laneShowAll: {},         // lane.key -> bool; show every row vs a capped preview (u19: char scope is huge)
+  memScope: "chat",        // "chat" (this conversation) | "character" (durable, cross-chat) — u19
+  memSort: "recent",       // "recent" | "used" | "oldest" — lane sort order (user-selectable)
   confirmingDelete: null,  // entry id armed for deletion (two-step guard), or null
   // Recently deleted section (recoverable delete) — CHAT-scope, restorable from cold
   deletedExpanded: false,
@@ -1411,15 +1430,22 @@ function renderPanel() {
   } else if (panelState.error) {
     content.appendChild(Object.assign(el("div", "me-error"), { textContent: panelState.error }));
   } else if (tabs === "memory") {
-    // Newest first so a just-created memory is at the top, easy to find. Sort by
-    // lastAccessed (day granularity), tie-broken by insertion order — the index
-    // appends new entries, so a higher original position is the more recent one.
+    content.appendChild(renderScopeToggle());
+    content.appendChild(renderSortControl());
+    // Insertion order is the recency tiebreak — the index appends new entries, so
+    // a higher original position is the more recently created one (dates are only
+    // day-granular). "Most used" = the tier score: retrieval + recitation×3.
     const order = new Map(panelState.chatEntries.map((e, i) => [e.id, i]));
+    const usedScore = e => (e.retrievalCount ?? 0) + (e.recitationCount ?? 0) * 3;
     const byRecent = (a, b) =>
       (b.lastAccessed ?? "").localeCompare(a.lastAccessed ?? "") ||
       (order.get(b.id) ?? 0) - (order.get(a.id) ?? 0);
+    const cmp =
+      panelState.memSort === "used" ? (a, b) => usedScore(b) - usedScore(a) || byRecent(a, b)
+      : panelState.memSort === "oldest" ? (a, b) => -byRecent(a, b)
+      : byRecent;
     for (const lane of LANES) {
-      const entries = panelState.chatEntries.filter(e => e.lane === lane.key).sort(byRecent);
+      const entries = panelState.chatEntries.filter(e => e.lane === lane.key).sort(cmp);
       content.appendChild(renderLaneSection(lane, entries));
     }
     content.appendChild(renderBookmarksSection(panelState.bookmarks));
@@ -1814,11 +1840,11 @@ function renderDeletedRow(r) {
 }
 
 async function loadDeleted() {
-  const session = panelState.session;
-  if (!session?.chatId) { panelState.deleted = []; renderPanel(); return; }
+  const { scope, scopeId } = activeScope();
+  if (!scopeId) { panelState.deleted = []; renderPanel(); return; }
   panelState.deletedLoading = true;
   renderPanel();
-  const q = `scope=chat&scopeId=${encodeURIComponent(session.chatId)}`;
+  const q = `scope=${scope}&scopeId=${encodeURIComponent(scopeId)}`;
   const res = await memFetch(`/api/deleted?${q}`).catch(() => null);
   panelState.deleted = res?.deleted ?? [];
   panelState.deletedLoading = false;
@@ -1826,11 +1852,11 @@ async function loadDeleted() {
 }
 
 async function doRestoreDeleted(id) {
-  const session = panelState.session;
-  if (!session?.chatId) return;
+  const { scope, scopeId } = activeScope();
+  if (!scopeId) return;
   panelState.deletedBusy = id;
   renderPanel();
-  const q = `scope=chat&scopeId=${encodeURIComponent(session.chatId)}`;
+  const q = `scope=${scope}&scopeId=${encodeURIComponent(scopeId)}`;
   await memFetch(`/api/entries/${encodeURIComponent(id)}/restore?${q}`, { method: "POST" }).catch(() => {});
   panelState.deletedBusy = null;
   panelState.deleted = null; // restored entry drops off this list
@@ -1839,15 +1865,62 @@ async function doRestoreDeleted(id) {
 }
 
 async function doPurge(id) {
-  const session = panelState.session;
-  if (!session?.chatId) return;
+  const { scope, scopeId } = activeScope();
+  if (!scopeId) return;
   panelState.deletedBusy = id;
   renderPanel();
-  const q = `scope=chat&scopeId=${encodeURIComponent(session.chatId)}&purge=true`;
+  const q = `scope=${scope}&scopeId=${encodeURIComponent(scopeId)}&purge=true`;
   await memFetch(`/api/entries/${encodeURIComponent(id)}?${q}`, { method: "DELETE" }).catch(() => {});
   panelState.deletedBusy = null;
   panelState.deleted = null;
   await loadDeleted();
+}
+
+// Scope toggle (u19): switch the whole memory view between this chat and the
+// character's durable, cross-chat memory. Switching reloads and resets transient
+// view state (open confirms, expanded groups) so the two scopes don't bleed.
+function renderScopeToggle() {
+  const wrap = el("div", "me-scope-toggle");
+  for (const [key, label, title] of [
+    ["chat", "This chat", "Memory scoped to this conversation"],
+    ["character", "Character", "Durable memory for this character, across all chats"],
+  ]) {
+    const b = el("button", "me-scope-btn" + (panelState.memScope === key ? " active" : ""));
+    b.textContent = label;
+    b.title = title;
+    b.addEventListener("click", () => {
+      if (panelState.memScope === key) return;
+      panelState.memScope = key;
+      panelState.confirmingDelete = null;
+      panelState.deleted = null;
+      panelState.deletedExpanded = false;
+      panelState.laneExpanded = {};
+      panelState.laneShowAll = {};
+      loadPanelData();
+    });
+    wrap.appendChild(b);
+  }
+  return wrap;
+}
+
+// Lane sort selector. Change fires on `change` (not per keystroke), so the
+// re-render never fights the user for focus the way a live filter would.
+function renderSortControl() {
+  const wrap = el("div", "me-sort-row");
+  const label = el("span", "me-sort-label");
+  label.textContent = "Sort";
+  const sel = el("select", "me-sort-select");
+  for (const [val, txt] of [["recent", "Newest"], ["used", "Most used"], ["oldest", "Oldest"]]) {
+    const o = el("option");
+    o.value = val;
+    o.textContent = txt;
+    if (panelState.memSort === val) o.selected = true;
+    sel.appendChild(o);
+  }
+  sel.title = "Most used = how often this memory is retrieved into context and recited";
+  sel.addEventListener("change", (e) => { panelState.memSort = e.target.value; renderPanel(); });
+  wrap.append(label, sel);
+  return wrap;
 }
 
 function renderLaneSection(lane, entries) {
@@ -1884,8 +1957,19 @@ function renderLaneSection(lane, entries) {
     section.appendChild(empty);
   }
 
-  for (const entry of entries) {
+  // Cap the rendered rows — character scope can hold thousands; rendering every
+  // row on expand would hang the panel. Show a preview with a "show all" toggle.
+  const LANE_PREVIEW = 30;
+  const showAll = panelState.laneShowAll[lane.key];
+  const shown = showAll ? entries : entries.slice(0, LANE_PREVIEW);
+  for (const entry of shown) {
     section.appendChild(renderEntry(entry, lane));
+  }
+  if (entries.length > LANE_PREVIEW) {
+    const more = el("button", "me-add-btn");
+    more.textContent = showAll ? "Show fewer" : `Show all ${entries.length}`;
+    more.addEventListener("click", () => { panelState.laneShowAll[lane.key] = !showAll; renderPanel(); });
+    section.appendChild(more);
   }
 
   if (adding) {
@@ -3395,6 +3479,29 @@ async function detectRecitations(surfaced, responseText) {
 
 // ── Data loading ──────────────────────────────────────────────────────────────
 
+// ── Scope (u19) ───────────────────────────────────────────────────────────────
+// The memory tab shows CHAT (this conversation) or CHARACTER (durable, cross-chat)
+// memory. Every load/mutation targets the active scope, so character memory is
+// governable too — not just chat. Character scope is addressed by the resolved
+// identityKey (the same key the Retired view and identity section use).
+function activeScope() {
+  const s = panelState.session;
+  if (!s) return { scope: "chat", scopeId: null };
+  return panelState.memScope === "character"
+    ? { scope: "character", scopeId: panelState.identityKey }
+    : { scope: "chat", scopeId: s.chatId };
+}
+
+async function ensureIdentityKey() {
+  if (panelState.identityKey || !panelState.session) return;
+  try {
+    const res = await memFetch("/api/identity");
+    const entries = Array.isArray(res?.entries) ? res.entries : [];
+    const match = entries.find(e => String(e.characterId) === String(panelState.session.characterId));
+    panelState.identityKey = match?.identityKey ?? null;
+  } catch { /* leave null — the character load reports it can't resolve */ }
+}
+
 async function loadPanelData() {
   if (!panelState.session) return;
   panelState.loading = true;
@@ -3402,13 +3509,23 @@ async function loadPanelData() {
   renderPanel();
 
   try {
-    const { chatId } = panelState.session;
-    const [entries, bookmarks] = await Promise.all([
-      memFetch(`/api/entries?scope=chat&scopeId=${encodeURIComponent(chatId)}`),
-      memFetch(`/api/bookmarks?scope=chat&scopeId=${encodeURIComponent(chatId)}`),
-    ]);
-    panelState.chatEntries = Array.isArray(entries) ? entries : [];
-    panelState.bookmarks = Array.isArray(bookmarks) ? bookmarks : [];
+    if (panelState.memScope === "character") await ensureIdentityKey();
+    const { scope, scopeId } = activeScope();
+    if (!scopeId) {
+      panelState.chatEntries = [];
+      panelState.bookmarks = [];
+      panelState.error = panelState.memScope === "character"
+        ? "Couldn't resolve this character's identity — character memory unavailable."
+        : null;
+    } else {
+      const q = `scope=${scope}&scopeId=${encodeURIComponent(scopeId)}`;
+      const [entries, bookmarks] = await Promise.all([
+        memFetch(`/api/entries?${q}`),
+        memFetch(`/api/bookmarks?${q}`),
+      ]);
+      panelState.chatEntries = Array.isArray(entries) ? entries : [];
+      panelState.bookmarks = Array.isArray(bookmarks) ? bookmarks : [];
+    }
     // Update availability (uo4) — best effort, never blocks the panel.
     memFetch("/api/health").then(h => {
       if (h && panelState.health?.updateAvailable !== h.updateAvailable) { panelState.health = h; renderPanel(); }
@@ -3434,19 +3551,22 @@ async function loadPanelData() {
 
 async function markEntryDone(entry) {
   if (!panelState.session) return;
+  const { scope, scopeId } = activeScope();
+  if (!scopeId) return;
   await memFetch(`/api/entries/${entry.id}`, {
     method: "PATCH",
-    body: JSON.stringify({ scope: "chat", scopeId: panelState.session.chatId, status: "done" }),
+    body: JSON.stringify({ scope, scopeId, status: "done" }),
   }).catch(() => {});
   await loadPanelData();
 }
 
 async function removeEntry(entry) {
   if (!panelState.session) return;
-  const { chatId } = panelState.session;
+  const { scope, scopeId } = activeScope();
+  if (!scopeId) return;
   // Soft delete: the server moves this to cold (recoverable from "Recently deleted").
   await memFetch(
-    `/api/entries/${entry.id}?scope=chat&scopeId=${encodeURIComponent(chatId)}`,
+    `/api/entries/${entry.id}?scope=${scope}&scopeId=${encodeURIComponent(scopeId)}`,
     { method: "DELETE" },
   ).catch(() => {});
   panelState.deleted = null; // refresh the recoverable list to include this
@@ -3456,16 +3576,12 @@ async function removeEntry(entry) {
 async function addEntry(laneKey, rawSummary) {
   const summary = (rawSummary ?? "").trim();
   if (!summary || !panelState.session) return;
+  const { scope, scopeId } = activeScope();
+  if (!scopeId) return;
 
   await memFetch("/api/entries", {
     method: "POST",
-    body: JSON.stringify({
-      scope: "chat",
-      scopeId: panelState.session.chatId,
-      lane: laneKey,
-      summary,
-      content: "",
-    }),
+    body: JSON.stringify({ scope, scopeId, lane: laneKey, summary, content: "" }),
   }).catch(() => {});
 
   panelState.addingLane = null;

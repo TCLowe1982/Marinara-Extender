@@ -743,6 +743,7 @@ const panelState = {
   retired: null,           // null = not loaded; array of { id, summary, supersededAt, replacedBy }
   retiredLoading: false,
   retiredBusy: null,       // id currently being rolled back (disables its row)
+  retiredShowAll: false,   // false = show only the newest few; true = the whole list
 };
 
 // ── Remembered speaker names (per character, persisted) ─────────────────────────
@@ -1595,7 +1596,16 @@ function renderRetiredSection() {
     } else if (!panelState.retired || panelState.retired.length === 0) {
       section.appendChild(Object.assign(el("div", "me-section-empty"), { textContent: "No retired facts." }));
     } else {
-      for (const r of panelState.retired) section.appendChild(renderRetiredRow(r));
+      const PREVIEW = 12;
+      const showAll = panelState.retiredShowAll || panelState.retired.length <= PREVIEW;
+      const rows = showAll ? panelState.retired : panelState.retired.slice(0, PREVIEW);
+      for (const r of rows) section.appendChild(renderRetiredRow(r));
+      if (panelState.retired.length > PREVIEW) {
+        const more = el("button", "me-add-btn");
+        more.textContent = showAll ? "Show fewer" : `Show all ${panelState.retired.length} (newest first)`;
+        more.addEventListener("click", () => { panelState.retiredShowAll = !panelState.retiredShowAll; renderPanel(); });
+        section.appendChild(more);
+      }
     }
   }
   return section;
@@ -1618,10 +1628,12 @@ function renderRetiredRow(r) {
   meta.appendChild(when);
   body.appendChild(meta);
 
-  // Supersession history, inline: what replaced it.
-  const rep = el("div", "me-section-empty");
+  // Supersession history, inline — ONE truncated line (full text on hover), same
+  // discipline as the lane entries; the old wrapping turned each row into a wall.
+  const rep = el("div");
   rep.textContent = r.replacedBy ? `↳ replaced by: ${r.replacedBy.summary}` : "↳ replacement no longer present";
   rep.title = r.replacedBy ? r.replacedBy.summary : "";
+  rep.style.cssText = "font-size:11px;color:#6b7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;";
   body.appendChild(rep);
 
   const actions = el("div", "me-entry-actions");

@@ -285,6 +285,83 @@ export async function reconcileCandidate(
   return applyDecision({ candidate, decision }, ctx, sourceChatId);
 }
 
+// ── Cluster adjudication (0kk — ledger hygiene sweep) ────────────────────────
+// A DIFFERENT curator interaction from runCurator: instead of reconciling one new
+// candidate against a searched ledger, the curator is GIVEN a small cluster of
+// already-stored facts a similarity check flagged as possible duplicates, and
+// judges the whole cluster at once — picking the canonical entry to keep and the
+// redundant ones to retire, or ruling them genuinely distinct. Cluster-at-once
+// (not pairwise) preserves the "which of N is most canonical" signal; measured
+// max fact-cluster size is 4, so the whole cluster fits one call comfortably.
+
+export interface ClusterMember { id: string; summary: string; content: string }
+
+export interface ClusterVerdict {
+  verdict: "merge" | "distinct";
+  canonicalId?: string;    // merge: the entry to KEEP
+  redundantIds?: string[]; // merge: entries to supersede by the canonical
+  rationale: string;
+  confidence?: "high" | "medium" | "low";
+}
+
+const CLUSTER_SYSTEM_PROMPT = `You are a memory curator. You are given a small CLUSTER of stored facts about the same subject that a similarity check flagged as possible duplicates. Judge the whole cluster at once.
+
+Decide ONE outcome:
+- merge — they describe ONE underlying fact (restatements/near-duplicates). Pick the single most complete, canonical entry to KEEP (canonicalId), and list every other cluster member as redundant (redundantIds) to be retired.
+- distinct — they are genuinely different facts that merely share wording; keep them all.
+
+Rules:
+- Only merge TRUE redundancies. If members add different information (different details, different events, different relationships), prefer distinct — retiring a fact is not free.
+- The canonical entry should be the most complete and accurate phrasing.
+- canonicalId and every redundantId MUST be ids from the cluster. Decide based only on the cluster shown.
+
+Call decide_cluster exactly once, then stop.`;
+
+export async function clusterCurator(members: ClusterMember[]): Promise<ClusterVerdict | null> {
+  if (members.length < 2) return null;
+  let captured: ClusterVerdict | null = null;
+
+  const ids = new Set(members.map((m) => m.id));
+  const decide_cluster = tool(
+    "decide_cluster",
+    "Record your verdict for the whole cluster. Call exactly once, then stop.",
+    {
+      verdict: z.enum(["merge", "distinct"]),
+      canonicalId: z.string().optional().describe("merge only: the id to KEEP"),
+      redundantIds: z.array(z.string()).optional().describe("merge only: the ids to retire (supersede by canonical)"),
+      rationale: z.string().describe("one sentence: why"),
+      confidence: z.enum(["high", "medium", "low"]).describe("high = clearly the same/different; low = genuinely borderline"),
+    },
+    async ({ verdict, canonicalId, redundantIds, rationale, confidence }) => {
+      // Defensive: only accept ids that are actually in the cluster.
+      const canon = canonicalId && ids.has(canonicalId) ? canonicalId : undefined;
+      const redund = (redundantIds ?? []).filter((r) => ids.has(r) && r !== canon);
+      captured = verdict === "merge" && canon && redund.length > 0
+        ? { verdict: "merge", canonicalId: canon, redundantIds: redund, rationale, confidence }
+        : { verdict: "distinct", rationale, confidence };
+      return { content: [{ type: "text", text: `Recorded ${captured.verdict} (${confidence}). You are done — end your turn.` }] };
+    },
+    { annotations: { readOnlyHint: true } },
+  );
+
+  const server = createSdkMcpServer({ name: "memory", version: "1.0.0", tools: [decide_cluster] });
+  const listing = members.map((m) => `- [${m.id}] ${m.summary}\n      ${m.content.slice(0, 240).replace(/\s+/g, " ")}`).join("\n");
+  const run = query({
+    prompt: `These stored facts were flagged as possible duplicates of each other. Judge the cluster:\n\n${listing}`,
+    options: {
+      model: MODEL(),
+      systemPrompt: CLUSTER_SYSTEM_PROMPT,
+      mcpServers: { memory: server },
+      allowedTools: ["mcp__memory__decide_cluster"],
+      canUseTool: async (name: string) =>
+        name === "mcp__memory__decide_cluster" ? { behavior: "allow", updatedInput: {} } : { behavior: "deny", message: "Only decide_cluster is available." },
+      maxTurns: 4,
+    },
+  });
+  for await (const _msg of run) { /* drive to completion; verdict captured by decide_cluster */ }
+  return captured;
+}
+
 // ── Live queue drain (b4n) ───────────────────────────────────────────────────
 // Reconstruct the curator inputs from a queued live collision. subject is left
 // undefined ON PURPOSE so resolveFactTarget routes back to the ledger the

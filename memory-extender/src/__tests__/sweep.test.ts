@@ -1,0 +1,100 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
+// Ledger hygiene sweep (MarinaraExtender-0kk). The clustering is pure (tested
+// offline); the sweep orchestration is tested with an injected cluster-curator,
+// so the real Agent SDK call (clusterCurator) stays out of the offline suite.
+
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtemp, rm } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
+import { createEntry } from "../dedup.js";
+import { readIndex, readColdIndex } from "../storage.js";
+import { clusterFacts, sweepLedger } from "../sweep.js";
+import type { ClusterVerdict } from "../reconcile.js";
+
+describe("clusterFacts (pure)", () => {
+  const E = (id: string, summary: string, lane = "character_topics", supersededBy?: string) =>
+    ({ id, lane, summary, ...(supersededBy ? { supersededBy } : {}) });
+
+  it("clusters near-duplicate facts, leaves distinct ones apart", () => {
+    const cs = clusterFacts([
+      E("a", "Mari sold a solution to someone"),
+      E("b", "Mari sold a fix to someone"),
+      E("c", "Mari grew up in Krakow"),
+    ], { threshold: 0.4 });
+    expect(cs.length).toBe(1); // a+b cluster; c is a singleton (dropped)
+    expect(cs[0]!.memberIds.slice().sort()).toEqual(["a", "b"]);
+  });
+
+  it("excludes incident beats, scene recaps, and open_threads — not the sweep's domain", () => {
+    const cs = clusterFacts([
+      E("i1", "[tense] Mari sold a solution to someone"),
+      E("i2", "[tense] Mari sold a fix to someone"),
+      E("r1", "[scene recap] Mari sold a solution to someone"), // the space-in-tag case looksIncident missed
+      E("r2", "[scene recap] Mari sold a fix to someone"),
+      E("t1", "Mari sold a solution to someone", "open_threads"),
+      E("t2", "Mari sold a fix to someone", "open_threads"),
+    ], { threshold: 0.4 });
+    expect(cs.length).toBe(0);
+  });
+
+  it("excludes superseded entries", () => {
+    const cs = clusterFacts([
+      E("a", "Mari sold a solution to someone"),
+      E("b", "Mari sold a fix to someone", "character_topics", "a"),
+    ], { threshold: 0.4 });
+    expect(cs.length).toBe(0); // only a is active -> no multi-member cluster
+  });
+
+  it("flags oversized clusters past the cap (guardrail)", () => {
+    const entries = Array.from({ length: 6 }, (_, i) => E(`e${i}`, "Mari repeated identical fact text here"));
+    const cs = clusterFacts(entries, { threshold: 0.4, cap: 3 });
+    expect(cs.length).toBe(1);
+    expect(cs[0]!.oversized).toBe(true);
+    expect(cs[0]!.memberIds.length).toBe(6);
+  });
+});
+
+describe("sweepLedger", () => {
+  let dir: string;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "me-sweep-")); process.env.MARINARA_EXTENDER_DATA = join(dir, "data"); });
+  afterEach(async () => { delete process.env.MARINARA_EXTENDER_DATA; await rm(dir, { recursive: true, force: true }); });
+
+  const seedPair = async () => ({
+    a: await createEntry("character", "mari", { lane: "character_topics", summary: "Mari sold a solution to someone", content: "Mari sold a solution to someone", kind: "trait" }),
+    b: await createEntry("character", "mari", { lane: "character_topics", summary: "Mari sold a fix to someone", content: "Mari sold a fix to someone", kind: "trait" }),
+  });
+  const activeIds = async () => ((await readIndex("character", "mari"))?.entries ?? []).filter((e) => !e.supersededBy).map((e) => e.id);
+
+  it("APPLY merge: retires the redundant member, keeps the canonical (tier move)", async () => {
+    const { a, b } = await seedPair();
+    const curate = async (): Promise<ClusterVerdict> => ({ verdict: "merge", canonicalId: a!.id, redundantIds: [b!.id], rationale: "same fact", confidence: "high" });
+    const res = await sweepLedger("character", "mari", { apply: true, threshold: 0.4, curate });
+    expect(res).toMatchObject({ clusters: 1, merges: 1, superseded: 1 });
+    const active = await activeIds();
+    expect(active).toContain(a!.id);
+    expect(active).not.toContain(b!.id);
+    const cold = await readColdIndex("character", "mari");
+    expect(cold?.entries.find((e) => e.id === b!.id)?.supersededBy).toBe(a!.id);
+  });
+
+  it("SHADOW merge: audits the proposed merge, supersedes nothing", async () => {
+    const { a, b } = await seedPair();
+    const curate = async (): Promise<ClusterVerdict> => ({ verdict: "merge", canonicalId: a!.id, redundantIds: [b!.id], rationale: "same", confidence: "high" });
+    const res = await sweepLedger("character", "mari", { threshold: 0.4, curate });
+    expect(res).toMatchObject({ merges: 1, superseded: 0 });
+    expect((await activeIds()).slice().sort()).toEqual([a!.id, b!.id].slice().sort()); // both still active
+  });
+
+  it("distinct: keeps both members, supersedes nothing", async () => {
+    const { a, b } = await seedPair();
+    const curate = async (): Promise<ClusterVerdict> => ({ verdict: "distinct", rationale: "different facts", confidence: "high" });
+    const res = await sweepLedger("character", "mari", { apply: true, threshold: 0.4, curate });
+    expect(res).toMatchObject({ merges: 0, superseded: 0 });
+    expect((await activeIds()).length).toBe(2);
+    expect(a && b).toBeTruthy();
+  });
+});

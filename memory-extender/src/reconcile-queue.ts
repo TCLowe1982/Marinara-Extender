@@ -100,3 +100,31 @@ export async function appendAudit(rec: AuditRecord): Promise<void> {
 export function auditFilePath(): string {
   return auditPath();
 }
+
+// ── Ledger hygiene sweep audit (0kk) ─────────────────────────────────────────
+// Cluster-level decisions go to a SEPARATE log so a grep of sweep activity isn't
+// tangled with live-collision (b4n) decisions.
+const sweepAuditPath = (): string => join(QUEUE_DIR(), "sweep-audit.jsonl");
+
+export interface SweepAuditRecord {
+  mode: "shadow" | "apply";
+  scope: Scope;
+  scopeId: string;
+  clusterIds: string[];
+  verdict: string | null;   // merge | distinct | null (curator failed)
+  canonicalId?: string;
+  redundantIds?: string[];
+  confidence?: string;
+  rationale?: string;
+  applied?: { supersededIds: string[] };
+  at: string;
+}
+
+export async function appendSweepAudit(rec: SweepAuditRecord): Promise<void> {
+  await mkdir(QUEUE_DIR(), { recursive: true });
+  await appendFile(sweepAuditPath(), JSON.stringify(rec) + "\n", "utf8");
+}
+
+export function sweepAuditFilePath(): string {
+  return sweepAuditPath();
+}

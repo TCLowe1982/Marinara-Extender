@@ -44,6 +44,7 @@ import {
   type IndexEntry,
 } from "./storage.js";
 import { nanoid } from "./nanoid.js";
+import { queueEnabled, enqueueReconcileTask } from "./reconcile-queue.js";
 
 export const DEDUP_SIMILARITY_THRESHOLD = 0.35;
 // Incident-vs-incident: only a re-capture of the SAME moment should collapse.
@@ -295,6 +296,20 @@ export async function createEntryIfUnique(
   );
   if (verdict.action === "skip") {
     console.info(`[ME:dedup] skipped duplicate (${input.lane}/${scope}:${scopeId}): "${summary.slice(0, 60)}"`);
+    // FR1 live reconciliation hook (b4n): structural dedup is about to DROP this
+    // as a duplicate, but it may actually be an UPDATE/EXPAND/DISTINCT the curator
+    // would keep. Queue the collision for out-of-band curation — but ONLY for
+    // durable FACTS (the curator's domain), never beats/incidents/threads, and
+    // only when the queue is enabled. Fire-and-forget: advisory, never blocks the
+    // save (mirrors recordSupersessionCandidate below).
+    const isFactCollision = input.lane === "user_topics" || (input.lane === "character_topics" && input.kind === "trait");
+    if (queueEnabled() && isFactCollision) {
+      void enqueueReconcileTask({
+        scope, scopeId, lane: input.lane, summary, content,
+        againstId: verdict.against.id, againstSummary: verdict.against.summary,
+        structuralAction: "skip", sourceChatId: input.sourceChatId,
+      }).catch(() => { /* advisory — a queue hiccup never fails a save */ });
+    }
     return null;
   }
 

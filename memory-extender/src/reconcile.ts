@@ -37,6 +37,7 @@ import type { Scope } from "./storage.js";
 import { readIndex, readEntry, supersedeEntry } from "./storage.js";
 import type { AmbientFact } from "./ambient.js";
 import { resolveFactTarget, saveFact, type FactContext } from "./facts.js";
+import { readQueue, removeTasks, appendAudit, type ReconcileTask } from "./reconcile-queue.js";
 
 // FR3 decision vocabulary (verbatim from 15x), plus the two no-collision cases.
 export type Verdict = "CREATE" | "UPDATE" | "EXPAND" | "DISTINCT" | "NEGATE" | "DUPLICATE";
@@ -45,6 +46,7 @@ export interface CuratorDecision {
   verdict: Verdict;
   targetId?: string; // existing entry the verdict acts on (UPDATE/NEGATE/DUPLICATE)
   rationale: string;
+  confidence?: "high" | "medium" | "low"; // the curator's self-reported certainty
 }
 
 // One unit of reconciliation work — a candidate fact paired with the verdict the
@@ -77,7 +79,7 @@ record exactly one verdict.
 Workflow, every time:
 1. Call search_entries to see the subject's existing stored facts.
 2. Call read_entry on any whose summary looks related, to read the full text.
-3. Call decide ONCE with your verdict and a one-sentence rationale.
+3. Call decide ONCE with your verdict, a one-sentence rationale, and your confidence (high/medium/low: high when the ledger clearly supports the verdict, low when it is genuinely ambiguous and you are guessing).
 
 Verdicts:
 - CREATE   — no existing fact covers this. (no targetId)
@@ -150,10 +152,11 @@ function buildCuratorTools(scope: Scope, scopeId: string, candidate: AmbientFact
       verdict: z.enum(["CREATE", "UPDATE", "EXPAND", "DISTINCT", "NEGATE", "DUPLICATE"]),
       targetId: z.string().optional().describe("the existing entry id this verdict acts on (omit for CREATE)"),
       rationale: z.string().describe("one sentence: why this verdict"),
+      confidence: z.enum(["high", "medium", "low"]).describe("high = the ledger clearly supports this; low = genuinely ambiguous, you are guessing"),
     },
-    async ({ verdict, targetId, rationale }) => {
-      captured = { verdict, targetId, rationale };
-      return { content: [{ type: "text", text: `Recorded ${verdict}. You are done — end your turn.` }] };
+    async ({ verdict, targetId, rationale, confidence }) => {
+      captured = { verdict, targetId, rationale, confidence };
+      return { content: [{ type: "text", text: `Recorded ${verdict} (${confidence}). You are done — end your turn.` }] };
     },
     { annotations: { readOnlyHint: true } }, // it mutates only our closure, not memory
   );
@@ -241,4 +244,78 @@ export async function reconcileCandidate(
   const decision = await runCurator(candidate, ctx);
   if (!decision) return null;
   return applyDecision({ candidate, decision }, ctx, sourceChatId);
+}
+
+// ── Live queue drain (b4n) ───────────────────────────────────────────────────
+// Reconstruct the curator inputs from a queued live collision. subject is left
+// undefined ON PURPOSE so resolveFactTarget routes back to the ledger the
+// collision happened in (scope/scopeId), rather than re-routing by a subject name.
+function taskToCandidate(t: ReconcileTask): AmbientFact {
+  return { text: t.content, fact: t.summary, lane: t.lane, scope: t.scope === "chat" ? "chat" : "character" };
+}
+function taskToCtx(t: ReconcileTask): FactContext {
+  // identityKey and fallbackChatId both = scopeId so resolveFactTarget lands on
+  // the exact ledger for either scope.
+  return { identityKey: t.scopeId, fallbackChatId: t.scopeId, characterName: t.scopeId };
+}
+
+export type CurateFn = (candidate: AmbientFact, ctx: FactContext) => Promise<CuratorDecision | null>;
+
+// Drain the live FR1 reconciliation queue. SHADOW by default: runs the curator,
+// records the proposed verdict to the audit log, applies NOTHING — the rollout
+// gate. With apply:true it also executes the verdict via applyDecision. Tasks are
+// removed once recorded (their structural drop already stood in the live save).
+// `curate` is injectable so the orchestration is testable offline.
+export async function drainReconcileQueue(opts?: {
+  apply?: boolean;
+  limit?: number;
+  curate?: CurateFn;
+}): Promise<{ processed: number; decided: number; applied: number }> {
+  const apply = opts?.apply ?? false;
+  const curate = opts?.curate ?? runCurator;
+  const all = await readQueue();
+  const tasks = opts?.limit && opts.limit > 0 ? all.slice(0, opts.limit) : all;
+
+  let decided = 0;
+  let applied = 0;
+  const handled: string[] = [];
+
+  for (const t of tasks) {
+    const candidate = taskToCandidate(t);
+    const ctx = taskToCtx(t);
+
+    let decision: CuratorDecision | null = null;
+    try {
+      decision = await curate(candidate, ctx);
+    } catch {
+      decision = null; // a curator failure on one task never aborts the drain
+    }
+    if (decision) decided++;
+
+    let appliedRec: { createdId?: string; supersededId?: string } | undefined;
+    if (decision && apply) {
+      const r = await applyDecision({ candidate, decision }, ctx, t.sourceChatId);
+      appliedRec = { createdId: r.createdId, supersededId: r.supersededId };
+      if (r.createdId || r.supersededId) applied++;
+    }
+
+    await appendAudit({
+      taskId: t.id,
+      mode: apply ? "apply" : "shadow",
+      scope: t.scope,
+      scopeId: t.scopeId,
+      candidate: t.summary,
+      againstId: t.againstId,
+      verdict: decision?.verdict ?? null,
+      confidence: decision?.confidence,
+      targetId: decision?.targetId,
+      rationale: decision?.rationale,
+      applied: appliedRec,
+      at: new Date().toISOString(),
+    });
+    handled.push(t.id);
+  }
+
+  await removeTasks(handled);
+  return { processed: handled.length, decided, applied };
 }

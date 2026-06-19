@@ -292,13 +292,20 @@ export async function classifySceneFacts(sceneText: string, roster: string[] = [
 // strong model; fails OPEN (keeps all) if unavailable, so a judge hiccup never
 // silently drops everything — the dry-run preview is the human backstop.
 
+// Calibration note for the next person who tightens this prompt (967): the
+// failure mode addressed below is "transient framed as identity" (a scene event
+// wearing an "X is a person who recently…" mask). The SYMMETRIC failure — "real
+// identity framed as transient" (e.g. "Mari, in this moment, is the chair of the
+// CS department", where the misleading "in this moment" wraps a durable fact) —
+// is NOT yet handled here and should KEEP. It's left out of 967's scope on
+// purpose; see __tests__/judge-calibration.test.ts for that case as a fixture.
 const JUDGE_SYSTEM_PROMPT = `You audit candidate facts pulled from a roleplay scene and keep ONLY the durable ones for long-term memory. Permanent memory must stay clean, so when in doubt, DROP.
 
 KEEP only a fact that would still be true next week, in a completely different scene:
 - identity / self-concept (a class, role, or archetype someone claims; what they are)
-- biography & history (where they grew up, their job, a past event that defines them — e.g. "exposed the Hargrove experiments", "named her Elden Ring character after MGS3's The Boss")
+- biography & history (where they grew up, their job, a past event that DEFINES them or reshapes their world — e.g. "exposed the Hargrove experiments", "discovered the department's papers were built on a fraud engine", "named her Elden Ring character after MGS3's The Boss")
 - a STABLE preference or habit stated as a general truth ("prefers cold weather", "always wakes with one eye open")
-- a persistent relationship or piece of world/lore
+- a persistent relationship or piece of world/lore (incl. a named dynamic — "calls him her 'chaos goblin'")
 
 DROP (these are NOT durable, no matter how fact-like the phrasing):
 - anything describing THIS MOMENT: in his bed, wearing his shirt now, holding a pencil, hair disheveled right now
@@ -308,7 +315,14 @@ DROP (these are NOT durable, no matter how fact-like the phrasing):
 - a "preference" that is really just current arousal ("he is aroused by her in his shirt" — DROP)
 - vague, narrative, or empty statements
 
-Test each one: strip the scene away — is there a standalone fact about who someone IS or what happened in their life? If it only makes sense inside this moment, DROP it.
+THE MASK TEST — the most common miss. A transient scene event is often dressed in durable-sounding "identity" framing. The mask does NOT change the substance. Strip the identity clause and judge the core assertion:
+- "Mari is a professor who recently had vigorous sex on her desk and then relaxed in the chair, covered in semen" → the core is a scene EVENT (what she did this scene); the only durable part ("is a professor") is already known. DROP — that's inventory, not identity.
+- "Mari wants to ruin Hargrove's chair, expressing this during intimate moments" → an episodic DESIRE felt in a moment, masked as a standing trait. DROP.
+Contrast — these KEEP because the core is a DEFINING event or a standing dynamic, not a scene action:
+- "Mari discovered her department's publication record was built on Hargrove's fraud engine" → a discovery that reshapes her world. KEEP.
+- "Mari calls Thomas her 'chaos goblin'" → names a persistent relationship dynamic. KEEP.
+
+Test each one: strip the scene away — is there a standalone fact about who someone IS or a DEFINING thing that happened in their life? A specific scene action (where, with whom, covered in what) is NOT that, even when phrased as "X is someone who did Y". If it only matters inside this moment, DROP it.
 
 You are given a numbered list. Return ONLY the indices to keep.
 Return JSON: {"keep":[<indices>]}. No prose, no markdown.`;

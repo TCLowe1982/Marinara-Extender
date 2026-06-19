@@ -227,29 +227,20 @@ function decide(
   return { action: "create" };
 }
 
-// Create an entry only if no sufficiently similar entry already exists in the
-// same lane of the target scope. Returns the created Entry, or null if it was a
-// duplicate (or the summary was blank). Used by every capture tier.
-export async function createEntryIfUnique(
+// Create an entry UNCONDITIONALLY — no dedup gate. The caller has already
+// decided this entry should exist; the reconciliation curator (FR3) uses this
+// because it adjudicates collisions the structural Jaccard gate cannot (and the
+// gate would otherwise re-collapse a curator-approved UPDATE/EXPAND/DISTINCT into
+// the very fact it was meant to supersede or sit beside). Assumes a non-blank
+// summary (the caller ensures it). createEntryIfUnique wraps this behind the gate
+// for the capture tiers.
+export async function createEntry(
   scope: Scope,
   scopeId: string,
   input: CreateEntryInput,
-): Promise<Entry | null> {
+): Promise<Entry> {
   const summary = input.summary.trim();
-  if (!summary) return null;
   const content = (input.content ?? "").trim();
-
-  const idx = await readIndex(scope, scopeId);
-  const existingInLane = (idx?.entries ?? []).filter((e) => e.lane === input.lane);
-  const verdict = decide(
-    { lane: input.lane, summary, content, kind: input.kind, sourceChatId: input.sourceChatId, turnStart: input.turnStart },
-    existingInLane,
-  );
-  if (verdict.action === "skip") {
-    console.info(`[ME:dedup] skipped duplicate (${input.lane}/${scope}:${scopeId}): "${summary.slice(0, 60)}"`);
-    return null;
-  }
-
   const id = `${idPrefix(input.lane)}-${nanoid(8)}`;
   const now = today();
   const status: EntryStatus = input.status ?? "open";
@@ -281,6 +272,34 @@ export async function createEntryIfUnique(
     ...(input.threadId ? { threadId: input.threadId } : {}),
     ...(typeof input.turnStart === "number" ? { turnStart: input.turnStart } : {}),
   });
+  return entry;
+}
+
+// Create an entry only if no sufficiently similar entry already exists in the
+// same lane of the target scope. Returns the created Entry, or null if it was a
+// duplicate (or the summary was blank). Used by every capture tier.
+export async function createEntryIfUnique(
+  scope: Scope,
+  scopeId: string,
+  input: CreateEntryInput,
+): Promise<Entry | null> {
+  const summary = input.summary.trim();
+  if (!summary) return null;
+  const content = (input.content ?? "").trim();
+
+  const idx = await readIndex(scope, scopeId);
+  const existingInLane = (idx?.entries ?? []).filter((e) => e.lane === input.lane);
+  const verdict = decide(
+    { lane: input.lane, summary, content, kind: input.kind, sourceChatId: input.sourceChatId, turnStart: input.turnStart },
+    existingInLane,
+  );
+  if (verdict.action === "skip") {
+    console.info(`[ME:dedup] skipped duplicate (${input.lane}/${scope}:${scopeId}): "${summary.slice(0, 60)}"`);
+    return null;
+  }
+
+  const entry = await createEntry(scope, scopeId, input);
+  const id = entry.id;
 
   if (verdict.action === "create-correction") {
     // FR2: facts supersede. The newer fact replaces the older one — the old

@@ -17,7 +17,7 @@ import type { AmbientFact } from "./ambient.js";
 import { classifySceneFacts, judgeDurableFacts } from "./ambient.js";
 import type { Chunk } from "./sentiment/types.js";
 import type { Entry } from "./storage.js";
-import { createEntryIfUnique } from "./dedup.js";
+import { createEntry, createEntryIfUnique } from "./dedup.js";
 import { resolveNameToKey, matchesSessionName } from "./identity.js";
 import { normalizeLabel, readAliasTable, USER_IDENTITY_KEY } from "./aliases.js";
 import { fetchEmbeddings, cosineSim } from "./embeddings.js";
@@ -110,16 +110,21 @@ export async function saveFact(
   fact: AmbientFact,
   ctx: FactContext,
   sourceChatId?: string,
+  opts?: { force?: boolean },
 ): Promise<Entry | null> {
   const target = await resolveFactTarget(fact, ctx);
   if (!target) return null;
-  return createEntryIfUnique(target.scope, target.scopeId, {
+  const input = {
     lane: fact.lane,
     summary: target.summary,
     content: capContent(fact.text),
     ...(sourceChatId ? { sourceChatId } : {}),
     ...(fact.lane === "character_topics" ? { kind: "trait" as const } : {}),
-  });
+  };
+  // force: skip the structural dedup gate. Used by the reconciliation curator
+  // (FR3) — once the agent has adjudicated a collision, the blind Jaccard gate
+  // must not re-collapse the new fact into the one it was meant to supersede.
+  return opts?.force ? createEntry(target.scope, target.scopeId, input) : createEntryIfUnique(target.scope, target.scopeId, input);
 }
 
 // ── Consensus aggregation (967, the assembly discipline) ────────────────────────

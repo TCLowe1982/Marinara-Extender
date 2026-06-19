@@ -14,7 +14,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import type { AmbientFact } from "../ambient.js";
 import { saveFact, type FactContext } from "../facts.js";
-import { applyDecision, type CuratorDecision } from "../reconcile.js";
+import { applyDecision, selectLedgerView, type CuratorDecision } from "../reconcile.js";
 import { readIndex, readColdIndex } from "../storage.js";
 
 let dir: string;
@@ -100,5 +100,36 @@ describe("applyDecision (FR3 verdicts)", () => {
     );
     expect(r.supersededId).toBeUndefined();
     expect(await activeIds()).toEqual(expect.arrayContaining([a!.id, r.createdId!]));
+  });
+});
+
+describe("selectLedgerView (5f2 — bound the curator's ledger view)", () => {
+  const E = (id: string, summary: string, supersededBy?: string) =>
+    ({ id, lane: "character_topics" as const, summary, ...(supersededBy ? { supersededBy } : {}) });
+
+  it("caps the view but reports the true total", () => {
+    const entries = Array.from({ length: 120 }, (_, i) => E(`e${i}`, `fact number ${i}`));
+    const v = selectLedgerView(entries, "fact number 7", { cap: 50 });
+    expect(v.rows.length).toBe(50);
+    expect(v.total).toBe(120);
+  });
+
+  it("always pins the flagged colliding entry, even when it is the least relevant", () => {
+    const entries = [E("collide", "utterly unrelated zzz qqq"), ...Array.from({ length: 80 }, (_, i) => E(`e${i}`, `shared candidate words number ${i}`))];
+    const v = selectLedgerView(entries, "shared candidate words", { focusId: "collide", cap: 10 });
+    expect(v.rows.some((r) => r.id === "collide")).toBe(true);
+    expect(v.rows.length).toBe(10);
+  });
+
+  it("excludes superseded entries from both the view and the total", () => {
+    const v = selectLedgerView([E("a", "x"), E("b", "y", "a")], "x");
+    expect(v.total).toBe(1);
+    expect(v.rows.map((r) => r.id)).toEqual(["a"]);
+  });
+
+  it("ranks a lexically-similar entry above noise", () => {
+    const entries = [E("noise", "completely different topic entirely"), E("hit", "Mari plays a Pact of the Tome Warlock")];
+    const v = selectLedgerView(entries, "Mari is a Pact of the Tome Warlock", { cap: 1 });
+    expect(v.rows[0]!.id).toBe("hit");
   });
 });

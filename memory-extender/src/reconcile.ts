@@ -33,8 +33,9 @@
 
 import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import type { Scope } from "./storage.js";
+import type { Scope, Lane } from "./storage.js";
 import { readIndex, readEntry, supersedeEntry } from "./storage.js";
+import { jaccardSimilarity } from "./dedup.js";
 import type { AmbientFact } from "./ambient.js";
 import { resolveFactTarget, saveFact, type FactContext } from "./facts.js";
 import { readQueue, removeTasks, appendAudit, type ReconcileTask } from "./reconcile-queue.js";
@@ -95,31 +96,67 @@ Rules:
 - When unsure between CREATE and DUPLICATE, read the candidates first.
 - Decide based only on what the tools return. Do not use any other tools.`;
 
+// Bound the curator's view of a mature ledger (5f2). Returning every active entry
+// (professor_mari has ~4250) is both expensive and TRIAGES — the Ledger Pattern
+// failure. Instead: always PIN the structurally-flagged colliding entry (so the
+// key fact is never missed regardless of ranking), then fill up to `cap` more by
+// lexical relevance to the candidate (jaccardSimilarity — the same measure that
+// flagged the collision). Pure + exported so the selection is testable offline.
+export const LEDGER_VIEW_CAP = 50;
+
+export function selectLedgerView(
+  entries: { id: string; lane: Lane; summary: string; supersededBy?: string }[],
+  candidateText: string,
+  opts?: { focusId?: string; cap?: number },
+): { rows: { id: string; lane: Lane; summary: string }[]; total: number } {
+  const active = entries.filter((e) => !e.supersededBy); // superseded facts live in cold
+  const cap = Math.max(1, opts?.cap ?? LEDGER_VIEW_CAP);
+  const picked = new Map<string, { id: string; lane: Lane; summary: string }>();
+  const take = (e: { id: string; lane: Lane; summary: string }) => {
+    if (!picked.has(e.id)) picked.set(e.id, { id: e.id, lane: e.lane, summary: e.summary });
+  };
+  // Pin the flagged collision first — it must always be in view.
+  if (opts?.focusId) {
+    const f = active.find((e) => e.id === opts.focusId);
+    if (f) take(f);
+  }
+  // Then the most lexically-relevant entries to the candidate, up to the cap.
+  const ranked = active
+    .map((e) => ({ e, score: jaccardSimilarity(candidateText, e.summary) }))
+    .sort((a, b) => b.score - a.score);
+  for (const { e } of ranked) {
+    if (picked.size >= cap) break;
+    take(e);
+  }
+  return { rows: [...picked.values()], total: active.length };
+}
+
 // Build the curator's tools, scoped to ONE ledger (scope/scopeId). The read tools
 // expose only summaries + content of ACTIVE (non-superseded) entries; the decide
 // tool captures the verdict into `captured` and ends the turn. There is NO write
 // tool — the act is deferred to applyDecision so dry-run and --apply share one
-// code path and the agent can never mutate memory directly.
-function buildCuratorTools(scope: Scope, scopeId: string, candidate: AmbientFact) {
+// code path and the agent can never mutate memory directly. `focusId` (when known
+// from the live FR1 trigger) pins the colliding entry into the bounded view.
+function buildCuratorTools(scope: Scope, scopeId: string, candidate: AmbientFact, focusId?: string) {
   let captured: CuratorDecision | null = null;
 
   const search_entries = tool(
     "search_entries",
-    "List the subject's existing stored facts (id, lane, summary). Call this first.",
+    "List the subject's existing stored facts (id, lane, summary), most relevant first. Call this first.",
     { lane: z.string().optional().describe("optional lane filter: user_topics | character_topics | open_threads") },
     async ({ lane }) => {
       const idx = await readIndex(scope, scopeId);
-      const rows = (idx?.entries ?? [])
-        .filter((e) => !e.supersededBy) // active only — superseded facts live in cold
-        .filter((e) => (lane ? e.lane === lane : true))
-        .map((e) => ({ id: e.id, lane: e.lane, summary: e.summary }));
+      const filtered = (idx?.entries ?? []).filter((e) => (lane ? e.lane === lane : true));
+      const { rows, total } = selectLedgerView(filtered, candidate.fact, { focusId });
       const header = `Candidate to reconcile: "${candidate.fact}" (lane ${candidate.lane}, subject ${candidate.subject ?? "?"}).`;
+      if (rows.length === 0) return { content: [{ type: "text", text: `${header}\n\nThis ledger has no stored facts yet.` }] };
+      const note = rows.length < total
+        ? `\n\n(showing the ${rows.length} most relevant of ${total} active facts${focusId ? ", including the flagged collision" : ""} — ranked by relevance; read_entry any for full text.)`
+        : "";
       return {
         content: [{
           type: "text",
-          text: rows.length
-            ? `${header}\n\nExisting facts in this ledger:\n${rows.map((r) => `- [${r.id}] (${r.lane}) ${r.summary}`).join("\n")}`
-            : `${header}\n\nThis ledger has no stored facts yet.`,
+          text: `${header}\n\nExisting facts in this ledger:\n${rows.map((r) => `- [${r.id}] (${r.lane}) ${r.summary}`).join("\n")}${note}`,
         }],
       };
     },
@@ -167,15 +204,17 @@ function buildCuratorTools(scope: Scope, scopeId: string, candidate: AmbientFact
 // LIVE PATH: run the curator agent over one candidate and return its verdict.
 // Requires the Agent SDK + a logged-in Claude CLI session. Returns null if the
 // candidate has no resolvable home, or if the agent ended without deciding.
-export async function runCurator(candidate: AmbientFact, ctx: FactContext): Promise<CuratorDecision | null> {
+// `focusId` (the live FR1 collision the structural rule flagged) is pinned into
+// the curator's bounded ledger view and called out in the kickoff prompt.
+export async function runCurator(candidate: AmbientFact, ctx: FactContext, opts?: { focusId?: string }): Promise<CuratorDecision | null> {
   const target = await resolveFactTarget(candidate, ctx);
   if (!target) return null; // empty/undroppable summary — nothing to reconcile
 
-  const { server, get } = buildCuratorTools(target.scope, target.scopeId, candidate);
+  const { server, get } = buildCuratorTools(target.scope, target.scopeId, candidate, opts?.focusId);
   const toolNames = ["mcp__memory__search_entries", "mcp__memory__read_entry", "mcp__memory__decide"];
 
   const run = query({
-    prompt: `Reconcile this candidate fact against the subject's existing memory: "${candidate.fact}"`,
+    prompt: `Reconcile this candidate fact against the subject's existing memory: "${candidate.fact}"${opts?.focusId ? `\n\nA structural duplicate check flagged it as colliding with stored entry ${opts.focusId} — examine that one first, then decide.` : ""}`,
     options: {
       model: MODEL(),
       systemPrompt: SYSTEM_PROMPT, // plain string (NOT the claude_code preset) — a focused curator, not a coding agent
@@ -259,7 +298,7 @@ function taskToCtx(t: ReconcileTask): FactContext {
   return { identityKey: t.scopeId, fallbackChatId: t.scopeId, characterName: t.scopeId };
 }
 
-export type CurateFn = (candidate: AmbientFact, ctx: FactContext) => Promise<CuratorDecision | null>;
+export type CurateFn = (candidate: AmbientFact, ctx: FactContext, focusId?: string) => Promise<CuratorDecision | null>;
 
 // Drain the live FR1 reconciliation queue. SHADOW by default: runs the curator,
 // records the proposed verdict to the audit log, applies NOTHING — the rollout
@@ -286,7 +325,7 @@ export async function drainReconcileQueue(opts?: {
 
     let decision: CuratorDecision | null = null;
     try {
-      decision = await curate(candidate, ctx);
+      decision = await curate(candidate, ctx, t.againstId); // pin the flagged collision
     } catch {
       decision = null; // a curator failure on one task never aborts the drain
     }

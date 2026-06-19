@@ -603,10 +603,16 @@ async function getCsrfToken(force = false) {
 async function memFetch(path, options = {}) {
   const { headers: extraHeaders, ...rest } = options;
   const method = (options.method ?? "GET").toUpperCase();
+  // Only declare a JSON body when there actually is one. A bodyless request
+  // (DELETE, or a POST that carries everything in the query string) sent with
+  // Content-Type: application/json is rejected by Fastify's body parser with a
+  // 400 ("body cannot be empty") BEFORE the handler runs — which silently broke
+  // delete/restore/purge and the update button.
+  const hasBody = rest.body != null;
   const doFetch = async (token) => fetch(`${MEMORY_EXTENDER}${path}`, {
     ...rest,
     headers: {
-      "Content-Type": "application/json",
+      ...(hasBody ? { "Content-Type": "application/json" } : {}),
       ...(token ? { "x-me-csrf": token } : {}),
       ...(extraHeaders ?? {}),
     },
@@ -1405,8 +1411,15 @@ function renderPanel() {
   } else if (panelState.error) {
     content.appendChild(Object.assign(el("div", "me-error"), { textContent: panelState.error }));
   } else if (tabs === "memory") {
+    // Newest first so a just-created memory is at the top, easy to find. Sort by
+    // lastAccessed (day granularity), tie-broken by insertion order — the index
+    // appends new entries, so a higher original position is the more recent one.
+    const order = new Map(panelState.chatEntries.map((e, i) => [e.id, i]));
+    const byRecent = (a, b) =>
+      (b.lastAccessed ?? "").localeCompare(a.lastAccessed ?? "") ||
+      (order.get(b.id) ?? 0) - (order.get(a.id) ?? 0);
     for (const lane of LANES) {
-      const entries = panelState.chatEntries.filter(e => e.lane === lane.key);
+      const entries = panelState.chatEntries.filter(e => e.lane === lane.key).sort(byRecent);
       content.appendChild(renderLaneSection(lane, entries));
     }
     content.appendChild(renderBookmarksSection(panelState.bookmarks));
@@ -1963,7 +1976,17 @@ function renderDeleteConfirm(entry) {
   cancel.addEventListener("click", () => { panelState.confirmingDelete = null; renderPanel(); });
   const confirm_ = el("button", "me-btn-confirm-del");
   confirm_.textContent = "Delete";
-  confirm_.addEventListener("click", () => { panelState.confirmingDelete = null; removeEntry(entry); });
+  confirm_.addEventListener("click", () => {
+    panelState.confirmingDelete = null;
+    // Optimistic + synchronous: drop it from the visible lane and repaint NOW, on
+    // the click, so the panel responds instantly instead of waiting on the server
+    // round-trip (during which a tab that loses focus looks frozen). loadPanelData
+    // inside removeEntry then reconciles with the authoritative server state.
+    panelState.chatEntries = panelState.chatEntries.filter((e) => e.id !== entry.id);
+    panelState.deleted = null;
+    renderPanel();
+    removeEntry(entry);
+  });
   actions.append(cancel, confirm_);
 
   wrap.append(warn, actions);

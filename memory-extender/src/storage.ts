@@ -49,6 +49,7 @@ export interface IndexEntry {
   // widening a serialized enum breaks empirical consumers silently.
   supersededBy?: string;    // id of the replacing entry
   supersededAt?: string;    // ISO datetime
+  deletedAt?: string;       // ISO datetime — USER-deleted (in cold, recoverable); distinct from supersededBy
 }
 
 export interface ScopeIndex {
@@ -433,6 +434,74 @@ export async function restoreSupersededEntry(
   }
   console.info(`[ME:restore] ${scope}:${scopeId} — ${id} restored to active${replacedBy ? ` (was superseded by ${replacedBy})` : ""}`);
   return { replacedBy };
+}
+
+// ── User deletes: recoverable, not destructive ────────────────────────────────
+// Deleting a memory from the ledger is a TIER MOVE to cold, mirroring supersede:
+// the row lands in cold marked with deletedAt (and, unlike a supersede, with NO
+// supersededBy), so it shows up in the "Recently deleted" view and can be
+// restored. Cold recall skips deletedAt rows (loader.ts), so a deleted memory
+// drops out of Current and stays out until a human restores it. Permanent removal
+// (purgeColdEntry) is a separate, dig-for-it step.
+
+export async function softDeleteEntry(scope: Scope, scopeId: string, id: string): Promise<boolean> {
+  const now = new Date().toISOString();
+  let found = false;
+  await mutateIndex(scope, scopeId, (index) => {
+    const r = index.entries.find((e) => e.id === id);
+    if (r) { r.deletedAt = now; found = true; }
+  });
+  if (!found) return false;
+  await moveToCold(scope, scopeId, [id]);
+  console.info(`[ME:delete] ${scope}:${scopeId} — ${id} soft-deleted (moved to cold, recoverable)`);
+  return true;
+}
+
+// Cold entries the USER deleted (deletedAt set, not a supersession) — newest first.
+export async function listDeleted(
+  scope: Scope,
+  scopeId: string,
+): Promise<{ id: string; summary: string; lane: Lane; deletedAt?: string }[]> {
+  const cold = await readColdIndex(scope, scopeId);
+  return (cold?.entries ?? [])
+    .filter((e) => e.deletedAt && !e.supersededBy)
+    .map((e) => ({ id: e.id, summary: e.summary, lane: e.lane, deletedAt: e.deletedAt }))
+    .sort((a, b) => (b.deletedAt ?? "").localeCompare(a.deletedAt ?? ""));
+}
+
+// Bring a user-deleted entry back to active. Guarded to deletedAt rows so it can
+// never resurrect a SUPERSEDED entry (that path is restoreSupersededEntry).
+export async function restoreDeletedEntry(scope: Scope, scopeId: string, id: string): Promise<boolean> {
+  const cold = await readColdIndex(scope, scopeId);
+  const target = cold?.entries.find((e) => e.id === id);
+  if (!target || !target.deletedAt) return false;
+  const row = await promoteFromCold(scope, scopeId, id);
+  if (!row) return false;
+  await mutateIndex(scope, scopeId, (index) => {
+    const r = index.entries.find((e) => e.id === id);
+    if (r) delete r.deletedAt;
+  });
+  console.info(`[ME:restore] ${scope}:${scopeId} — ${id} restored from deleted`);
+  return true;
+}
+
+// The dig: permanently destroy a cold entry (file + cold row). Reachable only for
+// entries already in cold — the UI exposes it solely from inside the deleted view.
+export async function purgeColdEntry(scope: Scope, scopeId: string, id: string): Promise<boolean> {
+  const coldPath = coldIndexPath(scope, scopeId);
+  const cold = await readYaml<ScopeIndex>(coldPath);
+  const row = cold?.entries.find((e) => e.id === id);
+  if (!row) return false;
+  await deleteEntryFile(scope, scopeId, row.path);
+  await serializedWrite(coldPath, async () => {
+    const c = await readYaml<ScopeIndex>(coldPath);
+    if (!c) return;
+    c.entries = c.entries.filter((e) => e.id !== id);
+    c.lastUpdated = new Date().toISOString();
+    await writeYaml(coldPath, c);
+  });
+  console.info(`[ME:purge] ${scope}:${scopeId} — ${id} permanently removed`);
+  return true;
 }
 
 // ── Generic standalone-file YAML I/O ──────────────────────────────────────────

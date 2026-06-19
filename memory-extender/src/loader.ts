@@ -231,6 +231,10 @@ async function coldRecall(
     // put the stale fact back in Current next to its replacement. FR3/FR4 own
     // deliberate resurrection.
     if (e.supersededBy) continue;
+    // A user-deleted memory lives in cold only so it can be RESTORED by hand —
+    // it must never be recalled back into Current on its own (that would undo
+    // the delete). Resurrection is the explicit "Recently deleted" → Restore path.
+    if (e.deletedAt) continue;
     const r = relevanceScore(e.summary, recentText);
     if (r > RELEVANCE_CREDIT_THRESHOLD && (!best || r > best.r)) best = { e, r };
   }

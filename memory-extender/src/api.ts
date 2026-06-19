@@ -15,9 +15,11 @@ import {
   readIndex,
   readEntry,
   writeEntry,
-  deleteEntryFile,
+  softDeleteEntry,
+  listDeleted,
+  restoreDeletedEntry,
+  purgeColdEntry,
   upsertIndexEntry,
-  removeIndexEntry,
   removeEntriesBySourceChat,
   readBookmarks,
   mutateBookmarks,
@@ -314,27 +316,61 @@ export function registerApiRoutes(app: FastifyInstance): void {
   });
 
   // ── DELETE /api/entries/:id ───────────────────────────────────────────────
-  // Removes the entry file and its index row.
-  // Query: scope, scopeId
+  // Default: SOFT delete — move the entry to cold so it's recoverable from the
+  // "Recently deleted" view (a memory is never destroyed on a single action).
+  // ?purge=true: permanently remove an ALREADY-cold entry (file + row) — the
+  // deliberate "dig" the UI exposes only from inside the deleted view.
+  // Query: scope, scopeId, purge?
 
   app.delete<{
     Params: { id: string };
-    Querystring: { scope: Scope; scopeId: string };
+    Querystring: { scope: Scope; scopeId: string; purge?: string };
   }>("/api/entries/:id", async (req, reply) => {
     const { id } = req.params;
-    const { scope, scopeId } = req.query;
+    const { scope, scopeId, purge } = req.query;
 
     if (!VALID_SCOPES.includes(scope) || !scopeId) {
       return reply.code(400).send({ error: "scope and scopeId are required" });
     }
 
-    const index = await readIndex(scope, scopeId);
-    const indexEntry = index?.entries.find((e) => e.id === id);
-    if (!indexEntry) return reply.code(404).send({ error: "entry not found" });
+    if (purge === "true" || purge === "1") {
+      const purged = await purgeColdEntry(scope, scopeId, id);
+      if (!purged) return reply.code(404).send({ error: "entry not found in cold storage" });
+      return reply.send({ ok: true, purged: true });
+    }
 
-    await deleteEntryFile(scope, scopeId, indexEntry.path);
-    await removeIndexEntry(scope, scopeId, id);
+    const deleted = await softDeleteEntry(scope, scopeId, id);
+    if (!deleted) return reply.code(404).send({ error: "entry not found" });
+    return reply.send({ ok: true, recoverable: true });
+  });
 
+  // ── GET /api/deleted ──────────────────────────────────────────────────────
+  // User-deleted entries still recoverable from cold. Query: scope, scopeId.
+
+  app.get<{
+    Querystring: { scope: Scope; scopeId: string };
+  }>("/api/deleted", async (req, reply) => {
+    const { scope, scopeId } = req.query;
+    if (!VALID_SCOPES.includes(scope) || !scopeId) {
+      return reply.code(400).send({ error: "scope and scopeId are required" });
+    }
+    return reply.send({ deleted: await listDeleted(scope, scopeId) });
+  });
+
+  // ── POST /api/entries/:id/restore ─────────────────────────────────────────
+  // Bring a user-deleted entry back from cold to active. Query: scope, scopeId.
+
+  app.post<{
+    Params: { id: string };
+    Querystring: { scope: Scope; scopeId: string };
+  }>("/api/entries/:id/restore", async (req, reply) => {
+    const { id } = req.params;
+    const { scope, scopeId } = req.query;
+    if (!VALID_SCOPES.includes(scope) || !scopeId) {
+      return reply.code(400).send({ error: "scope and scopeId are required" });
+    }
+    const restored = await restoreDeletedEntry(scope, scopeId, id);
+    if (!restored) return reply.code(404).send({ error: "not a recoverable deleted entry" });
     return reply.send({ ok: true });
   });
 

@@ -232,6 +232,18 @@ marinara.addStyle(`
   .me-btn-done:hover  { border-color: #34d399; background: #064e3b; }
   .me-btn-delete { color: #6b7280; }
   .me-btn-delete:hover { border-color: #f87171; color: #f87171; background: #3f1414; }
+  /* Collapsible lane groups */
+  .me-section-header.me-collapsible { cursor: pointer; }
+  .me-section-header.me-collapsible:hover .me-section-label { color: #e8e5e0; }
+  .me-section-chevron { font-size: 9px; color: #6b7280; width: 9px; flex-shrink: 0; }
+  /* Two-step delete guard — a memory is never removed on one reflexive click. */
+  .me-entry-confirm-del { background: #2a1414; }
+  .me-del-warn { flex: 1; min-width: 0; font-size: 11px; color: #fca5a5; line-height: 1.4; }
+  .me-btn-confirm-del {
+    background: #7f1d1d; color: #fecaca; border: 1px solid #b91c1c;
+    border-radius: 3px; font-size: 11px; cursor: pointer; padding: 1px 8px; line-height: 1; white-space: nowrap;
+  }
+  .me-btn-confirm-del:hover { background: #991b1b; }
 
   /* Add button + form */
   .me-add-btn {
@@ -744,6 +756,15 @@ const panelState = {
   retiredLoading: false,
   retiredBusy: null,       // id currently being rolled back (disables its row)
   retiredShowAll: false,   // false = show only the newest few; true = the whole list
+  laneExpanded: {},        // lane.key -> bool; large lanes default collapsed (renderLaneSection)
+  confirmingDelete: null,  // entry id armed for deletion (two-step guard), or null
+  // Recently deleted section (recoverable delete) — CHAT-scope, restorable from cold
+  deletedExpanded: false,
+  deleted: null,           // null = not loaded; array of { id, summary, lane, deletedAt }
+  deletedLoading: false,
+  deletedBusy: null,       // id currently being restored/purged
+  deletedShowAll: false,
+  confirmingPurge: null,   // deleted-entry id armed for PERMANENT removal (the dig)
 };
 
 // ── Remembered speaker names (per character, persisted) ─────────────────────────
@@ -1390,6 +1411,7 @@ function renderPanel() {
     }
     content.appendChild(renderBookmarksSection(panelState.bookmarks));
     content.appendChild(renderRetiredSection());
+    content.appendChild(renderDeletedSection());
   } else if (tabs === "import") {
     content.appendChild(renderImportSection());
     content.appendChild(renderStoryIngestSection());
@@ -1680,21 +1702,170 @@ async function doRollback(id, flip) {
   await loadRetired();
 }
 
+// ── Recently deleted section (recoverable delete) ─────────────────────────────
+// CHAT-scope entries the user deleted. Delete routes to cold, not destruction, so
+// each lands here restorable. PERMANENT removal is a separate two-step "dig" from
+// inside this view — never a top-level action. Lazy-loads on first expand.
+function renderDeletedSection() {
+  const section = el("div", "me-section");
+  const hdr = el("div", "me-section-header");
+  hdr.style.cursor = "pointer";
+  const dot_ = el("span", "me-section-dot");
+  dot_.style.background = "#6b7280"; // grey — cold
+  const label = el("span", "me-section-label");
+  label.textContent = (panelState.deletedExpanded ? "▾ " : "▸ ") + "Recently deleted (recoverable)";
+  const count = el("span", "me-section-count");
+  count.textContent = panelState.deleted ? panelState.deleted.length : "";
+  hdr.append(dot_, label, count);
+  hdr.title = "Memories you deleted. Kept in cold storage and restorable — erasing for good takes a second, deliberate step.";
+  hdr.addEventListener("click", () => {
+    panelState.deletedExpanded = !panelState.deletedExpanded;
+    if (panelState.deletedExpanded && panelState.deleted === null && !panelState.deletedLoading) loadDeleted();
+    renderPanel();
+  });
+  section.appendChild(hdr);
+
+  if (panelState.deletedExpanded) {
+    if (panelState.deletedLoading) {
+      section.appendChild(Object.assign(el("div", "me-section-empty"), { textContent: "Loading…" }));
+    } else if (!panelState.deleted || panelState.deleted.length === 0) {
+      section.appendChild(Object.assign(el("div", "me-section-empty"), { textContent: "Nothing deleted." }));
+    } else {
+      const PREVIEW = 12;
+      const showAll = panelState.deletedShowAll || panelState.deleted.length <= PREVIEW;
+      const rows = showAll ? panelState.deleted : panelState.deleted.slice(0, PREVIEW);
+      for (const r of rows) section.appendChild(renderDeletedRow(r));
+      if (panelState.deleted.length > PREVIEW) {
+        const more = el("button", "me-add-btn");
+        more.textContent = showAll ? "Show fewer" : `Show all ${panelState.deleted.length} (newest first)`;
+        more.addEventListener("click", () => { panelState.deletedShowAll = !panelState.deletedShowAll; renderPanel(); });
+        section.appendChild(more);
+      }
+    }
+  }
+  return section;
+}
+
+function renderDeletedRow(r) {
+  const busy = panelState.deletedBusy === r.id;
+
+  // The dig's second click: permanent erasure, armed inline, clearly destructive.
+  if (panelState.confirmingPurge === r.id) {
+    const wrap = el("div", "me-entry me-entry-confirm-del");
+    const warn = el("div", "me-del-warn");
+    warn.textContent = "Permanently erase this memory? This cannot be undone.";
+    warn.title = r.summary;
+    const actions = el("div", "me-entry-actions");
+    const cancel = el("button", "me-btn-done");
+    cancel.textContent = "Keep";
+    cancel.addEventListener("click", () => { panelState.confirmingPurge = null; renderPanel(); });
+    const erase = el("button", "me-btn-confirm-del");
+    erase.textContent = "Erase forever";
+    erase.disabled = busy;
+    erase.addEventListener("click", () => { panelState.confirmingPurge = null; doPurge(r.id); });
+    actions.append(cancel, erase);
+    wrap.append(warn, actions);
+    return wrap;
+  }
+
+  const wrap = el("div", "me-entry");
+  const body = el("div", "me-entry-body");
+  const summary = el("span", "me-entry-summary");
+  summary.textContent = r.summary;
+  summary.title = r.summary;
+  body.appendChild(summary);
+
+  const meta = el("div", "me-entry-meta");
+  const when = el("span", "me-status-badge");
+  when.textContent = r.deletedAt ? `deleted ${String(r.deletedAt).slice(0, 10)}` : "deleted";
+  when.style.background = "transparent";
+  when.style.opacity = "0.7";
+  meta.appendChild(when);
+  body.appendChild(meta);
+
+  const actions = el("div", "me-entry-actions");
+  const restore = el("button", "me-btn-done");
+  restore.textContent = "Restore";
+  restore.title = "Bring this memory back to active";
+  restore.disabled = busy;
+  restore.addEventListener("click", () => doRestoreDeleted(r.id));
+  const purge = el("button", "me-btn-delete");
+  purge.textContent = "Erase…";
+  purge.title = "Permanently remove this memory (cannot be undone)";
+  purge.disabled = busy;
+  purge.addEventListener("click", () => { panelState.confirmingPurge = r.id; renderPanel(); });
+  actions.append(restore, purge);
+
+  wrap.append(body, actions);
+  return wrap;
+}
+
+async function loadDeleted() {
+  const session = panelState.session;
+  if (!session?.chatId) { panelState.deleted = []; renderPanel(); return; }
+  panelState.deletedLoading = true;
+  renderPanel();
+  const q = `scope=chat&scopeId=${encodeURIComponent(session.chatId)}`;
+  const res = await memFetch(`/api/deleted?${q}`).catch(() => null);
+  panelState.deleted = res?.deleted ?? [];
+  panelState.deletedLoading = false;
+  renderPanel();
+}
+
+async function doRestoreDeleted(id) {
+  const session = panelState.session;
+  if (!session?.chatId) return;
+  panelState.deletedBusy = id;
+  renderPanel();
+  const q = `scope=chat&scopeId=${encodeURIComponent(session.chatId)}`;
+  await memFetch(`/api/entries/${encodeURIComponent(id)}/restore?${q}`, { method: "POST" }).catch(() => {});
+  panelState.deletedBusy = null;
+  panelState.deleted = null; // restored entry drops off this list
+  await loadDeleted();
+  await loadPanelData();     // and rejoins the lanes
+}
+
+async function doPurge(id) {
+  const session = panelState.session;
+  if (!session?.chatId) return;
+  panelState.deletedBusy = id;
+  renderPanel();
+  const q = `scope=chat&scopeId=${encodeURIComponent(session.chatId)}&purge=true`;
+  await memFetch(`/api/entries/${encodeURIComponent(id)}?${q}`, { method: "DELETE" }).catch(() => {});
+  panelState.deletedBusy = null;
+  panelState.deleted = null;
+  await loadDeleted();
+}
+
 function renderLaneSection(lane, entries) {
+  const LANE_COLLAPSE_AT = 8; // lanes larger than this start collapsed — a long list, tamed
   const section = el("div", "me-section");
 
-  // Header
-  const hdr = el("div", "me-section-header");
+  const adding = panelState.addingLane === lane.key;
+  // Default: small lanes open, large lanes collapsed so the panel isn't a wall.
+  // Once the user toggles a lane their choice sticks; adding to it forces it open.
+  const expanded = adding || (panelState.laneExpanded[lane.key] ?? entries.length <= LANE_COLLAPSE_AT);
+
+  // Header — click anywhere on it to collapse/expand the group.
+  const hdr = el("div", "me-section-header me-collapsible");
+  const chevron = el("span", "me-section-chevron");
+  chevron.textContent = expanded ? "▾" : "▸";
   const dot_ = el("span", "me-section-dot");
   dot_.style.background = lane.color;
   const label = el("span", "me-section-label");
   label.textContent = lane.label;
   const count = el("span", "me-section-count");
   count.textContent = entries.length;
-  hdr.append(dot_, label, count);
+  hdr.append(chevron, dot_, label, count);
+  hdr.addEventListener("click", () => {
+    panelState.laneExpanded[lane.key] = !expanded;
+    renderPanel();
+  });
   section.appendChild(hdr);
 
-  if (entries.length === 0 && panelState.addingLane !== lane.key) {
+  if (!expanded) return section; // collapsed: header + count only
+
+  if (entries.length === 0 && !adding) {
     const empty = el("div", "me-section-empty");
     empty.textContent = "Nothing here yet.";
     section.appendChild(empty);
@@ -1704,7 +1875,7 @@ function renderLaneSection(lane, entries) {
     section.appendChild(renderEntry(entry, lane));
   }
 
-  if (panelState.addingLane === lane.key) {
+  if (adding) {
     section.appendChild(renderAddForm(lane.key));
   } else {
     const addBtn = el("button", "me-add-btn");
@@ -1721,6 +1892,9 @@ function renderLaneSection(lane, entries) {
 }
 
 function renderEntry(entry, lane) {
+  // Armed for deletion → show the deliberate warning row instead of the entry.
+  if (panelState.confirmingDelete === entry.id) return renderDeleteConfirm(entry);
+
   const wrap = el("div", "me-entry");
 
   const body = el("div", "me-entry-body");
@@ -1763,11 +1937,36 @@ function renderEntry(entry, lane) {
 
   const delBtn = el("button", "me-btn-delete");
   delBtn.textContent = "×";
-  delBtn.title = "Delete";
-  delBtn.addEventListener("click", () => removeEntry(entry));
+  delBtn.title = "Delete this memory…";
+  // First click only ARMS the delete — it never removes on its own.
+  delBtn.addEventListener("click", () => { panelState.confirmingDelete = entry.id; renderPanel(); });
   actions.appendChild(delBtn);
 
   wrap.append(body, actions);
+  return wrap;
+}
+
+// The deliberate second step: a memory is real (it feeds the character's context),
+// so deleting one is a named, two-click action with a plain-language warning —
+// never the single reflexive tap an always-present × invites.
+function renderDeleteConfirm(entry) {
+  const wrap = el("div", "me-entry me-entry-confirm-del");
+
+  const warn = el("div", "me-del-warn");
+  warn.textContent = "Delete this memory? It moves to Recently deleted — restorable.";
+  warn.title = entry.summary;
+
+  const actions = el("div", "me-entry-actions");
+  const cancel = el("button", "me-btn-done");
+  cancel.textContent = "Keep";
+  cancel.title = "Cancel — keep this memory";
+  cancel.addEventListener("click", () => { panelState.confirmingDelete = null; renderPanel(); });
+  const confirm_ = el("button", "me-btn-confirm-del");
+  confirm_.textContent = "Delete";
+  confirm_.addEventListener("click", () => { panelState.confirmingDelete = null; removeEntry(entry); });
+  actions.append(cancel, confirm_);
+
+  wrap.append(warn, actions);
   return wrap;
 }
 
@@ -3222,10 +3421,12 @@ async function markEntryDone(entry) {
 async function removeEntry(entry) {
   if (!panelState.session) return;
   const { chatId } = panelState.session;
+  // Soft delete: the server moves this to cold (recoverable from "Recently deleted").
   await memFetch(
     `/api/entries/${entry.id}?scope=chat&scopeId=${encodeURIComponent(chatId)}`,
     { method: "DELETE" },
   ).catch(() => {});
+  panelState.deleted = null; // refresh the recoverable list to include this
   await loadPanelData();
 }
 

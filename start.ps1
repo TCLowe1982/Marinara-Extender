@@ -15,6 +15,9 @@ $SIDECAR_PORT = 3001
 $TIMEOUT_SEC  = 90
 # Default local model — must match the sidecar default (llm-config.ts).
 $MODEL        = "dolphin3:8b"
+# Embedding model — powers semantic recall (recap activation, chunk-merge).
+# Default-on in the sidecar; small (~275 MB) next to the chat model.
+$EMBED_MODEL  = "nomic-embed-text"
 $script:SidecarProc = $null
 # How to launch the sidecar: "start" runs the built output (node dist); falls
 # back to "run dev" (tsx) only if the build fails.
@@ -39,34 +42,42 @@ function Get-OllamaExe {
     return $exe
 }
 
+function Test-OllamaInstalled {
+    # A concrete exe path resolved, or 'ollama' is on PATH.
+    if ((Get-OllamaExe) -ne "ollama") { return $true }
+    return [bool](Get-Command ollama -ErrorAction SilentlyContinue)
+}
+
 function Test-Model {
+    param([string]$Name = $MODEL)
     try {
         $tags = Invoke-RestMethod -Uri "$OLLAMA_URL/api/tags" -TimeoutSec 5
-        return (@($tags.models | Where-Object { $_.name -eq $MODEL -or $_.name -like "$MODEL*" }).Count -gt 0)
+        return (@($tags.models | Where-Object { $_.name -eq $Name -or $_.name -like "$Name*" }).Count -gt 0)
     } catch { return $false }
 }
 
 function Initialize-Model {
-    if (Test-Model) {
-        Write-Host "  [OK] Local model $MODEL is available" -ForegroundColor Green
+    param([string]$Name = $MODEL, [string]$Purpose = "It powers memory analysis and imports (a few GB download).")
+    if (Test-Model $Name) {
+        Write-Host "  [OK] Local model $Name is available" -ForegroundColor Green
         return
     }
     Write-Host ""
-    Write-Host "  [!!] Local model '$MODEL' is not pulled yet." -ForegroundColor Yellow
-    Write-Host "       It powers memory analysis and imports (a few GB download)." -ForegroundColor DarkGray
+    Write-Host "  [!!] Local model '$Name' is not pulled yet." -ForegroundColor Yellow
+    Write-Host "       $Purpose" -ForegroundColor DarkGray
     Write-Host -NoNewline "       Pull it now? [Y/n] " -ForegroundColor Cyan
     $k = [Console]::ReadKey($true)
     Write-Host $k.KeyChar
     if ($k.KeyChar -eq 'n' -or $k.KeyChar -eq 'N') {
-        Write-Host "  Skipped. Pull it later with:  ollama pull $MODEL" -ForegroundColor DarkGray
+        Write-Host "  Skipped. Pull it later with:  ollama pull $Name" -ForegroundColor DarkGray
         return
     }
-    Write-Host "  [..] Pulling $MODEL (this can take a while)..." -ForegroundColor Yellow
-    & (Get-OllamaExe) pull $MODEL
-    if (Test-Model) {
-        Write-Host "  [OK] $MODEL pulled and ready" -ForegroundColor Green
+    Write-Host "  [..] Pulling $Name (this can take a while)..." -ForegroundColor Yellow
+    & (Get-OllamaExe) pull $Name
+    if (Test-Model $Name) {
+        Write-Host "  [OK] $Name pulled and ready" -ForegroundColor Green
     } else {
-        Write-Host "  [!!] Pull did not complete. Retry later with:  ollama pull $MODEL" -ForegroundColor Red
+        Write-Host "  [!!] Pull did not complete. Retry later with:  ollama pull $Name" -ForegroundColor Red
     }
 }
 
@@ -245,6 +256,12 @@ if ($ollamaUpdate) {
 
 if (Test-Ollama) {
     Write-Host "  [OK] Ollama is already running" -ForegroundColor Green
+} elseif (-not (Test-OllamaInstalled)) {
+    Write-Host "  [!!] Ollama is not installed." -ForegroundColor Yellow
+    Write-Host "       It runs the local model that powers memory. Install it, then" -ForegroundColor DarkGray
+    Write-Host "       run this launcher again:" -ForegroundColor DarkGray
+    Write-Host "         https://ollama.com/download    (or:  winget install Ollama.Ollama)" -ForegroundColor Cyan
+    Write-Host "       The sidecar still starts; local memory waits until Ollama is up." -ForegroundColor DarkGray
 } else {
     Write-Host "  [..] Starting Ollama..." -ForegroundColor Yellow
     Start-Process (Get-OllamaExe) -WindowStyle Minimized
@@ -322,9 +339,36 @@ while ($true) {
     Start-Sleep -Milliseconds 300
 }
 
-# ── Ensure the local model is pulled ──────────────────────────────────────────
+# ── Ensure the local models are pulled ────────────────────────────────────────
 
-if ($ollamaOk) { Initialize-Model; Write-Host "" }
+if ($ollamaOk) {
+    Initialize-Model
+    Initialize-Model $EMBED_MODEL "It powers semantic recall - recaps and chunk-merge (small, ~275 MB)."
+    Write-Host ""
+}
+
+# ── Browser extension — bridge from "sidecar running" to "loaded in Marinara" ──
+# A newcomer otherwise lands on a running sidecar with a blank Marinara, because
+# the extension still has to be installed in the engine. Always show where; open
+# it automatically the first time so the step isn't silently skipped.
+
+if ($sidecarOk) {
+    $setupUrl = "$SIDECAR_URL/setup"
+    $marker   = Join-Path $sidecarDir "data\.setup-opened"
+    Write-Host "  Browser extension:" -ForegroundColor Cyan
+    Write-Host "    Install or refresh it from  $setupUrl" -ForegroundColor Gray
+    Write-Host "    (follow the two steps there - upload the loader into Marinara)" -ForegroundColor DarkGray
+    if (-not (Test-Path $marker)) {
+        try {
+            $markerDir = Split-Path $marker
+            if (-not (Test-Path $markerDir)) { New-Item -ItemType Directory -Path $markerDir -Force | Out-Null }
+            Start-Process $setupUrl
+            Set-Content -Path $marker -Value (Get-Date -Format o) -Encoding UTF8
+            Write-Host "    (opened it for you - looks like a first run)" -ForegroundColor DarkGray
+        } catch {}
+    }
+    Write-Host ""
+}
 
 # ── Command console ─────────────────────────────────────────────────────────
 

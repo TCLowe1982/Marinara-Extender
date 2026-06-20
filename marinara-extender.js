@@ -3708,54 +3708,68 @@ async function preTurnRefresh(rawBody) {
   const chatId = body?.chatId ? String(body.chatId) : null;
   const userText = typeof body?.userMessage === "string" ? body.userMessage : "";
   if (!chatId || !userText.trim()) return;
-  // Resolve the generating chat's character. currentSession is the fast path,
-  // but the FIRST message of a new or freshly-switched chat generates before
-  // the session tracker catches up — and that turn is where a stale block
-  // bites hardest, because the lorebook only holds the generic chat-load
-  // block (found live: total porsche blackout on the first question of a
-  // fresh chat). So instead of skipping, resolve from the chat row itself.
-  let characterId, characterName;
+
+  // Resolve EVERY character present in the chat, not just the host (38x dual-
+  // retrieval): a guest character should answer from its own ledger/recaps at
+  // home fidelity, not just the visible scene. currentSession is the fast path
+  // (it already carries participantIds); otherwise resolve from the chat row —
+  // the FIRST message of a fresh chat generates before the session tracker
+  // catches up, and that's where a stale block bites hardest.
+  let host = null;            // { characterId, characterName }
+  let participantIds = [];
   if (currentSession && String(currentSession.chatId) === chatId) {
-    ({ characterId, characterName } = currentSession);
+    host = { characterId: String(currentSession.characterId), characterName: currentSession.characterName };
+    participantIds = currentSession.participantIds ?? [];
   } else {
     try {
       const chat = await marinara.apiFetch(`/chats/${chatId}`);
-      characterId = getChatCharacterId(chat);
-      if (characterId) {
-        const char = await marinara.apiFetch(`/characters/${characterId}`).catch(() => null);
-        characterName = char?.name ?? parseData(char)?.name ?? null;
+      const cid = getChatCharacterId(chat);
+      if (cid) {
+        const char = await marinara.apiFetch(`/characters/${cid}`).catch(() => null);
+        host = { characterId: String(cid), characterName: char?.name ?? parseData(char)?.name ?? null };
       }
+      participantIds = getChatParticipantIds(chat);
     } catch { /* engine API hiccup — fall through to the skip below */ }
-    if (!characterId) {
-      dbg(`pre-turn skipped — could not resolve character for chat ${chatId}`);
-      return;
-    }
   }
 
-  // The time budget applies to the SIDECAR call only. Once a fresh block
-  // exists, the lorebook write runs to completion unconditionally — it nukes
-  // and recreates the memory entries, and abandoning it mid-write would let
-  // the model generate with NO memory at all (worse than the lag).
-  const res = await Promise.race([
-    memFetch("/api/pre-turn", {
-      method: "POST",
-      body: JSON.stringify({ characterId, characterName, chatId, userText }),
-    }),
-    new Promise((resolve) => setTimeout(() => resolve(null), PRE_TURN_BUDGET_MS)),
-  ]).catch(() => null);
-  if (!res?.memoryBlock) {
-    console.info("[ME] pre-turn: no refreshed block (timeout or sidecar down) — generating with the previous context");
+  // Unique participant set (host + co-stars), names resolved (the host's is
+  // already known; fetch the rest).
+  const ids = [...new Set([host?.characterId, ...participantIds].filter(Boolean).map(String))];
+  if (ids.length === 0) {
+    dbg(`pre-turn skipped — no character resolved for chat ${chatId}`);
     return;
   }
+  const participants = await Promise.all(ids.map(async (id) => {
+    if (host && id === host.characterId) return host;
+    const char = await marinara.apiFetch(`/characters/${id}`).catch(() => null);
+    return { characterId: id, characterName: char?.name ?? parseData(char)?.name ?? null };
+  }));
 
-  let lorebookId = lorebookIdCache[characterId];
-  if (!lorebookId) {
-    lorebookId = await ensureLorebook(characterId, characterName);
-    if (lorebookId) lorebookIdCache[characterId] = lorebookId;
-  }
-  if (!lorebookId) return;
-  await writeMemoryToLorebook(lorebookId, res.memoryBlock);
-  console.info(`[ME] pre-turn: context refreshed before generation (${res.surfaced} entries)`);
+  // Refresh each participant's own memory into ITS OWN lorebook, in parallel.
+  // Each refresh is self-contained (fetch its block, then nuke-and-recreate its
+  // lorebook — writes are globally serialized via _lorebookWriteChain). The
+  // budget bounds only how long we BLOCK generation; a slow participant's write
+  // still runs to completion in the background and benefits the next turn — so a
+  // guest lags at worst one turn rather than generating with no memory.
+  const refreshOne = async (p) => {
+    const res = await memFetch("/api/pre-turn", {
+      method: "POST",
+      body: JSON.stringify({ characterId: p.characterId, characterName: p.characterName, chatId, userText }),
+    }).catch(() => null);
+    if (!res?.memoryBlock) return;
+    let lorebookId = lorebookIdCache[p.characterId];
+    if (!lorebookId) {
+      lorebookId = await ensureLorebook(p.characterId, p.characterName);
+      if (lorebookId) lorebookIdCache[p.characterId] = lorebookId;
+    }
+    if (lorebookId) await writeMemoryToLorebook(lorebookId, res.memoryBlock);
+  };
+
+  await Promise.race([
+    Promise.allSettled(participants.map(refreshOne)),
+    new Promise((resolve) => setTimeout(resolve, PRE_TURN_BUDGET_MS)),
+  ]);
+  console.info(`[ME] pre-turn: refreshed memory for ${participants.length} participant(s) in chat ${chatId}`);
 }
 
 (function installPreTurnHook() {

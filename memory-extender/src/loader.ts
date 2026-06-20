@@ -20,6 +20,7 @@ import { getSoftClock, formatClockContext, timesenseEnabled } from "./soft-clock
 import { listActiveThreads } from "./threads.js";
 import type { RecapEntry } from "./arcs.js";
 import { readBeat, companionEntryFromBeat } from "./sentiment/encoder.js";
+import { activateRecaps } from "./recap-activation.js";
 
 // ── Budget config ─────────────────────────────────────────────────────────────
 
@@ -525,7 +526,25 @@ export async function loadContext(
   // member beats still flow through normal retrieval below: a recap is a
   // compression, and a beat that didn't make the footnote cut may be the one
   // detail this turn needs.
-  const recapEntries = charEntries.filter(isRecap);
+  //  - Stage 1: recaps the lexical pass already selected (in charEntries).
+  //  - Stage 2: semantic ACTIVATION — recaps whose prose matches the moment even
+  //    when their terse label shares no keywords. Lazy-cached embeddings; silent
+  //    (lexical-only) when embeddings are disabled.
+  const lexicalRecaps = charEntries.filter(isRecap);
+  const have = new Set(lexicalRecaps.map((r) => r.id));
+  const recapRows = (indexes.character?.entries ?? [])
+    .filter((e) => e.summary.startsWith("[scene recap]") && !have.has(e.id));
+  const activatedIds = recapRows.length
+    ? await activateRecaps(session.characterId, recapRows, recentText)
+    : new Set<string>();
+  const activatedRecaps: RecapEntry[] = [];
+  for (const row of recapRows) {
+    if (!activatedIds.has(row.id)) continue;
+    const e = await readEntry("character", session.characterId, row.path).catch(() => null);
+    if (e && isRecap(e)) activatedRecaps.push(e);
+  }
+
+  const recapEntries = [...lexicalRecaps, ...activatedRecaps];
   let charContextEntries = charEntries;
   let recapSection = "";
   if (recapEntries.length) {
@@ -541,7 +560,7 @@ export async function loadContext(
       if (b) footnoteSummaries.set(id, companionEntryFromBeat(b).summary);
     }));
     recapSection = formatRecaps(recapEntries, footnoteSummaries);
-    dbg(`recaps surfaced: ${recapEntries.length} (footnotes resolved: ${footnoteSummaries.size}/${footnoteIds.size})`);
+    dbg(`recaps surfaced: ${recapEntries.length} (lexical ${lexicalRecaps.length} + activated ${activatedRecaps.length}; footnotes ${footnoteSummaries.size}/${footnoteIds.size})`);
   }
 
   // Assemble sections: recaps (narrative through-line) first, then global →

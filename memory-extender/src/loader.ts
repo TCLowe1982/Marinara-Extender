@@ -395,6 +395,10 @@ function formatEntries(label: string, entries: Entry[]): string {
   return `### ${label}\n${lines.join("\n\n")}`;
 }
 
+// Recap summaries by tier: scene-arc (floor) and through-line (ceiling). Used to
+// enumerate recap rows from the index (which doesn't carry the kind tag).
+const RECAP_SUMMARY_RE = /^\[(scene|arc) recap\]/i;
+
 // A recap entry carries the kind tag from its file (round-trips through YAML),
 // so a loaded Entry can be narrowed to a RecapEntry at runtime (cz3).
 function isRecap(e: Entry): e is RecapEntry {
@@ -408,7 +412,7 @@ function isRecap(e: Entry): e is RecapEntry {
 function formatRecaps(recaps: RecapEntry[], summaryById: Map<string, string>): string {
   if (recaps.length === 0) return "";
   const blocks = recaps.map((r) => {
-    const label = r.summary.replace(/^\[scene recap\]\s*/i, "").trim();
+    const label = r.summary.replace(/^\[(scene|arc) recap\]\s*/i, "").trim();
     const footnotes = (r.footnoteBeatIds ?? [])
       .map((id) => summaryById.get(id))
       .filter((s): s is string => Boolean(s))
@@ -532,8 +536,11 @@ export async function loadContext(
   //    (lexical-only) when embeddings are disabled.
   const lexicalRecaps = charEntries.filter(isRecap);
   const have = new Set(lexicalRecaps.map((r) => r.id));
+  // Both tiers are recaps: scene-arc (floor, "[scene recap]") AND through-line
+  // (ceiling, "[arc recap]"). Stage 2 enumerated only the floor, so ceiling
+  // recaps — the cross-scene narrative — never activated semantically (cz3 Stage 3).
   const recapRows = (indexes.character?.entries ?? [])
-    .filter((e) => e.summary.startsWith("[scene recap]") && !have.has(e.id));
+    .filter((e) => RECAP_SUMMARY_RE.test(e.summary) && !have.has(e.id));
   const activatedIds = recapRows.length
     ? await activateRecaps(session.characterId, recapRows, recentText)
     : new Set<string>();
@@ -544,7 +551,11 @@ export async function loadContext(
     if (e && isRecap(e)) activatedRecaps.push(e);
   }
 
-  const recapEntries = [...lexicalRecaps, ...activatedRecaps];
+  // Through-line (ceiling) recaps lead — the cross-scene arc frames the specific
+  // scenes — then scene-arc (floor) recaps.
+  const recapEntries = [...lexicalRecaps, ...activatedRecaps].sort(
+    (a, b) => (a.summary.startsWith("[arc recap]") ? 0 : 1) - (b.summary.startsWith("[arc recap]") ? 0 : 1),
+  );
   let charContextEntries = charEntries;
   let recapSection = "";
   if (recapEntries.length) {

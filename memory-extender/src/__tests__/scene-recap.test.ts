@@ -119,3 +119,40 @@ describe("ingestSceneRecap", () => {
     expect(await ingestSceneRecap({ identityKey: "priya", summary: "too short" })).toBeNull();
   });
 });
+
+// cz3 Stage 1: the loader surfaces recaps as a "Story so far" section ABOVE the
+// rest, prose + footnote beats, and does not duplicate the recap prose below.
+describe("loadContext recap rendering (cz3 Stage 1)", () => {
+  it("renders a Story-so-far section with footnote beats, above Character context", async () => {
+    const t = await resolveOrMintThread(SCENE, "test drive", "priya");
+    await writeBeat("priya", beat("beat-a", { threadId: t!.id, salience: 0.9, motivation: "gripped the wheel as trust deepened" }));
+    await writeBeat("priya", beat("beat-b", { sourceChatId: SCENE, salience: 0.4, motivation: "laughed about the engine" }));
+    const r = await ingestSceneRecap({
+      identityKey: "priya",
+      summary: "Priya and Mari took the Porsche out on a test drive; trust deepened over the hour.",
+      sceneChatId: SCENE,
+      sceneName: "Scene: Test Drive",
+      concludedAt: "2026-06-11T23:00:00.000Z",
+    });
+    expect(r!.footnotes).toBe(2);
+
+    const res = await loadContext({
+      characterId: "priya", chatId: "chat-now", turnNumber: 1,
+      recentText: "tell me about the test drive in the porsche",
+    });
+    const block = res.contextBlock;
+
+    expect(block).toContain("### Story so far");
+    expect(block).toContain("Test Drive");
+    expect(block).toContain("trust deepened over the hour"); // recap prose
+    expect(block).toContain("key beats:");
+    expect(block).toContain("gripped the wheel as trust deepened"); // footnote beat-a
+
+    // (Placement above the other sections is guaranteed structurally — recap is
+    // first in the assembled `sections` array — so it isn't asserted by fragile
+    // string position: the instructions preamble echoes the section headers.)
+
+    // Recap prose surfaces exactly once (not duplicated as a plain entry below).
+    expect(block.split("trust deepened over the hour").length - 1).toBe(1);
+  });
+});

@@ -18,6 +18,8 @@ import {
 import { computeScore } from "./promotion.js";
 import { getSoftClock, formatClockContext, timesenseEnabled } from "./soft-clock.js";
 import { listActiveThreads } from "./threads.js";
+import type { RecapEntry } from "./arcs.js";
+import { readBeat, companionEntryFromBeat } from "./sentiment/encoder.js";
 
 // ── Budget config ─────────────────────────────────────────────────────────────
 
@@ -392,6 +394,30 @@ function formatEntries(label: string, entries: Entry[]): string {
   return `### ${label}\n${lines.join("\n\n")}`;
 }
 
+// A recap entry carries the kind tag from its file (round-trips through YAML),
+// so a loaded Entry can be narrowed to a RecapEntry at runtime (cz3).
+function isRecap(e: Entry): e is RecapEntry {
+  return (e as Partial<RecapEntry>).kind === "recap";
+}
+
+// Render recaps as the canonical narrative unit: the recap prose, then its
+// salience-budgeted footnote beats (already capped to ~8 at ingest, H3). Footnote
+// summaries come from the in-memory character index — no extra read; any that
+// have aged to cold are simply skipped.
+function formatRecaps(recaps: RecapEntry[], summaryById: Map<string, string>): string {
+  if (recaps.length === 0) return "";
+  const blocks = recaps.map((r) => {
+    const label = r.summary.replace(/^\[scene recap\]\s*/i, "").trim();
+    const footnotes = (r.footnoteBeatIds ?? [])
+      .map((id) => summaryById.get(id))
+      .filter((s): s is string => Boolean(s))
+      .map((s) => `      · ${s}`);
+    const body = `  - ${r.id}: ${label}\n    ${r.content.trim().replace(/\n/g, "\n    ")}`;
+    return footnotes.length ? `${body}\n    key beats:\n${footnotes.join("\n")}` : body;
+  });
+  return `### Story so far\n${blocks.join("\n\n")}`;
+}
+
 function formatBookmarks(bookmarks: Bookmark[]): string {
   if (bookmarks.length === 0) return "";
 
@@ -493,10 +519,37 @@ export async function loadContext(
   const surfaced = surfaceBookmarks(chatBookmarks, session.turnNumber);
   dbg(`bookmarks surfaced: ${surfaced.length}/${chatBookmarks.length} passed weight roll`);
 
-  // Assemble sections bottom-up: global → character → chat → bookmarks
+  // Recaps (cz3 Stage 1): the canonical narrative unit. Surface selected recaps
+  // ABOVE the rest — recap prose + its footnote beats — and pull those footnote
+  // beats out of the general character set so they aren't duplicated. The OTHER
+  // member beats still flow through normal retrieval below: a recap is a
+  // compression, and a beat that didn't make the footnote cut may be the one
+  // detail this turn needs.
+  const recapEntries = charEntries.filter(isRecap);
+  let charContextEntries = charEntries;
+  let recapSection = "";
+  if (recapEntries.length) {
+    // Render recaps out of the general character set so the prose isn't duplicated.
+    charContextEntries = charEntries.filter((e) => !isRecap(e));
+    // Footnote beats live in the beat store (not the entry index), so read the
+    // ≤8 cited beats per recap directly and build their summaries. Bounded I/O;
+    // a footnote that's been pruned is simply skipped.
+    const footnoteIds = new Set(recapEntries.flatMap((r) => r.footnoteBeatIds ?? []));
+    const footnoteSummaries = new Map<string, string>();
+    await Promise.all([...footnoteIds].map(async (id) => {
+      const b = await readBeat(session.characterId, id).catch(() => null);
+      if (b) footnoteSummaries.set(id, companionEntryFromBeat(b).summary);
+    }));
+    recapSection = formatRecaps(recapEntries, footnoteSummaries);
+    dbg(`recaps surfaced: ${recapEntries.length} (footnotes resolved: ${footnoteSummaries.size}/${footnoteIds.size})`);
+  }
+
+  // Assemble sections: recaps (narrative through-line) first, then global →
+  // character → chat → bookmarks.
   const sections = [
+    recapSection,
     formatEntries("Global context", globalEntries),
-    formatEntries("Character context", charEntries),
+    formatEntries("Character context", charContextEntries),
     formatEntries("Active threads & topics", chatEntries),
     formatBookmarks(surfaced),
   ].filter(Boolean);

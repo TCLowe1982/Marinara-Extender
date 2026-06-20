@@ -123,6 +123,11 @@ const VALID_SCOPES: Scope[] = ["global", "character", "chat"];
 const VALID_LANES: Lane[] = ["open_threads", "user_topics", "character_topics"];
 const VALID_STATUSES: EntryStatus[] = ["open", "in_progress", "done", "deferred"];
 
+// A user message past this many characters is treated as a long-form story and
+// routed through windowed granular ingestion (dq9) instead of the live path's
+// one-message-one-chunk capture. Env-overridable for tuning.
+const LONG_USER_MSG_CHARS = parseInt(process.env.MARINARA_EXTENDER_LONGMSG_CHARS ?? "1500", 10);
+
 function idPrefix(lane: Lane): string {
   if (lane === "open_threads") return "thread";
   if (lane === "user_topics") return "utopic";
@@ -507,6 +512,11 @@ export function registerApiRoutes(app: FastifyInstance): void {
 
     const identityKey = await resolveIdentity(characterId, characterName);
 
+    // A long user message is a told story (dq9): the live one-message-one-chunk
+    // path would flatten a multi-page memory into ~1 beat. When this trips, the
+    // windowed pass below owns the user side, so Tier 2 skips its single user chunk.
+    const longUserStory = (userMessageText?.trim().length ?? 0) > LONG_USER_MSG_CHARS;
+
     // Register the player's persona name under the reserved user key so the
     // alias-learner can refuse to ever attach it to a character (50e: "Thomas"
     // had been learned as an alias of Mari, routing the player's facts into her
@@ -615,7 +625,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
         try {
           const chunks: Chunk[] = [];
           const charName = characterName ?? identityKey;
-          if (userMessageText) chunks.push({ speaker: "user",    text: userMessageText, turnStart: turnNumber - 1, turnEnd: turnNumber - 1 });
+          if (userMessageText && !longUserStory) chunks.push({ speaker: "user", text: userMessageText, turnStart: turnNumber - 1, turnEnd: turnNumber - 1 });
           if (messageText)     chunks.push({ speaker: charName,  text: messageText,     turnStart: turnNumber,     turnEnd: turnNumber });
 
           const classified = classifyChunks(chunks, "chat");
@@ -764,6 +774,28 @@ export function registerApiRoutes(app: FastifyInstance): void {
           }
         } catch (err) {
           console.warn("[ME:tier3] ambient pass failed:", err);
+        }
+      })();
+    }
+
+    // ── Long-form story: windowed granular ingestion (dq9) ────────────────────
+    // A multi-page memory told in ONE message would be a single chunk → ~1 beat.
+    // Route it through the SAME pipeline a chat-import uses (sourceType "chat":
+    // windowed, every passing window analyzed, subject-routed, beats persisted) so
+    // a story told ONCE lands with import-parity richness — no re-import needed.
+    // Fire-and-forget; only long messages trip it, so cost tracks story length.
+    if (longUserStory) {
+      void (async () => {
+        try {
+          const r = await runSentimentPipeline(
+            [{ role: "user", content: userMessageText }],
+            identityKey,
+            characterName ?? identityKey,
+            { sourceType: "chat" },
+          );
+          console.info(`[ME:longform] user story (${userMessageText.length} chars) → ${r.beats.length} beat(s)`);
+        } catch (err) {
+          console.warn("[ME:longform] windowed ingestion failed:", err);
         }
       })();
     }

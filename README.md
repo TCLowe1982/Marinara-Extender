@@ -54,17 +54,25 @@ No git? Download the ZIP from GitHub and unzip it anywhere — everything still 
 
 ### 1. Start the Memory Extender server
 
-On Windows, double-click **`Marinara_Extender_Start.bat`** (or run `start.ps1`) — it installs dependencies on first run, starts Ollama and the server, and shows a live status bar.
+**Windows** — double-click **`Marinara_Extender_Start.bat`** (or run `start.ps1`): it installs dependencies on first run, starts Ollama, pulls the models, launches the server, and shows a live status bar with a crash watchdog.
 
-Or start it manually:
+**macOS / Linux** — there's no launcher script yet, so start the server manually (Node.js 20+):
 
 ```bash
 cd memory-extender
 npm install
-npm run dev          # development (tsx watch)
-# or
-npm start            # production (compiled)
+npm run dev          # easiest — tsx watch
+# or: npm run build && npm start   (compiled)
 ```
+
+Then make sure a local model is available. Install [Ollama](https://ollama.com) and pull the models once:
+
+```bash
+ollama pull dolphin3:8b
+ollama pull nomic-embed-text
+```
+
+…or set `MARINARA_EXTENDER_LOCAL_URL` to any OpenAI-compatible backend (LM Studio, KoboldCpp, llama.cpp) instead — see [Environment variables](#environment-variables).
 
 ### 2. Install the extension — once
 

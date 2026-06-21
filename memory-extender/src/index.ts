@@ -2,7 +2,7 @@
 // Copyright (C) 2026 TC Lowe
 // Licensed under AGPL-3.0-only. See LICENSE.
 
-import Fastify from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { readFile } from "fs/promises";
 import { writeFileSync, mkdirSync, existsSync } from "fs";
 import { join, dirname } from "path";
@@ -11,6 +11,7 @@ import { allowedCorsOrigin } from "./cors.js";
 import { defaultEnvPath } from "./paths.js";
 import { getDataDir } from "./storage.js";
 import { localUrl, localEnabled, localModel, externalUpstream, externalModel } from "./llm-config.js";
+import { getCachedAuth } from "./auth-cache.js";
 import { registerApiRoutes } from "./api.js";
 import { registerSetupRoutes } from "./setup.js";
 import { updateStatus } from "./update.js";
@@ -88,6 +89,77 @@ app.get("/api/health", { logLevel: "silent" }, async (_req, reply) => {
   const [update, embeddings] = await Promise.all([updateStatus(), embeddingsStatus()]);
   return reply.send({ ok: true, ollama, embeddings, ...update });
 });
+
+// ── OpenAI-compatible inference proxy ─────────────────────────────────────────
+// POST /v1/chat/completions — lets any OpenAI-compatible client (e.g. the
+// Rewrite Assistant) route generation through this one sidecar instead of
+// running a second local model. Local model first (honouring a per-request
+// model override, else the configured default); external API as the fallback —
+// the same connection config memory analysis already uses, so a light install
+// runs ONE model server for everything.
+//
+// Deliberately OUTSIDE /api/ so it is exempt from the CSRF guard (a generic
+// OpenAI client can't carry the x-me-csrf token). CORS still ensures only
+// loopback origins can READ responses, and the server binds 127.0.0.1, so the
+// only residual risk is a local page spending compute — not data exfiltration.
+const handleChatCompletions = async (req: FastifyRequest, reply: FastifyReply) => {
+  const body = (req.body ?? {}) as {
+    model?: string;
+    messages?: Array<{ role: string; content: string }>;
+    temperature?: number;
+    max_tokens?: number;
+  };
+  if (!Array.isArray(body.messages) || body.messages.length === 0) {
+    return reply.code(400).send({ error: { message: "messages[] is required", type: "invalid_request_error" } });
+  }
+  const base = {
+    messages: body.messages,
+    temperature: typeof body.temperature === "number" ? body.temperature : 0.7,
+    stream: false as const,
+    ...(typeof body.max_tokens === "number" ? { max_tokens: body.max_tokens } : {}),
+  };
+
+  // 1) Local model — honour a per-request model name, else the configured default.
+  if (localEnabled()) {
+    try {
+      const res = await fetch(`${localUrl()}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...base, model: body.model || localModel() }),
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (res.ok) return reply.code(200).send(await res.json());
+    } catch {
+      /* fall through to the external fallback */
+    }
+  }
+
+  // 2) External fallback — uses the configured fallback model (a local model
+  //    name wouldn't exist upstream), same path memory analysis falls back to.
+  const auth = getCachedAuth();
+  if (!auth) {
+    return reply.code(502).send({
+      error: {
+        message:
+          "Local model unavailable and no external API key set. Run a local model (MARINARA_EXTENDER_LOCAL_URL/LOCAL_MODEL) or set MARINARA_EXTENDER_API_KEY.",
+        type: "upstream_unavailable",
+      },
+    });
+  }
+  try {
+    const res = await fetch(`${externalUpstream()}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: auth },
+      body: JSON.stringify({ ...base, model: externalModel() }),
+    });
+    return reply.code(res.status).send(await res.json());
+  } catch (e) {
+    return reply.code(502).send({ error: { message: `Inference proxy failed: ${String(e)}`, type: "upstream_error" } });
+  }
+};
+
+app.post("/v1/chat/completions", handleChatCompletions);
+app.post("/chat/completions", handleChatCompletions); // alias when the URL is set without the /v1 suffix
 
 // ── Setup page ────────────────────────────────────────────────────────────────
 // http://127.0.0.1:{PORT}/setup — one-stop install page with copy buttons.

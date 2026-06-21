@@ -2,6 +2,16 @@
 
 All notable changes to Marinara Extender are documented here.
 
+## Unreleased
+
+### Added
+
+- **OpenAI-compatible inference proxy** — `POST /v1/chat/completions` (alias `/chat/completions`) routes generation
+  through this sidecar's existing model connection: local model first (with a per-request `model` override),
+  external API as fallback. Lets a tool like the Rewrite Assistant run rewrites *and* memory analysis from one
+  model instance on lighter installs — point its Direct API at `http://127.0.0.1:3001/v1`. The endpoint is outside
+  `/api/` (CSRF-exempt for generic OpenAI clients); CORS still limits response reads to loopback origins.
+
 ## v1.2.0 — 2026-06-20
 
 Story-layer completion, recoverable memory management, and a guided install.

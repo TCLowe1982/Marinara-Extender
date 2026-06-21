@@ -294,6 +294,21 @@ GET    /marinara-extender.js  # the full extension file
 POST   /api/save-key          { apiKey } — store the optional external API key in .env
 ```
 
+### Inference proxy (one-sidecar mode)
+
+```http
+POST   /v1/chat/completions   # OpenAI-compatible; routes generation through this sidecar
+POST   /chat/completions      # alias, when a client's base URL omits the /v1 suffix
+```
+
+Lets any OpenAI-compatible client reuse this sidecar's existing model connection instead of running a second
+model server — **local model first** (honouring a per-request `model`, else `MARINARA_EXTENDER_LOCAL_MODEL`),
+**external API as fallback** (the same path memory analysis uses). It lives outside `/api/`, so it's exempt from
+the CSRF token requirement; CORS still restricts *reading* responses to loopback origins, and the server binds
+`127.0.0.1`. Point a tool such as the Rewrite Assistant's **Direct API** at `http://127.0.0.1:3001/v1` to run
+rewrites and memory analysis from one model instance — handy on lighter installs that can't keep two models
+resident.
+
 ---
 
 ## Data files

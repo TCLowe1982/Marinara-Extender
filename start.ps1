@@ -25,6 +25,12 @@ $script:RunCmd = "start"
 # Opt-in auto-start: a launcher dropped in the user's Startup folder.
 $startupDir    = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup"
 $autostartFile = Join-Path $startupDir "Marinara Extender.cmd"
+# First-run detection: show the full onboarding spiel (and auto-open the setup
+# page) only the first time; quieter on every launch after. Marker lives with
+# runtime state, and is the same file that gated the setup-page auto-open — so
+# anyone who's already run once isn't re-onboarded.
+$firstRunMarker = Join-Path $sidecarDir "logs\.setup-opened"
+$firstRun       = -not (Test-Path $firstRunMarker)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -388,18 +394,20 @@ if ($ollamaOk -and -not $byoBackend) {
 
 if ($sidecarOk) {
     $setupUrl = "$SIDECAR_URL/setup"
-    $marker   = Join-Path $sidecarDir "logs\.setup-opened"  # runtime state, not memory — keep data/ clean
-    Write-Host "  Browser extension:" -ForegroundColor Cyan
-    Write-Host "    Install or refresh it from  $setupUrl" -ForegroundColor Gray
-    Write-Host "    (follow the two steps there - upload the loader into Marinara)" -ForegroundColor DarkGray
-    if (-not (Test-Path $marker)) {
+    if ($firstRun) {
+        # First run: walk them through the one-time extension install and open it.
+        Write-Host "  Browser extension - one-time setup:" -ForegroundColor Cyan
+        Write-Host "    1. The setup page is opening now:  $setupUrl" -ForegroundColor Gray
+        Write-Host "    2. Upload the loader into Marinara - Settings > Extensions" -ForegroundColor Gray
         try {
-            $markerDir = Split-Path $marker
+            $markerDir = Split-Path $firstRunMarker
             if (-not (Test-Path $markerDir)) { New-Item -ItemType Directory -Path $markerDir -Force | Out-Null }
             Start-Process $setupUrl
-            Set-Content -Path $marker -Value (Get-Date -Format o) -Encoding UTF8
-            Write-Host "    (opened it for you - looks like a first run)" -ForegroundColor DarkGray
+            Set-Content -Path $firstRunMarker -Value (Get-Date -Format o) -Encoding UTF8
         } catch {}
+    } else {
+        # Already onboarded: a quiet one-liner, no auto-open.
+        Write-Host "  Extension: reinstall or refresh anytime from  $setupUrl" -ForegroundColor DarkGray
     }
     Write-Host ""
 }
@@ -410,8 +418,12 @@ $autoState = if (Test-Path $autostartFile) { "ON" } else { "off" }
 $logPath = Join-Path $sidecarDir "logs\sidecar.log"
 Write-Host "  Commands:  [R] Restart   [L] View log   [A] Auto-start ($autoState)   [Q] Quit (services keep running)" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  A watchdog re-launches the server within ~15s if it dies, so a crash no" -ForegroundColor DarkGray
-Write-Host "  longer means hours of stale memory. Leave this window open." -ForegroundColor DarkGray
+if ($firstRun) {
+    Write-Host "  A watchdog re-launches the server within ~15s if it dies, so a crash no" -ForegroundColor DarkGray
+    Write-Host "  longer means hours of stale memory. Leave this window open." -ForegroundColor DarkGray
+} else {
+    Write-Host "  Leave this window open (watchdog keeps the server alive)." -ForegroundColor DarkGray
+}
 Write-Host ""
 
 # Non-blocking console + sidecar watchdog. The blocking ReadKey this replaced

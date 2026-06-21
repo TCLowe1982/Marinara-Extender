@@ -14,6 +14,9 @@ All notable changes to Marinara Extender are documented here.
 - **Model &amp; connection config in the setup page** — the local URL/model, external upstream/model, and API key
   can now be set from a form on `/setup` instead of hand-editing `.env`. Backed by new `GET/POST /api/config`
   (CSRF-protected); changes are written to `.env` and applied immediately, no restart.
+- **`GET /rewrite-assistant.js`** — serves a local Rewrite Assistant build (path via `MARINARA_RWA_PATH`) so the
+  Rewrite Assistant's auto-update loader can pull your working build from this sidecar before falling back to
+  GitHub. Returns 404 when unset, so the loader falls back cleanly.
 
 ## v1.2.0 — 2026-06-20
 

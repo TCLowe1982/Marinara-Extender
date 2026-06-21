@@ -113,6 +113,7 @@ That's it. The extension detects the active character and chat automatically and
 | `MARINARA_EXTENDER_PORT` | `3001` | Port the server listens on (binds `127.0.0.1` only). |
 | `MARINARA_EXTENDER_DATA` | `<install>/data` | Where YAML files are stored (resolved relative to the install). |
 | `MARINARA_EXTENDER_ALLOWED_ORIGIN` | — | Extra CORS origin to allow, if you run Marinara on a non-loopback URL. |
+| `MARINARA_RWA_PATH` | — | Path to a local Rewrite Assistant `extension.js`. When set, `GET /rewrite-assistant.js` serves it, so the Rewrite Assistant's auto-update loader picks up your local build before falling back to GitHub. |
 | `MARINARA_EXTENDER_TIMESENSE` | `0` | Conversational time-sense (narrative time + presence). Off for v1.0. |
 | `MARINARA_EXTENDER_PROGRESS` | `1` | Console progress bar during imports. |
 | `MARINARA_EXTENDER_BUDGET_CHAT` / `_CHARACTER` / `_GLOBAL` | `4000` / `2000` / `1000` | Per-scope token budgets for the memory loaded each turn. See [Tuning how much memory is injected](#tuning-how-much-memory-is-injected-token-budget). |
@@ -291,6 +292,7 @@ GET    /api/identity          # + POST /api/identity/relink, PATCH /api/identity
 GET    /setup                 # one-stop install page
 GET    /loader.js             # the paste-once extension loader
 GET    /marinara-extender.js  # the full extension file
+GET    /rewrite-assistant.js  # serves a local Rewrite Assistant build for its auto-update loader (needs MARINARA_RWA_PATH)
 POST   /api/save-key          { apiKey } — store the optional external API key in .env
 GET    /api/config            # current model/connection config (powers the setup-page form)
 POST   /api/config            { localUrl?, localModel?, externalUpstream?, externalModel?, apiKey? } — save to .env, applied live (CSRF-protected)

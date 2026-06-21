@@ -367,6 +367,21 @@ export function registerSetupRoutes(
     return reply.send(code.split("__ME_VERSION__").join(buildVersion()));
   });
 
+  // Serve the local Rewrite Assistant build for its auto-update loader, which
+  // tries this localhost route first (your working build) before GitHub. Path
+  // via MARINARA_RWA_PATH; 404 when unset/missing so the loader falls back.
+  app.get("/rewrite-assistant.js", async (_req, reply) => {
+    const p = process.env.MARINARA_RWA_PATH;
+    if (!p) return reply.code(404).send("MARINARA_RWA_PATH not set");
+    try {
+      const code = await readFile(p, "utf8");
+      reply.header("Content-Type", "text/javascript; charset=utf-8");
+      return reply.send(code);
+    } catch {
+      return reply.code(404).send("Rewrite Assistant source not found at MARINARA_RWA_PATH");
+    }
+  });
+
   // Saves the API key to sidecar/.env and applies it immediately.
   // Only reachable on localhost since the sidecar binds to 127.0.0.1.
   app.post<{ Body: { apiKey: string } }>("/api/save-key", async (req, reply) => {

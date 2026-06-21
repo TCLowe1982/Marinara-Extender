@@ -33,6 +33,23 @@ function Test-Ollama {
     catch { $false }
 }
 
+# Bring-your-own-backend: read MARINARA_EXTENDER_LOCAL_URL from .env so the
+# launcher can tell when the user runs a non-Ollama OpenAI server (KoboldCpp,
+# LM Studio, llama.cpp) and skip the Ollama-specific setup entirely.
+function Get-EnvLocalUrl {
+    $envPath = Join-Path $sidecarDir ".env"
+    if (-not (Test-Path $envPath)) { return "" }
+    $m = Select-String -Path $envPath -Pattern '^\s*MARINARA_EXTENDER_LOCAL_URL\s*=(.*)$' | Select-Object -First 1
+    if (-not $m) { return "" }
+    return ($m.Matches[0].Groups[1].Value).Trim()
+}
+
+function Test-LocalBackend {
+    # Reachable = any HTTP answer; OpenAI servers often 404 the base path but are up.
+    try { $null = Invoke-WebRequest -Uri $localUrl -TimeoutSec 2 -UseBasicParsing; return $true }
+    catch { return [bool]$_.Exception.Response }
+}
+
 function Get-OllamaExe {
     $exe = @(
         "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe",
@@ -232,6 +249,17 @@ if (-not (Update-SidecarBuild)) {
 }
 Write-Host ""
 
+# ── Bring-your-own-backend (non-Ollama) detection ────────────────────────────
+
+$localUrl   = Get-EnvLocalUrl
+$byoBackend = ($localUrl -ne "") -and ($localUrl -notmatch ':11434')
+if ($byoBackend) {
+    Write-Host "  [i] Custom local backend configured ($localUrl) - skipping Ollama setup." -ForegroundColor Cyan
+    Write-Host "      Make sure that server is running with a model loaded (and an" -ForegroundColor DarkGray
+    Write-Host "      embedding model too, if you want semantic recall)." -ForegroundColor DarkGray
+    Write-Host ""
+}
+
 # ── Check for Ollama update in progress ──────────────────────────────────────
 
 $ollamaUpdate = Get-Process -Name "OllamaSetup" -ErrorAction SilentlyContinue
@@ -254,7 +282,9 @@ if ($ollamaUpdate) {
 
 # ── Start Ollama ──────────────────────────────────────────────────────────────
 
-if (Test-Ollama) {
+if ($byoBackend) {
+    # Custom backend — skip notice already printed; don't touch Ollama.
+} elseif (Test-Ollama) {
     Write-Host "  [OK] Ollama is already running" -ForegroundColor Green
 } elseif (-not (Test-OllamaInstalled)) {
     Write-Host "  [!!] Ollama is not installed." -ForegroundColor Yellow
@@ -280,8 +310,9 @@ Write-Host ""
 
 # ── Live status display ───────────────────────────────────────────────────────
 
+$localLabel = if ($byoBackend) { "Local backend  " } else { "Ollama         " }
 $statusRow = [Console]::CursorTop
-Write-Host "  Ollama          [?] ..."
+Write-Host "  $localLabel[?] ..."
 Write-Host "  Memory Extender [?] ..."
 Write-Host ""
 $barRow = [Console]::CursorTop
@@ -298,15 +329,15 @@ while ($true) {
     $spin    = $spinFrames[$frameIndex % $spinFrames.Count]
     $frameIndex++
 
-    if (-not $ollamaOk)  { $ollamaOk  = Test-Ollama  }
+    if (-not $ollamaOk)  { $ollamaOk  = if ($byoBackend) { Test-LocalBackend } else { Test-Ollama } }
     if (-not $sidecarOk) { $sidecarOk = Test-Sidecar }
 
-    # Ollama line
+    # Local-backend line (Ollama, or a custom OpenAI server)
     [Console]::SetCursorPosition(0, $statusRow)
     if ($ollamaOk) {
-        Write-Host "  Ollama          [OK] Ready        " -ForegroundColor Green
+        Write-Host "  $localLabel[OK] Ready        " -ForegroundColor Green
     } else {
-        Write-Host "  Ollama          [$spin]  Starting... " -ForegroundColor Yellow
+        Write-Host "  $localLabel[$spin]  Starting... " -ForegroundColor Yellow
     }
 
     # Sidecar line
@@ -330,7 +361,10 @@ while ($true) {
 
     if ($elapsed -ge $TIMEOUT_SEC) {
         [Console]::SetCursorPosition(0, $barRow + 2)
-        if (-not $ollamaOk)  { Write-Host "  [!!] Ollama did not respond. Is it installed?" -ForegroundColor Red }
+        if (-not $ollamaOk) {
+            if ($byoBackend) { Write-Host "  [!!] Custom backend at $localUrl did not respond." -ForegroundColor Red }
+            else { Write-Host "  [!!] Ollama did not respond. Is it installed?" -ForegroundColor Red }
+        }
         if (-not $sidecarOk) { Write-Host "  [!!] Memory Extender did not start. Check the npm window for errors." -ForegroundColor Red }
         Write-Host ""
         break
@@ -341,7 +375,7 @@ while ($true) {
 
 # ── Ensure the local models are pulled ────────────────────────────────────────
 
-if ($ollamaOk) {
+if ($ollamaOk -and -not $byoBackend) {
     Initialize-Model
     Initialize-Model $EMBED_MODEL "It powers semantic recall - recaps and chunk-merge (small, ~275 MB)."
     Write-Host ""

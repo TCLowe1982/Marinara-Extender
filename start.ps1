@@ -354,7 +354,7 @@ if ($ollamaOk) {
 
 if ($sidecarOk) {
     $setupUrl = "$SIDECAR_URL/setup"
-    $marker   = Join-Path $sidecarDir "data\.setup-opened"
+    $marker   = Join-Path $sidecarDir "logs\.setup-opened"  # runtime state, not memory — keep data/ clean
     Write-Host "  Browser extension:" -ForegroundColor Cyan
     Write-Host "    Install or refresh it from  $setupUrl" -ForegroundColor Gray
     Write-Host "    (follow the two steps there - upload the loader into Marinara)" -ForegroundColor DarkGray

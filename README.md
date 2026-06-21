@@ -292,7 +292,13 @@ GET    /setup                 # one-stop install page
 GET    /loader.js             # the paste-once extension loader
 GET    /marinara-extender.js  # the full extension file
 POST   /api/save-key          { apiKey } — store the optional external API key in .env
+GET    /api/config            # current model/connection config (powers the setup-page form)
+POST   /api/config            { localUrl?, localModel?, externalUpstream?, externalModel?, apiKey? } — save to .env, applied live (CSRF-protected)
 ```
+
+The setup page (`http://127.0.0.1:3001/setup`) includes a **Model &amp; connection** form for these
+values, so the local URL/model, external upstream/model, and API key can be set from the browser instead of
+editing `.env` by hand — saved to `.env` and applied immediately, no restart.
 
 ### Inference proxy (one-sidecar mode)
 

@@ -11,6 +11,9 @@ All notable changes to Marinara Extender are documented here.
   external API as fallback. Lets a tool like the Rewrite Assistant run rewrites *and* memory analysis from one
   model instance on lighter installs — point its Direct API at `http://127.0.0.1:3001/v1`. The endpoint is outside
   `/api/` (CSRF-exempt for generic OpenAI clients); CORS still limits response reads to loopback origins.
+- **Model &amp; connection config in the setup page** — the local URL/model, external upstream/model, and API key
+  can now be set from a form on `/setup` instead of hand-editing `.env`. Backed by new `GET/POST /api/config`
+  (CSRF-protected); changes are written to `.env` and applied immediately, no restart.
 
 ## v1.2.0 — 2026-06-20
 

@@ -11,6 +11,7 @@ import { readFile } from "fs/promises";
 import { defaultEnvPath, extensionJsCandidates } from "./paths.js";
 import { atomicWriteFile } from "./storage.js";
 import { buildVersion } from "./update.js";
+import { localUrl, localModel, localEnabled, externalUpstream, externalModel } from "./llm-config.js";
 
 // ── Extension file lookup ─────────────────────────────────────────────────────
 
@@ -27,17 +28,24 @@ async function readExtensionJs(): Promise<string | null> {
 
 // ── .env key persistence ──────────────────────────────────────────────────────
 
-async function saveApiKeyToEnv(key: string): Promise<void> {
+// Persist one or more env vars to sidecar/.env and apply them immediately —
+// the llm-config getters and getCachedAuth read process.env at call time, so no
+// restart is needed. Existing lines for the same keys are replaced.
+async function saveEnvVars(vars: Record<string, string>): Promise<void> {
   const envPath = defaultEnvPath();
   let existing = "";
   try { existing = await readFile(envPath, "utf8"); } catch { /* new file */ }
 
-  const lines = existing.split("\n").filter((l) => !l.startsWith("MARINARA_EXTENDER_API_KEY="));
-  lines.push(`MARINARA_EXTENDER_API_KEY=${key}`);
+  const keys = Object.keys(vars);
+  const lines = existing.split("\n").filter((l) => !keys.some((k) => l.startsWith(`${k}=`)));
+  for (const k of keys) lines.push(`${k}=${vars[k]}`);
   await atomicWriteFile(envPath, lines.filter(Boolean).join("\n") + "\n");
 
-  // Take effect immediately without restart
-  process.env.MARINARA_EXTENDER_API_KEY = key;
+  for (const k of keys) process.env[k] = vars[k];
+}
+
+async function saveApiKeyToEnv(key: string): Promise<void> {
+  await saveEnvVars({ MARINARA_EXTENDER_API_KEY: key });
 }
 
 // ── Loader stub ─────────────────────────────────────────────────────────────
@@ -153,6 +161,11 @@ function buildSetupHtml(port: number): string {
     .footer{margin-top:24px;text-align:center;color:#4b5563;font-size:12px}
     .footer a{color:#6b7280;text-decoration:none}
     .footer a:hover{color:#9ca3af}
+    .cfgrow{display:flex;align-items:center;gap:10px}
+    .cfgrow>span{width:128px;flex-shrink:0;color:#c9c5bf;font-size:12px}
+    .cfgrow input{flex:1;min-width:0;background:#0d0c0a;border:1px solid #3d3a36;border-radius:5px;
+      color:#e8e5e0;font-family:inherit;font-size:12px;padding:7px 9px}
+    .cfgrow input:focus{outline:none;border-color:#f97316}
   </style>
 </head>
 <body>
@@ -222,6 +235,29 @@ function buildSetupHtml(port: number): string {
       </div>
     </div>
 
+    <div class="step">
+      <div class="step-num">&#9881;</div>
+      <div class="step-body">
+        <h2>Model &amp; connection <span style="color:#6b7280;font-weight:400;font-size:12px">&#8212; optional</span></h2>
+        <p style="color:#6b7280;font-size:12px">Defaults work out of the box with Ollama. Point these at a different
+           local server (LM Studio, KoboldCpp, llama.cpp) or set an external API fallback. Saved to <code>.env</code>
+           and applied immediately &#8212; no restart.</p>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
+          <label class="cfgrow"><span>Local URL</span><input id="cfgLocalUrl" type="text" placeholder="http://127.0.0.1:11434/v1"></label>
+          <label class="cfgrow"><span>Local model</span><input id="cfgLocalModel" type="text" placeholder="dolphin3:8b"></label>
+          <label class="cfgrow"><span>External upstream</span><input id="cfgExtUpstream" type="text" placeholder="https://api.openai.com"></label>
+          <label class="cfgrow"><span>External model</span><input id="cfgExtModel" type="text" placeholder="gpt-4o-mini"></label>
+          <label class="cfgrow"><span>API key</span><input id="cfgApiKey" type="password" placeholder="leave blank to keep current"></label>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn-primary" id="cfgSave" type="button">Save</button>
+          <span id="cfgStatus" style="font-size:12px"></span>
+        </div>
+        <p style="margin-top:8px;color:#6b7280;font-size:12px">Tip: clear <strong>Local URL</strong> to disable local
+           inference and use the external API only.</p>
+      </div>
+    </div>
+
   </div>
 
   <div class="note">
@@ -242,6 +278,50 @@ function buildSetupHtml(port: number): string {
     try { await navigator.clipboard.writeText(ta.value); }
     catch (e) { ta.focus(); ta.select(); try { document.execCommand("copy"); } catch (e2) {} }
     document.getElementById("copied").style.display = "inline";
+  });
+
+  // Model & connection config form. GET fills the fields; saving mutates /api/*,
+  // so it fetches the CSRF token first and sends it in the x-me-csrf header.
+  var __csrf = null;
+  function __getCsrf() {
+    return fetch("/api/csrf-token").then(function (r) { return r.json(); })
+      .then(function (j) { __csrf = j && j.token; return __csrf; }).catch(function () { return null; });
+  }
+  fetch("/api/config").then(function (r) { return r.json(); }).then(function (c) {
+    document.getElementById("cfgLocalUrl").value = c.localUrl || "";
+    document.getElementById("cfgLocalModel").value = c.localModel || "";
+    document.getElementById("cfgExtUpstream").value = c.externalUpstream || "";
+    document.getElementById("cfgExtModel").value = c.externalModel || "";
+    if (c.apiKeySet) document.getElementById("cfgApiKey").placeholder = "already set - leave blank to keep";
+  }).catch(function () {});
+  document.getElementById("cfgSave").addEventListener("click", async function () {
+    var st = document.getElementById("cfgStatus");
+    st.style.color = "#6b7280"; st.textContent = "Saving...";
+    var body = {
+      localUrl: document.getElementById("cfgLocalUrl").value,
+      localModel: document.getElementById("cfgLocalModel").value,
+      externalUpstream: document.getElementById("cfgExtUpstream").value,
+      externalModel: document.getElementById("cfgExtModel").value
+    };
+    var key = document.getElementById("cfgApiKey").value;
+    if (key && key.trim()) body.apiKey = key;
+    try {
+      if (!__csrf) await __getCsrf();
+      var res = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-me-csrf": __csrf || "" },
+        body: JSON.stringify(body)
+      });
+      if (res.ok) {
+        st.style.color = "#4ade80"; st.textContent = "Saved. Applied immediately.";
+        document.getElementById("cfgApiKey").value = "";
+      } else {
+        var e = await res.json().catch(function () { return {}; });
+        st.style.color = "#f87171"; st.textContent = "Error: " + (e.error || ("HTTP " + res.status));
+      }
+    } catch (err) {
+      st.style.color = "#f87171"; st.textContent = "Error: " + String(err);
+    }
   });
 </script>
 </body>
@@ -296,6 +376,42 @@ export function registerSetupRoutes(
     }
     try {
       await saveApiKeyToEnv(apiKey.trim());
+      return reply.send({ ok: true });
+    } catch (err) {
+      return reply.code(500).send({ error: "failed to write .env", detail: String(err) });
+    }
+  });
+
+  // Current effective model/connection config, for the setup page's config form.
+  // GET is CSRF-exempt; reads the live values (env or built-in defaults).
+  app.get("/api/config", async (_req, reply) => {
+    return reply.send({
+      localUrl: localUrl(),
+      localModel: localModel(),
+      localEnabled: localEnabled(),
+      externalUpstream: externalUpstream(),
+      externalModel: externalModel(),
+      apiKeySet: !!(process.env.MARINARA_EXTENDER_API_KEY || "").trim(),
+    });
+  });
+
+  // Save model/connection config to .env and apply immediately. Mutating /api/*,
+  // so the CSRF guard requires the x-me-csrf token (the form fetches it first).
+  // Only fields actually present in the body are written. Clearing Local URL
+  // (empty string) disables local inference — external API only.
+  app.post<{
+    Body: { localUrl?: string; localModel?: string; externalUpstream?: string; externalModel?: string; apiKey?: string };
+  }>("/api/config", async (req, reply) => {
+    const b = req.body ?? {};
+    const vars: Record<string, string> = {};
+    if (typeof b.localUrl === "string") vars.MARINARA_EXTENDER_LOCAL_URL = b.localUrl.trim();
+    if (typeof b.localModel === "string") vars.MARINARA_EXTENDER_LOCAL_MODEL = b.localModel.trim();
+    if (typeof b.externalUpstream === "string") vars.MARINARA_EXTENDER_DIGEST_UPSTREAM = b.externalUpstream.trim();
+    if (typeof b.externalModel === "string") vars.MARINARA_EXTENDER_DIGEST_MODEL = b.externalModel.trim();
+    if (typeof b.apiKey === "string" && b.apiKey.trim()) vars.MARINARA_EXTENDER_API_KEY = b.apiKey.trim();
+    if (Object.keys(vars).length === 0) return reply.code(400).send({ error: "no recognized fields" });
+    try {
+      await saveEnvVars(vars);
       return reply.send({ ok: true });
     } catch (err) {
       return reply.code(500).send({ error: "failed to write .env", detail: String(err) });

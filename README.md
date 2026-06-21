@@ -174,18 +174,28 @@ Each turn, all bookmark weights decay by ×0.97. On turns where a bookmark's wei
 
 These bracket commands (and any legacy `<bookmark>`/`<remember>` XML) are stripped from visible chat by a regex script the extension installs automatically.
 
+### Recaps & narrative arcs
+
+Raw beats are moments; a story is how they connect. The **recap layer** consolidates beats into **arcs** — a named through-line — and surfaces a recap as the canonical narrative unit the loader injects, *above* the individual beats:
+
+- **Scene recaps (free)** — when you conclude a scene in Marinara, its prose summary is ingested as a scene arc, with the highest-salience member beats kept as footnotes.
+- **Through-line arcs** — a background pass clusters related beats across scenes into a cross-scene arc the engine can't produce on its own.
+- **Surfaced by meaning** — recaps are matched to the moment by relevance *and* embedding similarity, so the right "Story so far" appears even when the conversation doesn't share keywords with its label.
+
+Superseded or hand-deleted memories tier down to **cold** (recoverable), never destroyed — restore them from the panel's **Retired** / **Recently deleted** sections.
+
 ---
 
 ## Ledger panel
 
 Click the `≡` button in the chat header to open the ledger panel. It has four tabs:
 
-- **Memory** — the active chat's threads, topics, agenda items, and bookmarks. Create entries, mark threads done (hidden from the loader once done), delete, and refresh.
+- **Memory** — threads, topics, agenda, and bookmarks. A **Chat | Character** toggle switches between *this conversation's* memory and the character's *durable, cross-chat* memory; groups are collapsible and **sortable** (newest / most-used / oldest). Create entries, mark threads done (hidden from the loader once done), and delete. **Delete is recoverable** — it moves the entry to a **Recently deleted** list (restore any time; permanently erasing takes a second, deliberate step). A **Retired** section shows facts the reconciliation curator superseded, with one-click restore.
 - **Import** — pull memory out of past conversations (see below) and analyze pasted prose/story text into emotional beats.
 - **Pending** — speakers from imports that didn't match a known character. Route each to a card (or create one) so its memories file correctly; once mapped, future imports route that name automatically.
 - **Settings** — toggles, identity/relink tools, and maintenance (cleanup, etc.).
 
-The Memory tab shows chat-scope data; character-scope and global entries can be managed via the API (see below).
+Both chat- and character-scope memory are managed here via the scope toggle; global entries are managed via the API (see below).
 
 ---
 

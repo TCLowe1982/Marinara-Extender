@@ -2,6 +2,32 @@
 
 All notable changes to Marinara Extender are documented here.
 
+## v1.2.0 — 2026-06-20
+
+Story-layer completion, recoverable memory management, and a guided install.
+
+### Highlights
+
+- **Recap layer, end to end.** Recaps are now the canonical retrieval unit: the loader injects a "Story so far" — scene-arc and through-line recaps — *above* the raw beats, surfaced by relevance **and** embedding similarity, so the right arc appears even without keyword overlap. Beats stay underneath for detail.
+- **Recoverable delete.** Deleting a memory tiers it to cold, not oblivion — a **Recently deleted** view restores it; permanent erase is a separate, deliberate step. Curator-superseded facts are restorable from **Retired**.
+- **Memory tab, scoped & sortable.** A **Chat | Character** toggle exposes durable character memory (not just the active chat), with collapsible groups and newest / most-used / oldest sorting.
+- **Guest characters keep their voice.** In multi-character scenes, every participant's own ledger/recaps are refreshed each turn (dual-retrieval), so a guest answers from their own canon, not just the visible scene.
+- **Long stories land in one telling.** A long user message is routed through windowed granular ingestion, so a multi-page memory becomes rich beats instead of one — no re-import.
+- **Guided, quieter install.** First-run onboarding (chat + embed model pull, the extension-install bridge, Ollama-not-installed guidance) with quiet repeat launches, plus **bring-your-own-backend** support — point `MARINARA_EXTENDER_LOCAL_URL` at KoboldCpp / LM Studio / llama.cpp and the launcher adapts.
+- **Build code in the version string** so a stale tab is identifiable at a glance.
+
+### Notes
+
+- Launcher renamed to **`Marinara_Extender_Start.bat`** (matches `Marinara_Extender_Update.bat`).
+- Facts stated about a character route to that character's ledger; scope isolation otherwise holds (a character doesn't bleed another's traits).
+
+## v1.1.x — 2026-06
+
+Rolled up from the per-release notes in [`memory-extender/docs/`](./memory-extender/docs/):
+
+- **v1.1 — "The story, not just the facts."** Recap-layer generation (scene recaps + through-line arcs), narrative threads, multi-character subject attribution, incident-accumulate / fact-supersede reconciliation, atomic fsync'd writes, CSRF on mutating routes, embeddings on by default, one-click updates. See `docs/RELEASE-v1.1.md`.
+- **v1.1.3 — "The sidecar heals itself."** Crash watchdog (auto-relaunch in ~10–15s), a crash breadcrumb in the log, consolidated launcher. See `docs/RELEASE-v1.1.3.md`.
+
 ## v1.0.0 — 2026-06-05
 
 First public release. Persistent, scoped, local-first memory for [Marinara Engine](https://github.com/Pasta-Devs/Marinara-Engine) characters.

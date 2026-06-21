@@ -38,15 +38,23 @@ Analysis runs on your **local model** (Ollama by default) — no key, nothing le
 
 - [Marinara Engine](https://github.com/Pasta-Devs/Marinara-Engine) installed and running
 - Node.js 20+
-- [Ollama](https://ollama.com) with the default model pulled (`ollama pull dolphin3:8b`) — this is what powers analysis and imports locally. (`start.ps1` will offer to pull it for you.) An external OpenAI-compatible API key is an optional fallback.
+- A local model server for analysis. [Ollama](https://ollama.com) is the default — the launcher offers to pull the chat model (`dolphin3:8b`) and the embedder (`nomic-embed-text`) for you. **Any OpenAI-compatible server also works** (KoboldCpp, LM Studio, llama.cpp): point `MARINARA_EXTENDER_LOCAL_URL` at it (e.g. `http://127.0.0.1:5001/v1`) and the launcher skips the Ollama steps. An external OpenAI-compatible API key is an optional fallback.
 
 ---
 
 ## Installation
 
+First, get the code. **Cloning is recommended** — it keeps the one-click updater working:
+
+```bash
+git clone https://github.com/TCLowe1982/Marinara-Extender
+```
+
+No git? Download the ZIP from GitHub and unzip it anywhere — everything still runs; you'd just update by re-downloading until the no-git updater lands.
+
 ### 1. Start the Memory Extender server
 
-On Windows, double-click **`Extender_start.bat`** (or run `start.ps1`) — it installs dependencies on first run, starts Ollama and the server, and shows a live status bar.
+On Windows, double-click **`Marinara_Extender_Start.bat`** (or run `start.ps1`) — it installs dependencies on first run, starts Ollama and the server, and shows a live status bar.
 
 Or start it manually:
 

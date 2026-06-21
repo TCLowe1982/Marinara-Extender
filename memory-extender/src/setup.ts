@@ -77,7 +77,7 @@ function buildLoaderJs(port: number): string {
     document.head.appendChild(s);
     if (marinara.onCleanup) marinara.onCleanup(function () { s.remove(); });
   } catch (err) {
-    console.error("[Marinara Extender] Could not load from " + SIDECAR + " — is the Memory Extender running? (Extender_start.bat)", err);
+    console.error("[Marinara Extender] Could not load from " + SIDECAR + " — is the Memory Extender running? (Marinara_Extender_Start.bat)", err);
     // Non-technical users never open the console, so surface it on the page.
     try {
       var id = "marinara-extender-offline";
@@ -85,7 +85,7 @@ function buildLoaderJs(port: number): string {
         var b = document.createElement("div");
         b.id = id;
         // Platform-honest copy. The .bat advice is actively misleading on a phone
-        // (there is no Extender_start.bat on Android/iOS) and on Linux/Mac (no
+        // (there is no Marinara_Extender_Start.bat on Android/iOS) and on Linux/Mac (no
         // .bat at all) — every mobile tester reads "start the .bat" and files the
         // same not-a-bug. The memory server runs on a computer; a phone can't run
         // it locally, so on mobile this is "not reachable", not "not started".
@@ -93,7 +93,7 @@ function buildLoaderJs(port: number): string {
         b.textContent = /Android|iPhone|iPad|iPod|Mobile/i.test(ua)
           ? "Marinara Extender: memory server not reachable from this device. It runs on a computer, not the phone — see the mobile setup notes."
           : /Windows/i.test(ua)
-            ? "Marinara Extender: memory server not running. Start it (Extender_start.bat), then reload."
+            ? "Marinara Extender: memory server not running. Start it (Marinara_Extender_Start.bat), then reload."
             : "Marinara Extender: memory server not reachable. Start the Memory Extender, then reload.";
         b.style.cssText = "position:fixed;bottom:12px;right:12px;z-index:2147483647;max-width:340px;background:#3f1414;color:#fecaca;border:1px solid #f87171;border-radius:8px;padding:10px 14px;font:13px system-ui,-apple-system,sans-serif;line-height:1.4;box-shadow:0 2px 12px rgba(0,0,0,.4)";
         document.body.appendChild(b);

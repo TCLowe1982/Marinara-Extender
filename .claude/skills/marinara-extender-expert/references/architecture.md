@@ -76,7 +76,7 @@ All three run off the hot path so the turn response is fast.
 - **Import/analysis** — `POST /api/digest|snapshot|analyze-beats|estimate-beats`, `GET /api/beats`.
 - **Maintenance** — `POST /api/cleanup|promote-all`.
 - **Reconcile** *(opt-in `MARINARA_EXTENDER_RECONCILE`)* — `GET /api/reconcile-queue`, `POST /api/reconcile-apply|reconcile-hold`.
-- **Threads/arcs/identity/aliases/holding-pool** — `GET /api/threads|arcs|identities|aliases|pending-speakers`, plus mutators.
+- **Threads/arcs/identity/aliases/holding-pool** — `GET /api/threads|arcs|identity|aliases|pending-speakers`, plus mutators.
 - **Config/info** — `GET/POST /api/config`, `GET /api/scopes`, `GET /api/health`, `GET /api/csrf-token`.
 - **Setup/extension** — `GET /setup`, `GET /loader.js`, `GET /marinara-extender.js`.
 - **Inference proxy (CSRF-exempt)** — `POST /v1/chat/completions`, `POST /chat/completions`.

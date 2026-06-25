@@ -82,3 +82,13 @@ bd close <id>         # Complete work
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
+
+## Session Completion — Project Addendum
+
+**Before the mandatory `git push` above, ALSO complete this step.** (Kept here, *outside* the beads-managed block, so a `bd` regen can't drop it.)
+
+- **Update the expert skill.** If code or behavior changed this session, update the corresponding expert skill so it never drifts from the code:
+  - Marinara **Extender** changes → `marinara-extender-expert` (`.claude/skills/marinara-extender-expert/` — `SKILL.md` + the affected `references/*`).
+  - Marinara **Engine** changes → `marinara-engine-expert`.
+
+  The repo copy under `.claude/skills/` is **canonical**; re-sync the global `~/.claude/skills/` copy so they don't drift. A stale skill is worse than none. (Also recorded in beads: `bd memories session-close`.)

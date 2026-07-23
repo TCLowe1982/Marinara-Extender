@@ -1,0 +1,235 @@
+// Marinara Extender
+// Copyright (C) 2026 TC Lowe
+// Licensed under AGPL-3.0-only. See LICENSE.
+
+// Engine REST client (MarinaraExtender-7nx, epic hq7) — the sidecar's
+// server-to-server channel to Marinara Engine, replacing the removed
+// extension's marinara.apiFetch.
+//
+// Two things carry real risk and are pinned hardest here: the static CSRF
+// header (without it every mutation 403s) and the list-unwrapping, which has to
+// tolerate three response shapes because the extension found all three in the
+// wild.
+
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import {
+  engineFetch,
+  engineUrl,
+  parseData,
+  unwrapList,
+  listChats,
+  listMessages,
+  listLorebooks,
+  createLorebook,
+  deleteLorebookEntry,
+  engineReachable,
+  EngineError,
+} from "../engine-client.js";
+
+let fetchMock: ReturnType<typeof vi.fn>;
+const ENGINE = "http://engine.test:7860";
+
+beforeEach(() => {
+  process.env.MARINARA_EXTENDER_ENGINE_URL = ENGINE;
+  fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  delete process.env.MARINARA_EXTENDER_ENGINE_URL;
+  delete process.env.MARINARA_EXTENDER_ENGINE_BASIC_AUTH;
+});
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+const calledUrl = () => fetchMock.mock.calls[0][0] as string;
+const calledInit = () => fetchMock.mock.calls[0][1] as { method: string; headers: Record<string, string>; body?: string };
+
+describe("engineUrl() normalization", () => {
+  it("strips a trailing slash", () => {
+    process.env.MARINARA_EXTENDER_ENGINE_URL = "http://host:7860/";
+    expect(engineUrl()).toBe("http://host:7860");
+  });
+
+  it("strips a pasted /api suffix", () => {
+    process.env.MARINARA_EXTENDER_ENGINE_URL = "http://host:7860/api";
+    expect(engineUrl()).toBe("http://host:7860");
+  });
+
+  it("defaults to the engine's loopback address", () => {
+    delete process.env.MARINARA_EXTENDER_ENGINE_URL;
+    expect(engineUrl()).toBe("http://127.0.0.1:7860");
+  });
+});
+
+describe("engineFetch — transport", () => {
+  it("sends the static CSRF header on every request", async () => {
+    // Without this the engine 403s every mutation. It is a fixed value, not a
+    // token to fetch — see CSRF_HEADER_VALUE in the engine's security.ts.
+    fetchMock.mockResolvedValue(json({}));
+    await engineFetch("/chats");
+    expect(calledInit().headers["x-marinara-csrf"]).toBe("1");
+  });
+
+  it("targets the engine's /api surface", async () => {
+    fetchMock.mockResolvedValue(json({}));
+    await engineFetch("/lorebooks");
+    expect(calledUrl()).toBe(`${ENGINE}/api/lorebooks`);
+  });
+
+  it("omits a body on GET rather than sending 'undefined'", async () => {
+    fetchMock.mockResolvedValue(json({}));
+    await engineFetch("/chats");
+    expect(calledInit().body).toBeUndefined();
+  });
+
+  it("serializes a body on mutations", async () => {
+    fetchMock.mockResolvedValue(json({ id: "lb1" }));
+    await engineFetch("/lorebooks", { method: "POST", body: { name: "x" } });
+    expect(calledInit().method).toBe("POST");
+    expect(JSON.parse(calledInit().body!)).toEqual({ name: "x" });
+  });
+
+  it("returns null for a 204 with no body (DELETE)", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    await expect(deleteLorebookEntry("lb1", "e1")).resolves.toBeNull();
+  });
+
+  it("adds Basic auth only when configured", async () => {
+    // mockImplementation, not mockResolvedValue: this test calls twice, and a
+    // Response body can only be read once — reusing one instance throws
+    // "Body is unusable".
+    fetchMock.mockImplementation(() => json({}));
+    await engineFetch("/chats");
+    expect(calledInit().headers.authorization).toBeUndefined();
+
+    fetchMock.mockClear();
+    process.env.MARINARA_EXTENDER_ENGINE_BASIC_AUTH = "user:pass";
+    await engineFetch("/chats");
+    expect(calledInit().headers.authorization).toBe(`Basic ${Buffer.from("user:pass").toString("base64")}`);
+  });
+});
+
+describe("engineFetch — actionable failures", () => {
+  it("explains an untrusted-origin CSRF rejection instead of a bare 403", async () => {
+    fetchMock.mockResolvedValue(json({ code: "CSRF_ORIGIN_NOT_TRUSTED" }, 403));
+    await expect(engineFetch("/lorebooks", { method: "POST", body: {} })).rejects.toThrow(
+      /CSRF_TRUSTED_ORIGINS/,
+    );
+  });
+
+  it("distinguishes a stripped CSRF header from an untrusted origin", async () => {
+    // Different cause, different fix — collapsing these into one message is how
+    // this becomes an hour of guessing.
+    fetchMock.mockResolvedValue(json({ code: "CSRF_MISSING_HEADER" }, 403));
+    await expect(engineFetch("/lorebooks", { method: "POST", body: {} })).rejects.toThrow(
+      /stripping it/,
+    );
+  });
+
+  it("points a 401 at the Basic-auth env var", async () => {
+    fetchMock.mockResolvedValue(json({ error: "Unauthorized" }, 401));
+    await expect(engineFetch("/chats")).rejects.toThrow(/MARINARA_EXTENDER_ENGINE_BASIC_AUTH/);
+  });
+
+  it("reports an unreachable engine as such rather than a parse error", async () => {
+    fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+    const err = await engineFetch("/chats").catch((e) => e as EngineError);
+    expect(err).toBeInstanceOf(EngineError);
+    expect((err as EngineError).status).toBe(0);
+    expect((err as EngineError).message).toMatch(/is it running/);
+  });
+
+  it("surfaces the engine's own message for other failures", async () => {
+    fetchMock.mockResolvedValue(json({ error: "Invalid Discord webhook URL" }, 400));
+    await expect(engineFetch("/chats/c1", { method: "PATCH", body: {} })).rejects.toThrow(
+      /Invalid Discord webhook URL/,
+    );
+  });
+
+  it("engineReachable() reports false instead of throwing", async () => {
+    fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+    await expect(engineReachable()).resolves.toBe(false);
+  });
+});
+
+describe("unwrapList — tolerates all three observed shapes", () => {
+  it("accepts a bare array", () => {
+    expect(unwrapList([{ id: 1 }], "chats")).toEqual([{ id: 1 }]);
+  });
+
+  it("accepts a named key", () => {
+    expect(unwrapList({ chats: [{ id: 1 }] }, "chats")).toEqual([{ id: 1 }]);
+  });
+
+  it("accepts a data envelope", () => {
+    expect(unwrapList({ data: [{ id: 1 }] }, "chats")).toEqual([{ id: 1 }]);
+  });
+
+  it("returns [] rather than throwing on an unexpected shape", () => {
+    expect(unwrapList({ nope: true }, "chats")).toEqual([]);
+    expect(unwrapList(null, "chats")).toEqual([]);
+  });
+});
+
+describe("parseData — engine objects with a stringified data field", () => {
+  it("parses a JSON string", () => {
+    expect(parseData({ data: '{"characterId":"c1"}' })).toEqual({ characterId: "c1" });
+  });
+
+  it("passes an object through", () => {
+    expect(parseData({ data: { characterId: "c1" } })).toEqual({ characterId: "c1" });
+  });
+
+  it("returns {} on malformed JSON rather than throwing", () => {
+    expect(parseData({ data: "{not json" })).toEqual({});
+  });
+
+  it("returns {} when data is absent", () => {
+    expect(parseData({ id: "x" })).toEqual({});
+    expect(parseData(null)).toEqual({});
+  });
+});
+
+describe("typed endpoint wrappers", () => {
+  it("listChats unwraps the list", async () => {
+    fetchMock.mockResolvedValue(json({ chats: [{ id: "c1" }] }));
+    await expect(listChats()).resolves.toEqual([{ id: "c1" }]);
+  });
+
+  it("listMessages passes limit and before as query params", async () => {
+    // The endpoint returns the FULL history with no limit, so the poller must
+    // always bound it — this asserts the knob actually reaches the URL.
+    fetchMock.mockResolvedValue(json({ messages: [] }));
+    await listMessages("c1", { limit: 20, before: "cursor1" });
+    expect(calledUrl()).toBe(`${ENGINE}/api/chats/c1/messages?limit=20&before=cursor1`);
+  });
+
+  it("listMessages omits the query string entirely when unbounded", async () => {
+    fetchMock.mockResolvedValue(json({ messages: [] }));
+    await listMessages("c1");
+    expect(calledUrl()).toBe(`${ENGINE}/api/chats/c1/messages`);
+  });
+
+  it("listLorebooks unwraps a bare array", async () => {
+    fetchMock.mockResolvedValue(json([{ id: "lb1" }]));
+    await expect(listLorebooks()).resolves.toEqual([{ id: "lb1" }]);
+  });
+
+  it("createLorebook posts the documented shape", async () => {
+    fetchMock.mockResolvedValue(json({ id: "lb1" }));
+    await createLorebook({ name: "Marinara Extender — Rin", characterId: "c1", enabled: true, tokenBudget: 16384 });
+    expect(calledInit().method).toBe("POST");
+    expect(JSON.parse(calledInit().body!)).toEqual({
+      name: "Marinara Extender — Rin",
+      characterId: "c1",
+      enabled: true,
+      tokenBudget: 16384,
+    });
+  });
+});

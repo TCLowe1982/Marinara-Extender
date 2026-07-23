@@ -8,14 +8,33 @@
 >
 > **The replacement is TWO paths, and the default is not the proxy.**
 >
-> 1. **Poller (provider-agnostic).** The sidecar talks to the engine's REST API server-to-server from localhost: it detects finished turns, ingests them, and writes the memory block back through the **lorebook API** — exactly what the extension did, minus the browser. Slices `7nx`→`23i`/`lxp`/`ay7`. **Built on the `poller-fallback` branch, not merged** — `engine-client.ts` (slice `7nx`) is the transport: engine base URL, the static CSRF header, optional Basic auth, actionable CSRF/401/unreachable errors, and typed wrappers for chats/messages/lorebooks. Endpoints and payload shapes were **ported from the working extension**, not inferred from engine source.
+> 1. **Poller (provider-agnostic).** The sidecar talks to the engine's REST API server-to-server from localhost: it detects finished turns, ingests them, and writes the memory block back through the **lorebook API** — exactly what the extension did, minus the browser. **Built and live-verified on the `poller-fallback` branch, not merged.**
+>
+> | Module | Slice | Does |
+> |---|---|---|
+> | `engine-client.ts` | `7nx` ✅ | Transport: engine base URL, the static CSRF header, optional Basic auth, actionable CSRF/401/unreachable errors, typed wrappers. Endpoints **ported from the working extension**, not inferred from engine source. |
+> | `poller.ts` | `23i` ✅ | Detection: polls `GET /api/chats` and compares `lastMessageAt`. Watermarks in `poller-state.yaml` via `mutateYamlFile`. |
+> | `lorebook-writer.ts` | `lxp` ✅ | Write-back: forced 16384 budget, nuke-and-recreate two constant entries, unlock-before-delete, serialized per character. |
+> | `turn-bridge.ts` | — | Glue: detected turn → `POST /api/process-turn` (the sidecar's own endpoint) → write the returned `memoryBlock` to the lorebook. |
+>
+> **Enable with `MARINARA_EXTENDER_POLLER=1`** (`_POLLER_INTERVAL_MS`, default 5000). **Off by default on purpose** — it nuke-and-recreates real lorebooks, and if the extension is ever re-enabled both paths would write the same entries.
+>
 > 2. **Inference proxy (opt-in, higher fidelity).** Marinara points a connection at the sidecar and memory rides the generation path itself. Built and tested (`53f`) but **cannot be the only path** — see the hard constraint below. Slices `w8g`/`rid`/`mca`/`pyx`, all P3.
 >
 > **⛔ The proxy structurally cannot serve the three CLI-login providers** — `claude_subscription`, `openai_chatgpt`, `grok_subscription` (`LOCAL_AUTH_PROVIDERS`). For those the engine drives a vendor SDK **in-process** off a local CLI login: `claude_subscription` uses `@anthropic-ai/claude-agent-sdk` with credentials the Claude Code CLI stored. There is no base URL and no API key field to redirect, and `ANTHROPIC_BASE_URL` appears nowhere in the engine repo. This is inherent, not a gap to patch. **If a user is on Claude/ChatGPT/Grok Subscription, the poller is the only option.**
 >
 > **What makes the poller possible:** engine CSRF is a **static header**, not a per-session token — `CSRF_HEADER = "x-marinara-csrf"`, `CSRF_HEADER_VALUE = "1"` (`packages/shared/src/constants/security.ts`) — and loopback origins are auto-trusted. So a non-browser client on 127.0.0.1 can both read and mutate the engine API.
 >
-> **Honest trade-off:** the lorebook mechanism **survives** on the poller path, so `e87` (over-budget silent drop), `axu` (duplicate lorebooks) and `s19` (stale cache) are **not** killed — only the proxy path would have done that. Injection also stays one turn behind (written after turn N, injected at N+1), exactly as the extension always behaved.
+> **Honest trade-off:** the lorebook mechanism **survives** on the poller path, so `e87` (over-budget silent drop) and `s19` (stale cache) are **not** killed — only the proxy path would have done that. (`axu`, duplicate lorebooks, *is* fixed: the write-back serializes the whole ensure+write cycle per character, where the extension serialized only the entry write.) Injection also stays one turn behind (written after turn N, injected at N+1), exactly as the extension always behaved.
+>
+> **Poller design notes that cost real debugging to learn:**
+>
+> - Detection polls `lastMessageAt` rather than `fs.watch`-ing the engine's data dir. One cheap call says which chats moved; measured at **10–13ms per quiet tick over a real 91-chat library**. `fs.watch` would be lower-latency but binds to internal on-disk layout, and its atomic rename pattern makes events noisy.
+> - `GET /chats/:id/messages?limit=N` returns the **newest N ascending**; **unbounded it returns the entire history** (195 messages on a real chat), so the limit is not optional.
+> - Messages carry their **own `characterId`**, so group scenes name the actual speaker per message.
+> - **Regeneration is a swipe** — `activeSwipeIndex` changes on the *same* message id; the engine re-rolls in place rather than appending. Requires the field on *both* sides before claiming a regeneration, or every unchanged message looks re-rolled and the turn is re-ingested every tick.
+> - A never-seen chat must be **baselined, not ingested**, or a fresh install replays every chat's history at once.
+> - The bridge calls the sidecar's own `/api/process-turn` over loopback rather than importing it: that handler is a large inline route with fire-and-forget tiers, and going through it reuses the exact path the extension used instead of a parallel implementation that can drift.
 >
 > **Landed so far — slice 1 (`53f`, commits `ca5a037` + `e20fb47`):** `proxy.ts`, faithful passthrough only, in **two wire formats**. Whole-object body forwarding so unknown/future params survive; caller credentials forwarded upstream (the sidecar never stores chat keys); SSE piped via `reply.hijack()`; client disconnect aborts upstream; `content-encoding`/`content-length` stripped; upstream errors passed through verbatim. **No memory logic yet** — seams are marked in the file for slices 2–4 (scope resolution → injection → response tee).
 >

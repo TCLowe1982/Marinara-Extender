@@ -53,6 +53,41 @@ export interface DetectedTurn {
   message: Record<string, unknown>;
   /** True when this is a re-roll of a turn we already saw (supersede, don't duplicate). */
   regenerated: boolean;
+  /**
+   * The user message immediately preceding this reply, if there is one.
+   * Ingestion analyses both halves of a turn, so the assistant text alone is
+   * only half the input.
+   */
+  precedingUserText: string;
+  /** All participants of the chat — group scenes have several. */
+  participantIds: string[];
+}
+
+/** Text of the last user message before `index` in an ascending tail. */
+export function precedingUserTextFor(
+  messages: Record<string, unknown>[],
+  index: number,
+): string {
+  for (let i = index - 1; i >= 0; i--) {
+    if (str(messages[i], "role") === "user") return str(messages[i], "content") ?? "";
+  }
+  return "";
+}
+
+/** Participant ids of a chat, tolerating the array / scalar / stringified forms. */
+export function getChatParticipantIds(chat: Record<string, unknown>): string[] {
+  const d = parseData(chat);
+  let arr: unknown = chat.characterIds ?? d.characterIds;
+  if (typeof arr === "string") {
+    try {
+      arr = JSON.parse(arr);
+    } catch {
+      arr = null;
+    }
+  }
+  if (Array.isArray(arr)) return arr.filter(Boolean).map(String);
+  const single = str(chat, "characterId", "character_id");
+  return single ? [single] : [];
 }
 
 export function pollerStatePath(): string {
@@ -245,6 +280,9 @@ export async function pollOnce(opts: PollOptions = {}): Promise<DetectedTurn[]> 
     const candidates = regenerated ? [regenerated] : fresh;
     for (const message of candidates) {
       if (!isAssistantTurn(message)) continue;
+      // Locate the reply within the full tail so we can find the user line that
+      // prompted it — ingestion needs both halves of the turn.
+      const idx = tail.findIndex((m) => str(m, "id") === str(message, "id"));
       detected.push({
         chatId: change.chatId,
         chatName: str(change.chat, "name") ?? change.chatId,
@@ -253,6 +291,8 @@ export async function pollOnce(opts: PollOptions = {}): Promise<DetectedTurn[]> 
         characterId: str(message, "characterId") ?? getChatCharacterId(change.chat),
         message,
         regenerated: regenerated !== null,
+        precedingUserText: idx >= 0 ? precedingUserTextFor(tail, idx) : "",
+        participantIds: getChatParticipantIds(change.chat),
       });
     }
 

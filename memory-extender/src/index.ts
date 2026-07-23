@@ -14,6 +14,9 @@ import { localUrl, localEnabled, localModel, externalUpstream, externalModel } f
 import { getCachedAuth } from "./auth-cache.js";
 import { registerApiRoutes } from "./api.js";
 import { registerProxyRoutes } from "./proxy.js";
+import { startPoller } from "./poller.js";
+import { handleDetectedTurn } from "./turn-bridge.js";
+import { engineUrl } from "./engine-client.js";
 import { registerSetupRoutes } from "./setup.js";
 import { updateStatus } from "./update.js";
 import { embeddingsStatus, describeEmbeddingsStatus } from "./embeddings.js";
@@ -248,4 +251,21 @@ app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
   console.log(`Progress:     ${process.env.MARINARA_EXTENDER_PROGRESS !== "0" ? "on (story-import console bar)" : "off"}`);
   // First-boot embeddings check — semantic degradation must never be silent.
   void embeddingsStatus().then((s) => console.log(`Embeddings:   ${describeEmbeddingsStatus(s)}`));
+
+  // ── Engine poller (opt-in) ──────────────────────────────────────────────────
+  // The replacement for the removed client extension: watch the engine for
+  // finished turns, ingest them, and write memory back to the character's
+  // lorebook.
+  //
+  // DEFAULT OFF, deliberately. It writes to real lorebooks (nuke-and-recreate),
+  // and anyone still running the extension would get both paths writing the
+  // same entries. Turning it on has to be a decision, not a surprise upgrade.
+  if (process.env.MARINARA_EXTENDER_POLLER === "1") {
+    const intervalMs = parseInt(process.env.MARINARA_EXTENDER_POLLER_INTERVAL_MS ?? "5000", 10);
+    console.log(`Engine poller: ON — every ${intervalMs}ms against ${engineUrl()}`);
+    console.log(`               (disable with MARINARA_EXTENDER_POLLER=0 if the extension is also running)`);
+    startPoller({ intervalMs, onTurn: (turn) => void handleDetectedTurn(turn) });
+  } else {
+    console.log(`Engine poller: off (set MARINARA_EXTENDER_POLLER=1 to enable)`);
+  }
 });

@@ -6,7 +6,16 @@
 >
 > **Marinara Engine v2.3.4 removed client extensions entirely** (no compat mode; retained extension records and `extension-storage:*` are permanently erased on first 2.3.4 startup). The loader + `marinara-extender.js` bridge described below **no longer works on current Engine** — `references/extension.md` documents a dead surface, kept only until slice 8 replaces it.
 >
-> **The replacement:** the sidecar becomes an OpenAI-compatible **inference proxy** that Marinara points its **Main connection** at. Memory rides the generation path itself — injected directly into the outgoing system message, with the response stream teed for turn ingestion. **The lorebook mechanism is dropped entirely** (which also moots the over-budget/duplicate/stale-cache bugs `e87`/`axu`/`s19`).
+> **The replacement is TWO paths, and the default is not the proxy.**
+>
+> 1. **Poller (primary, provider-agnostic).** The sidecar talks to the engine's REST API server-to-server from localhost: it detects finished turns, ingests them, and writes the memory block back through the **lorebook API** — exactly what the extension did, minus the browser. Slices `7nx`→`23i`/`lxp`/`ay7`.
+> 2. **Inference proxy (opt-in, higher fidelity).** Marinara points a connection at the sidecar and memory rides the generation path itself. Built and tested (`53f`) but **cannot be the only path** — see the hard constraint below. Slices `w8g`/`rid`/`mca`/`pyx`, all P3.
+>
+> **⛔ The proxy structurally cannot serve the three CLI-login providers** — `claude_subscription`, `openai_chatgpt`, `grok_subscription` (`LOCAL_AUTH_PROVIDERS`). For those the engine drives a vendor SDK **in-process** off a local CLI login: `claude_subscription` uses `@anthropic-ai/claude-agent-sdk` with credentials the Claude Code CLI stored. There is no base URL and no API key field to redirect, and `ANTHROPIC_BASE_URL` appears nowhere in the engine repo. This is inherent, not a gap to patch. **If a user is on Claude/ChatGPT/Grok Subscription, the poller is the only option.**
+>
+> **What makes the poller possible:** engine CSRF is a **static header**, not a per-session token — `CSRF_HEADER = "x-marinara-csrf"`, `CSRF_HEADER_VALUE = "1"` (`packages/shared/src/constants/security.ts`) — and loopback origins are auto-trusted. So a non-browser client on 127.0.0.1 can both read and mutate the engine API.
+>
+> **Honest trade-off:** the lorebook mechanism **survives** on the poller path, so `e87` (over-budget silent drop), `axu` (duplicate lorebooks) and `s19` (stale cache) are **not** killed — only the proxy path would have done that. Injection also stays one turn behind (written after turn N, injected at N+1), exactly as the extension always behaved.
 >
 > **Landed so far — slice 1 (`53f`, commits `ca5a037` + `e20fb47`):** `proxy.ts`, faithful passthrough only, in **two wire formats**. Whole-object body forwarding so unknown/future params survive; caller credentials forwarded upstream (the sidecar never stores chat keys); SSE piped via `reply.hijack()`; client disconnect aborts upstream; `content-encoding`/`content-length` stripped; upstream errors passed through verbatim. **No memory logic yet** — seams are marked in the file for slices 2–4 (scope resolution → injection → response tee).
 >

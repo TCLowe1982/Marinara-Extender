@@ -8,7 +8,16 @@
 >
 > **The replacement:** the sidecar becomes an OpenAI-compatible **inference proxy** that Marinara points its **Main connection** at. Memory rides the generation path itself — injected directly into the outgoing system message, with the response stream teed for turn ingestion. **The lorebook mechanism is dropped entirely** (which also moots the over-budget/duplicate/stale-cache bugs `e87`/`axu`/`s19`).
 >
-> **Landed so far — slice 1 (`53f`, commit `ca5a037`):** `proxy.ts`, faithful passthrough only. `POST /proxy/v1/chat/completions` (+ `/proxy/chat/completions` alias) and `GET /proxy/v1/models`. Whole-object body forwarding so unknown/future params survive; caller `Authorization` forwarded upstream (the sidecar never stores chat keys); SSE piped via `reply.hijack()`; client disconnect aborts upstream; `content-encoding`/`content-length` stripped. **No memory logic yet** — seams are marked in the file for slices 2–4 (scope resolution → injection → response tee).
+> **Landed so far — slice 1 (`53f`, commits `ca5a037` + `e20fb47`):** `proxy.ts`, faithful passthrough only, in **two wire formats**. Whole-object body forwarding so unknown/future params survive; caller credentials forwarded upstream (the sidecar never stores chat keys); SSE piped via `reply.hijack()`; client disconnect aborts upstream; `content-encoding`/`content-length` stripped; upstream errors passed through verbatim. **No memory logic yet** — seams are marked in the file for slices 2–4 (scope resolution → injection → response tee).
+>
+> | Marinara connection | Set its base URL to | Proxy route | Upstream env var |
+> |---|---|---|---|
+> | **Custom** (OpenAI-compatible) | `http://127.0.0.1:3001/proxy/v1` | `POST /proxy/v1/chat/completions` | `MARINARA_EXTENDER_PROXY_UPSTREAM` |
+> | **Anthropic** (native) | `http://127.0.0.1:3001/anthropic/v1` | `POST /anthropic/v1/messages` | `MARINARA_EXTENDER_ANTHROPIC_UPSTREAM` |
+>
+> **Why there is no OpenAI→Anthropic translation layer.** Anthropic isn't OpenAI-compatible (`POST /v1/messages`, `x-api-key` auth, its own SSE event shape). But Marinara's **native Anthropic connection has a user-editable `baseUrl`** — verified in `packages/shared/src/constants/providers.ts`: only `LOCAL_AUTH_PROVIDERS` (`openai_chatgpt` / `claude_subscription` / `grok_subscription`) hide it, and `baseUrl` is a generic per-connection field in `connection.schema.ts`. So the proxy speaks Anthropic on both sides and forwards it untouched, instead of permanently owning message-shape conversion, SSE translation, and tool-call/stop-reason mapping. Engine-side provider knowledge stays in the engine.
+>
+> **Anthropic specifics that matter downstream:** the engine sends `x-api-key` (not `Authorization`) because `anthropic.apiKeyHeader = "x-api-key"`, `usesAuthHeader: false`; its `defaultBaseUrl` is `https://api.anthropic.com/v1` and it appends `/messages`. Critically for slice 3, **Anthropic takes `system` as a top-level request parameter**, not a `role: "system"` message — so memory injection there appends to `body.system` (a bare string or an array of text blocks) rather than splicing the messages array. Injection must be implemented per format.
 >
 > **Two operational facts that change with the proxy:**
 >

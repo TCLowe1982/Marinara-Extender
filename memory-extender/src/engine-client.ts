@@ -200,8 +200,21 @@ export function listMessages(
 
 // ── Lorebooks (read + write) ──────────────────────────────────────────────────
 
+export function listCharacters(): Promise<Record<string, unknown>[]> {
+  return engineFetch("/characters").then((r) => unwrapList(r, "characters"));
+}
+
 export function listLorebooks(): Promise<Record<string, unknown>[]> {
   return engineFetch("/lorebooks").then((r) => unwrapList(r, "lorebooks"));
+}
+
+/**
+ * Delete a whole lorebook (DELETE /api/lorebooks/:id). The extension never did
+ * this — it only ever swept entries — but the smoke test needs it to clean up
+ * after itself rather than leaving junk in a real install.
+ */
+export function deleteLorebook(lorebookId: string): Promise<unknown> {
+  return engineFetch(`/lorebooks/${lorebookId}`, { method: "DELETE" });
 }
 
 export function createLorebook(body: {

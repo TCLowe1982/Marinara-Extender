@@ -1,5 +1,13 @@
 # Marinara Extender: The Client Extension
 
+> ## ⚠️ SUPERSEDED — this surface no longer works on current Marinara Engine
+>
+> **Engine v2.3.4 removed client extensions entirely**, with no compat mode: the Settings surface, the client hooks, the scoped `marinara` API and the `/api/extensions` routes are all gone, and the first 2.3.4 startup permanently erases retained extension records and `extension-storage:*`. Everything below — the loader, the blob-`<script>` CSP dance, `window.__meSidecar`, the two constant lorebook entries, the auto-installed regex script, the injected panel — describes a **dead bridge**.
+>
+> **Read `references/architecture.md` first** for the replacement: the sidecar is becoming an **inference proxy** Marinara points its Main connection at (epic `hq7`). Memory is injected straight into the outgoing system message; the lorebook mechanism is dropped.
+>
+> This file is retained for two reasons only: to make the still-present `marinara-extender.js` in the repo intelligible while slices 2–8 land, and as the **port checklist** for the panel rebuild (`ykz`) — the lanes, scope toggle, bookmarks, Import, Story ingest, Pending speakers, Identity, Recently deleted/Retired and Settings sections listed under "The panel UI" all have to reappear in a standalone page served by the sidecar. Slice 8 (`vvb`) deletes this file and replaces it with `references/proxy.md`.
+
 *The browser side — how the sidecar's memory block reaches Marinara. Grounded in `setup.ts` (serving) and the extension itself, `marinara-extender.js` (one ~4400-line file at the **repo root**, served at `GET /marinara-extender.js`). It's an ordinary Marinara client extension using the `marinara` API — for that API itself, defer to the **marinara-engine-expert** skill.*
 
 ## Two-file model: loader + live extension

@@ -28,6 +28,12 @@ Config can also be saved from the **`/setup` page** form or `POST /api/config`, 
 | `MARINARA_EXTENDER_DIGEST_UPSTREAM` | `https://api.openai.com` | OpenAI-compatible base URL for the fallback. |
 | `MARINARA_EXTENDER_DIGEST_MODEL` | `gpt-4o-mini` | Fallback model (a local model name wouldn't exist upstream). |
 
+**Engine-facing inference proxy (`hq7` — the client-extension replacement):**
+
+| Var | Default | Notes |
+|---|---|---|
+| `MARINARA_EXTENDER_PROXY_UPSTREAM` | `https://api.openai.com` | Where `proxy.ts` forwards **Marinara's chat generations**. Accepts `https://host` or `https://host/v1` (the `/v1` is stripped). **Distinct from the analysis config above** — that's the sidecar's own small model, this is the user's real chat provider. The proxy never stores an API key: the caller's `Authorization` is forwarded upstream, so keys stay in Marinara's connection config. |
+
 **Server & data:**
 
 | Var | Default | Notes |
@@ -62,7 +68,7 @@ Config can also be saved from the **`/setup` page** form or `POST /api/config`, 
 
 - **`dolphin3:8b` is a functional requirement, not a preference.** The sentiment analyzer must classify adult roleplay content; an alignment-tuned small model (phi3, etc.) refuses or moralizes and **breaks the pipeline**. Use an uncensored local model.
 - **Any OpenAI-compatible server works** — point `MARINARA_EXTENDER_LOCAL_URL` at LM Studio / KoboldCpp / llama.cpp (e.g. `http://127.0.0.1:5001/v1`); the launcher then skips the Ollama steps.
-- **The user's chat model is never touched.** The sidecar's model is only for *analysis*; normal generation goes straight from Marinara to the user's provider. (The `/v1/chat/completions` proxy is opt-in, for clients like the Rewrite Assistant.)
+- **The user's chat model is never *substituted*.** The sidecar's own model is only for *analysis*. Two separate endpoints exist and get confused constantly: `/v1/chat/completions` is the **Rewrite Assistant relay**, which deliberately picks the model/key for its caller; `/proxy/v1/chat/completions` is the **engine-facing proxy** (`hq7`), which changes nothing and forwards the caller's own model and key. Under the proxy model chat generation *does* pass through the sidecar — but the sidecar only relays it, it never answers a chat turn itself.
 - **Embeddings are optional** — without an embed model, semantic dedup/recall degrade to lexical. Degradation is logged at boot, never silent.
 
 ## Tuning how much memory is injected

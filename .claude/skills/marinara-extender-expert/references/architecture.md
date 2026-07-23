@@ -2,11 +2,26 @@
 
 *Condensed from the live source in `memory-extender/src/`. When a detail matters, open the cited file — the code is authoritative; this is a map.*
 
+> ## ⚠️ MIGRATION IN FLIGHT — extension → inference proxy (epic `hq7`)
+>
+> **Marinara Engine v2.3.4 removed client extensions entirely** (no compat mode; retained extension records and `extension-storage:*` are permanently erased on first 2.3.4 startup). The loader + `marinara-extender.js` bridge described below **no longer works on current Engine** — `references/extension.md` documents a dead surface, kept only until slice 8 replaces it.
+>
+> **The replacement:** the sidecar becomes an OpenAI-compatible **inference proxy** that Marinara points its **Main connection** at. Memory rides the generation path itself — injected directly into the outgoing system message, with the response stream teed for turn ingestion. **The lorebook mechanism is dropped entirely** (which also moots the over-budget/duplicate/stale-cache bugs `e87`/`axu`/`s19`).
+>
+> **Landed so far — slice 1 (`53f`, commit `ca5a037`):** `proxy.ts`, faithful passthrough only. `POST /proxy/v1/chat/completions` (+ `/proxy/chat/completions` alias) and `GET /proxy/v1/models`. Whole-object body forwarding so unknown/future params survive; caller `Authorization` forwarded upstream (the sidecar never stores chat keys); SSE piped via `reply.hijack()`; client disconnect aborts upstream; `content-encoding`/`content-length` stripped. **No memory logic yet** — seams are marked in the file for slices 2–4 (scope resolution → injection → response tee).
+>
+> **Two operational facts that change with the proxy:**
+>
+> 1. The sidecar is now in the **critical path of every generation**. A dead sidecar means *no chat at all*, not degraded memory — which is why `073` (silent sidecar deaths) was promoted to **P0** and `dkn` to P1.
+> 2. Marinara's **Agents / Images / Videos** connections must stay **direct**, not pointed at the proxy. Otherwise tracker agents, chat summaries and Noodle refreshes hit the memory path — injecting memory into a tracker prompt and ingesting a summary call as a "turn" poisons the store (`kxk`).
+
 ## The two components
 
 Marinara Extender is a **sidecar + a thin extension**:
 
-1. **Memory Extender sidecar** — a local **Fastify** HTTP server (`index.ts`) bound to **`127.0.0.1:3001`** (`MARINARA_EXTENDER_PORT`). It owns all logic and stores memory as **plain YAML files on disk**. It exposes a REST API the extension calls, and an OpenAI-compatible **inference proxy** (`/v1/chat/completions`) that routes analysis calls to a local model first, external API as fallback.
+1. **Memory Extender sidecar** — a local **Fastify** HTTP server (`index.ts`) bound to **`127.0.0.1:3001`** (`MARINARA_EXTENDER_PORT`). It owns all logic and stores memory as **plain YAML files on disk**. It exposes a REST API the extension calls, plus **two distinct OpenAI-compatible endpoints that must not be confused**:
+   - **`/v1/chat/completions`** — the **Rewrite Assistant relay** (`nqy`, `handleChatCompletions` in `index.ts`). Deliberately *picks* the model and key for its caller: local model first, external API as fallback. Rebuilds the request body, so it drops unknown parameters and forces `stream: false`. For the sidecar's own analysis-grade model, not for chat.
+   - **`/proxy/v1/chat/completions`** — the **engine-facing proxy** (`proxy.ts`, slice 1 of `hq7`). The opposite contract: changes nothing, carries the caller's own key and model, streams. This is what Marinara's Main connection points at.
 2. **Client extension** — a lightweight **loader** pasted once into Marinara → Settings → Extensions. On every Marinara load it fetches the live extension (`GET /marinara-extender.js`) from the sidecar, so updates need only a Marinara reload. The extension sends each turn to the sidecar and writes the returned memory block into the character's lorebook as **two constant (always-on) system entries**.
 
 ```text
@@ -23,7 +38,7 @@ Marinara Extender is a **sidecar + a thin extension**:
      next generation
 ```
 
-The user's **normal chat generation is never proxied** — it goes straight from Marinara to their provider. The sidecar's local model is only for *analysis* (extraction, classification, rendering).
+**This changes with `hq7`.** Under the *extension* model the user's normal chat generation was never proxied — it went straight from Marinara to their provider, and the sidecar's local model was only for *analysis* (extraction, classification, rendering). Under the *proxy* model chat generation **does** flow through the sidecar (`/proxy/v1/chat/completions`) on its way to the user's provider. The analysis/chat split itself is unchanged: the sidecar still uses its own small local model for analysis and merely *forwards* chat to whatever provider the user configured in Marinara — it never answers a chat turn itself.
 
 ## Security & process
 

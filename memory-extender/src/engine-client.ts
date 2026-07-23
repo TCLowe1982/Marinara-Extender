@@ -106,10 +106,17 @@ export async function engineFetch<T = unknown>(
   const url = `${engineUrl()}/api${path}`;
 
   const headers: Record<string, string> = {
-    "content-type": "application/json",
     // Static value, not a token — see the module header.
     "x-marinara-csrf": "1",
   };
+  // ONLY set content-type when there is actually a body. Fastify rejects a
+  // bodyless request that declares application/json with
+  // "Body cannot be empty when content-type is set to 'application/json'" —
+  // so sending it unconditionally makes every DELETE a 400. GET happens to
+  // tolerate it, which is why stubbed unit tests never caught this; the live
+  // smoke test did, on the first DELETE.
+  if (init.body !== undefined) headers["content-type"] = "application/json";
+
   const auth = engineAuthHeader();
   if (auth) headers.authorization = auth;
 

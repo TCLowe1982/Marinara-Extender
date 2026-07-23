@@ -88,6 +88,25 @@ describe("engineFetch — transport", () => {
     expect(calledInit().body).toBeUndefined();
   });
 
+  it("omits content-type when there is no body", async () => {
+    // REGRESSION (found by the live smoke test, not by these stubs): Fastify
+    // rejects a bodyless request that declares application/json with
+    // "Body cannot be empty when content-type is set to 'application/json'".
+    // Sending it unconditionally made every DELETE a 400, which would have
+    // broken the nuke-and-recreate lorebook cycle in slice lxp.
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    await deleteLorebookEntry("lb1", "e1");
+    expect(calledInit().headers["content-type"]).toBeUndefined();
+    // The CSRF header must still be there — it is not conditional.
+    expect(calledInit().headers["x-marinara-csrf"]).toBe("1");
+  });
+
+  it("sets content-type when a body IS present", async () => {
+    fetchMock.mockResolvedValue(json({ id: "lb1" }));
+    await engineFetch("/lorebooks", { method: "POST", body: { name: "x" } });
+    expect(calledInit().headers["content-type"]).toBe("application/json");
+  });
+
   it("serializes a body on mutations", async () => {
     fetchMock.mockResolvedValue(json({ id: "lb1" }));
     await engineFetch("/lorebooks", { method: "POST", body: { name: "x" } });

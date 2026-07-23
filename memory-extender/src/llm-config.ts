@@ -45,3 +45,18 @@ export function externalUpstream(): string {
 export function externalModel(): string {
   return process.env.MARINARA_EXTENDER_DIGEST_MODEL || DEFAULT_EXTERNAL_MODEL;
 }
+
+// ── Engine-facing inference proxy ─────────────────────────────────────────────
+// Where the proxy (proxy.ts) forwards Marinara's chat generations. Distinct
+// from the analysis-model config above: that is the sidecar's OWN model for
+// memory work, this is the user's real chat provider, and they are usually
+// different (a small uncensored local model vs. whatever they roleplay on).
+export const DEFAULT_PROXY_UPSTREAM = "https://api.openai.com";
+
+// Base URL with no trailing slash and no trailing /v1 — callers append the full
+// /v1/... path. Both "https://host" and "https://host/v1" are accepted because
+// users paste whichever form their provider's docs show.
+export function proxyUpstream(): string {
+  const v = process.env.MARINARA_EXTENDER_PROXY_UPSTREAM || DEFAULT_PROXY_UPSTREAM;
+  return v.replace(/\/+$/, "").replace(/\/v1$/, "");
+}

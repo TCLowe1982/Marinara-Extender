@@ -13,6 +13,7 @@ import { getDataDir } from "./storage.js";
 import { localUrl, localEnabled, localModel, externalUpstream, externalModel } from "./llm-config.js";
 import { getCachedAuth } from "./auth-cache.js";
 import { registerApiRoutes } from "./api.js";
+import { registerProxyRoutes } from "./proxy.js";
 import { registerSetupRoutes } from "./setup.js";
 import { updateStatus } from "./update.js";
 import { embeddingsStatus, describeEmbeddingsStatus } from "./embeddings.js";
@@ -170,6 +171,12 @@ registerSetupRoutes(app, { port: PORT });
 // ── Management API ────────────────────────────────────────────────────────────
 
 registerApiRoutes(app);
+
+// ── Engine-facing inference proxy ─────────────────────────────────────────────
+// Marinara's Main connection points here; see proxy.ts. Distinct from the
+// Rewrite Assistant relay above, which picks the model and key for its caller.
+
+registerProxyRoutes(app);
 
 // ── Crash breadcrumb ────────────────────────────────────────────────────────
 // A blind crash — the node process vanishing with nothing in the log — once

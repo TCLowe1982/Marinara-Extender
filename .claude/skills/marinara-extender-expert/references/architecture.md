@@ -8,7 +8,7 @@
 >
 > **The replacement is TWO paths, and the default is not the proxy.**
 >
-> 1. **Poller (provider-agnostic).** The sidecar talks to the engine's REST API server-to-server from localhost: it detects finished turns, ingests them, and writes the memory block back through the **lorebook API** — exactly what the extension did, minus the browser. **Built and live-verified on the `poller-fallback` branch, not merged.**
+> 1. **Poller (provider-agnostic).** The sidecar talks to the engine's REST API server-to-server from localhost: it detects finished turns, ingests them, and writes the memory block back through the **lorebook API** — exactly what the extension did, minus the browser. **Built and live-verified end-to-end on the `poller-fallback` branch — NOT merged, and running as an explicit TEMP FIX** (2026-07-23) while the maintainer waits to see where Marinara's official direction lands (the dev signalled an extension re-enable *and* a first-party memory agent). Do not merge to master or extend it without a fresh decision; it exists to stop the bleed, not to be the permanent architecture.
 >
 > | Module | Slice | Does |
 > |---|---|---|
@@ -17,7 +17,9 @@
 > | `lorebook-writer.ts` | `lxp` ✅ | Write-back: forced 16384 budget, nuke-and-recreate two constant entries, unlock-before-delete, serialized per character. |
 > | `turn-bridge.ts` | — | Glue: detected turn → `POST /api/process-turn` (the sidecar's own endpoint) → write the returned `memoryBlock` to the lorebook. |
 >
-> **Enable with `MARINARA_EXTENDER_POLLER=1`** (`_POLLER_INTERVAL_MS`, default 5000). **Off by default on purpose** — it nuke-and-recreates real lorebooks, and if the extension is ever re-enabled both paths would write the same entries.
+> **Enable with `MARINARA_EXTENDER_POLLER=1`** (`_POLLER_INTERVAL_MS`, default 5000). **Off by default in code** — it nuke-and-recreates real lorebooks, and if the extension is ever re-enabled both paths would write the same entries.
+>
+> **Live status (2026-07-23):** enabled in the maintainer's `.env` and running against their install (91 chats baselined, 0 errors). Detection latency ≈ one poll interval (5s). Data backed up first to `marinara-extender-backups/pre-poller-<stamp>/`. **Revert path when Marinara's fix lands:** remove the `MARINARA_EXTENDER_POLLER` line from `.env`, kill the sidecar, the `start.ps1` watchdog relaunches it without the poller, and the extension resumes as primary. A one-off outage-gap backfill (`scripts/backfill-gap-tags.ts`) recovered the `[remember:]`/`[bookmark:]` tags emitted while the extension was dark — reusable pattern via `/api/ingest-commands` (remembers dedup; bookmarks do NOT, so gate them on topic-absence).
 >
 > 2. **Inference proxy (opt-in, higher fidelity).** Marinara points a connection at the sidecar and memory rides the generation path itself. Built and tested (`53f`) but **cannot be the only path** — see the hard constraint below. Slices `w8g`/`rid`/`mca`/`pyx`, all P3.
 >

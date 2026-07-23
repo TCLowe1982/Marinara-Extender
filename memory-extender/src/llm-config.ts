@@ -60,3 +60,19 @@ export function proxyUpstream(): string {
   const v = process.env.MARINARA_EXTENDER_PROXY_UPSTREAM || DEFAULT_PROXY_UPSTREAM;
   return v.replace(/\/+$/, "").replace(/\/v1$/, "");
 }
+
+// Anthropic's API is NOT OpenAI-compatible — it speaks the Messages API
+// (POST /v1/messages, x-api-key auth, its own SSE event shape). Rather than
+// translate, the proxy exposes a second Anthropic-shaped route and Marinara
+// points its NATIVE Anthropic connection at it (that provider's baseUrl is
+// user-editable; only the CLI-login providers hide it). Pure passthrough, no
+// wire translation, and the engine keeps owning Anthropic-specific behaviour.
+export const DEFAULT_ANTHROPIC_UPSTREAM = "https://api.anthropic.com";
+
+// Base URL with no trailing slash and no trailing /v1 — callers append the
+// full /v1/... path. Accepts either form, since the value users have on hand
+// is usually Marinara's default "https://api.anthropic.com/v1".
+export function anthropicUpstream(): string {
+  const v = process.env.MARINARA_EXTENDER_ANTHROPIC_UPSTREAM || DEFAULT_ANTHROPIC_UPSTREAM;
+  return v.replace(/\/+$/, "").replace(/\/v1$/, "");
+}

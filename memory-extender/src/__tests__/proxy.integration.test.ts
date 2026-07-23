@@ -13,15 +13,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { registerProxyRoutes } from "../proxy.js";
-import { proxyUpstream } from "../llm-config.js";
+import { proxyUpstream, anthropicUpstream } from "../llm-config.js";
 
 let app: FastifyInstance;
 let fetchMock: ReturnType<typeof vi.fn>;
 
 const UPSTREAM = "https://upstream.test";
+const ANTHROPIC_UPSTREAM = "https://anthropic.test";
 
 beforeEach(async () => {
   process.env.MARINARA_EXTENDER_PROXY_UPSTREAM = UPSTREAM;
+  process.env.MARINARA_EXTENDER_ANTHROPIC_UPSTREAM = ANTHROPIC_UPSTREAM;
   fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
   app = Fastify();
@@ -33,6 +35,7 @@ afterEach(async () => {
   await app.close();
   vi.unstubAllGlobals();
   delete process.env.MARINARA_EXTENDER_PROXY_UPSTREAM;
+  delete process.env.MARINARA_EXTENDER_ANTHROPIC_UPSTREAM;
 });
 
 const MESSAGES = [
@@ -277,6 +280,130 @@ describe("inference proxy — streaming", () => {
       payload: { messages: MESSAGES, stream: true },
     });
     expect(outboundBody().stream).toBe(true);
+  });
+});
+
+describe("Anthropic Messages route", () => {
+  const ANTHROPIC_BODY = {
+    model: "claude-opus-4-8",
+    max_tokens: 4096,
+    system: "You are Rin.",
+    messages: [{ role: "user", content: "hello" }],
+  };
+
+  it("rejects a request with no messages[]", async () => {
+    const r = await app.inject({ method: "POST", url: "/anthropic/v1/messages", payload: {} });
+    expect(r.statusCode).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("targets the Anthropic upstream, not the OpenAI-compatible one", async () => {
+    fetchMock.mockResolvedValue(new Response("{}", { status: 200 }));
+    await app.inject({ method: "POST", url: "/anthropic/v1/messages", payload: ANTHROPIC_BODY });
+    expect(fetchMock.mock.calls[0][0]).toBe(`${ANTHROPIC_UPSTREAM}/v1/messages`);
+  });
+
+  it("forwards x-api-key and anthropic-version rather than rewriting to Authorization", async () => {
+    // The engine sets apiKeyHeader "x-api-key" with usesAuthHeader false for the
+    // native Anthropic provider — dropping these is an instant 401.
+    fetchMock.mockResolvedValue(new Response("{}", { status: 200 }));
+    await app.inject({
+      method: "POST",
+      url: "/anthropic/v1/messages",
+      payload: ANTHROPIC_BODY,
+      headers: { "x-api-key": "sk-ant-user-key", "anthropic-version": "2023-06-01" },
+    });
+    const headers = outboundHeaders();
+    expect(headers["x-api-key"]).toBe("sk-ant-user-key");
+    expect(headers["anthropic-version"]).toBe("2023-06-01");
+    expect(headers.authorization).toBeUndefined();
+  });
+
+  it("preserves Anthropic-shaped fields the OpenAI schema has no concept of", async () => {
+    fetchMock.mockResolvedValue(new Response("{}", { status: 200 }));
+    await app.inject({
+      method: "POST",
+      url: "/anthropic/v1/messages",
+      payload: {
+        ...ANTHROPIC_BODY,
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "high" },
+        stop_sequences: ["\n\nUser:"],
+      },
+    });
+    const sent = outboundBody();
+    // `system` is a TOP-LEVEL Anthropic parameter, not a message — slice 3
+    // injects into this field, so passthrough must not disturb it.
+    expect(sent.system).toBe("You are Rin.");
+    expect(sent.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(sent.output_config).toEqual({ effort: "high" });
+    expect(sent.stop_sequences).toEqual(["\n\nUser:"]);
+  });
+
+  it("serves the alias path for a base URL configured without /v1", async () => {
+    fetchMock.mockResolvedValue(new Response("{}", { status: 200 }));
+    const r = await app.inject({
+      method: "POST",
+      url: "/anthropic/messages",
+      payload: ANTHROPIC_BODY,
+    });
+    expect(r.statusCode).toBe(200);
+  });
+
+  it("pipes Anthropic SSE events through byte-for-byte", async () => {
+    // Anthropic's event shape differs from OpenAI's entirely — passthrough must
+    // not assume either.
+    const frames = [
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1"}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"He"}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ];
+    fetchMock.mockResolvedValue(
+      new Response(sseStream(frames), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }),
+    );
+    const r = await app.inject({
+      method: "POST",
+      url: "/anthropic/v1/messages",
+      payload: { ...ANTHROPIC_BODY, stream: true },
+    });
+    expect(r.statusCode).toBe(200);
+    expect(r.body).toBe(frames.join(""));
+  });
+
+  it("passes an upstream 400 through verbatim so the real cause is visible", async () => {
+    // Real case: sampling parameters are rejected on Opus 4.7/4.8. If the proxy
+    // reshaped this, an upstream model constraint would look like a sidecar bug.
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          type: "error",
+          error: { type: "invalid_request_error", message: "temperature: Extra inputs are not permitted" },
+        }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const r = await app.inject({
+      method: "POST",
+      url: "/anthropic/v1/messages",
+      payload: { ...ANTHROPIC_BODY, temperature: 0.9 },
+    });
+    expect(r.statusCode).toBe(400);
+    expect(JSON.parse(r.body).error.message).toMatch(/temperature/);
+  });
+});
+
+describe("anthropicUpstream() normalization", () => {
+  it("strips a pasted /v1 suffix (Marinara's default is https://api.anthropic.com/v1)", () => {
+    process.env.MARINARA_EXTENDER_ANTHROPIC_UPSTREAM = "https://api.anthropic.com/v1";
+    expect(anthropicUpstream()).toBe("https://api.anthropic.com");
+  });
+
+  it("defaults to the Anthropic API when unset", () => {
+    delete process.env.MARINARA_EXTENDER_ANTHROPIC_UPSTREAM;
+    expect(anthropicUpstream()).toBe("https://api.anthropic.com");
   });
 });
 

@@ -2,30 +2,34 @@
 
 *Grounded in `memory-extender/src/storage.ts`. Field names, tier thresholds, and the on-disk layout are taken from the code — open `storage.ts` when a detail must be exact.*
 
-## The four core types (`storage.ts:12–95`)
+## The five core types (`storage.ts:12–110`)
 
 ```ts
-type Scope       = "global" | "character" | "chat";
-type Lane        = "open_threads" | "user_topics" | "character_topics";
-type EntryStatus = "open" | "in_progress" | "done" | "deferred";
-type MemoryTier  = "short" | "long" | "core" | "secondary_core";
+type Scope           = "global" | "character" | "chat";
+type Lane            = "open_threads" | "user_topics" | "character_topics";
+type EntryStatus     = "open" | "in_progress" | "done" | "deferred";
+type MemoryTier      = "short" | "long" | "core" | "secondary_core";
+type EntryProvenance = "played" | "unplayed";
 ```
 
 - **Scope** — *global* (rules everywhere) · *character* (per stable identity, persists across all that character's chats) · *chat* (this conversation only).
 - **Lane** — *open_threads* (tasks/promises/follow-ups, status-tracked) · *user_topics* (facts about the human player) · *character_topics* (lore, emotional moments, callbacks).
 - **EntryStatus** — *done* is filtered out of the Current working set by default; *deferred* is parked but tracked.
 - **MemoryTier** — the durability ladder (below).
+- **EntryProvenance** — *played* (default when absent) vs *unplayed*. **`unplayed` is OUTLINE**: canon the author established out of character for an arc that has not been played. Stored at full fidelity so it can be built on, and excluded from **every** recall path — `selectEntries` and `coldRecall` both filter it, so archival can't launder it back into hot via rehydrate. The reason is hard: a character able to "remember" an unplayed scene is the confabulation machine the Erica Test exists to detect. Deliberately **not** a widened `EntryStatus` — same reasoning as `supersededBy` (widening a serialized enum breaks consumers silently).
 
 ## The index/entry split
 
 Each record exists in two forms, deliberately:
 
-- **`IndexEntry`** (`storage.ts:30`) — lightweight metadata row kept in the per-scope `index.yaml`. The loader scans **only these** every turn, so the hot path stays bounded. Holds: `id`, `path`, `summary` (≤120 chars), `tokens`, `lane`, `status`, `lastAccessed`, the tier fields, `sourceChatId`, `threadId`, `turnStart`, and the supersede/delete markers.
-- **`Entry`** (`storage.ts:62`) — the full record (adds `content`, `created`, `timeContext`), stored in its own file and loaded **on demand** only when the entry is selected for injection.
+- **`IndexEntry`** (`storage.ts:42`) — lightweight metadata row kept in the per-scope `index.yaml`. The loader scans **only these** every turn, so the hot path stays bounded. Holds: `id`, `path`, `summary` (≤120 chars), `tokens`, `lane`, `status`, `lastAccessed`, the tier fields, `sourceChatId`, `threadId`, `turnStart`, `provenance`, and the supersede/delete markers.
+- **`Entry`** (`storage.ts:75`) — the full record (adds `content`, `created`, `timeContext`), stored in its own file and loaded **on demand** only when the entry is selected for injection.
 
-Tier fields are **mirrored** onto both so the loader never has to open entry files to rank.
+Tier fields **and `provenance`** are **mirrored** onto both so the loader never has to open entry files to rank or to filter.
 
-- **`Bookmark`** (`storage.ts:86`) — a decaying soft signal: `topic`, `summary`, `weight` (0.0–1.0), `why` (unresolved|important|emotional|promised|curious|follow-up), `createdTurn`, `lastSeenTurn`, `decayRate` (default **0.97**). Weight ×= decayRate each turn; surfaced into the block by a weighted random roll.
+> **The index has no `content`.** This is the single most consequential shape fact. Retrieval can only score what is on the index row, which is why a subject named solely in an entry's body is unreachable by topic (`MarinaraExtender-tp5`). Measured on the live stores: of 80 entries whose bodies named one person, only 21 named her in a summary — 74% retrieval-invisible. Any "just also search the content" fix means either opening ~6800 files per turn or tripling a 2.4 MB index that is re-read every turn and rewritten on every upsert. Neither is viable; the fix is an entity field populated at ingest.
+
+- **`Bookmark`** (`storage.ts:100`) — a decaying soft signal: `topic`, `summary`, `weight` (0.0–1.0), `why` (unresolved|important|emotional|promised|curious|follow-up), `createdTurn`, `lastSeenTurn`, `decayRate` (default **0.97**). Weight ×= decayRate each turn; surfaced into the block by a weighted random roll.
 
 ## The tier lifecycle (`storage.ts:17–28`)
 
@@ -47,7 +51,7 @@ Promotion runs every 20 turns (see `promotion.ts` / the pipeline reference). `co
 A central design choice: **demotion is a tier move, not a delete.** Entry *files* are essentially never moved or removed on the automatic path — only the index **row** moves between hot and cold.
 
 - **Cold archive** (`index.cold.yaml`, `storage.ts:318`) — a second per-scope index for stale non-core rows. The loader does **not** read it each turn — only on a recall miss — so the per-turn scan stays bounded. `moveToCold` adds to cold *first* then removes from hot (a crash can't lose the row). `promoteFromCold` rehydrates one row on recall.
-- **Supersession (FR2)** (`supersedeEntry`, `storage.ts:359`) — a newer fact replaces an older one: the old row gets `supersededBy`/`supersededAt` (mirrored onto the entry file so the fact carries its own history) and is moved to cold. Still queryable ("you said Mei before — did you mean Lin?"), out of Current. `restoreSupersededEntry` reverses it.
+- **Supersession (FR2)** (`supersedeEntry`, `storage.ts:373`) — a newer fact replaces an older one: the old row gets `supersededBy`/`supersededAt` (mirrored onto the entry file so the fact carries its own history) and is moved to cold. Still queryable ("you said Mei before — did you mean Lin?"), out of Current. `restoreSupersededEntry` reverses it.
 - **User delete** (`softDeleteEntry`, `storage.ts:447`) — also a tier move to cold, marked `deletedAt` (and, unlike supersede, **no** `supersededBy`). Shows in the "Recently deleted" view; cold recall skips `deletedAt` rows. `restoreDeletedEntry` brings it back; `purgeColdEntry` is the separate, dig-for-it permanent removal.
 
 > Note: `supersededBy` is a **separate field, not an `EntryStatus` value** — there's a code comment warning that widening a serialized enum breaks empirical consumers silently. Respect that when adding states.
@@ -73,7 +77,7 @@ Cross-cutting standalone files (under `data/`, via `mutateYamlFile`): `threads/r
 ## Write discipline (don't bypass it)
 
 - **All writes are atomic + durable** — `atomicWriteFile` (`storage.ts:184`): write a temp file → `fsync` the writable handle → `rename` over the target (atomic; replaces on Windows). The `fsync` is what survives a hard crash; it must be on the *writable* handle (an `fsync` on a read handle fails EPERM on Windows — the bug that lost engine tables on 2026-06-10). Windows `rename` retries transient `EPERM`/`EBUSY`/`EACCES` with backoff.
-- **Per-path write serialization** — `serializedWrite` (`storage.ts:240`) chains writes to the same file so concurrent read-modify-write (e.g. two `upsertIndexEntry`) can't corrupt the index. Use `upsertIndexEntry` / `mutateIndex` / `mutateBookmarks` / `mutateYamlFile`, never a raw write.
+- **Per-path write serialization** — `serializedWrite` (`storage.ts:254`) chains writes to the same file so concurrent read-modify-write (e.g. two `upsertIndexEntry`) can't corrupt the index. Use `upsertIndexEntry` / `mutateIndex` / `mutateBookmarks` / `mutateYamlFile`, never a raw write.
 - **Guard against blind overwrite** — `upsertIndexEntry` refuses to overwrite an *unreadable* index (would orphan every other row); it throws and points at `scripts/repair-indexes.mjs`.
 - **Input safety** — `assertSafeId` (`storage.ts:113`) rejects ids containing path separators / `..` / null bytes before they're interpolated into a filesystem path. `stripLoneSurrogates` removes torn UTF-16 halves from truncated text so a split emoji can't make the whole LLM request body fail to encode.
 - **Tokens** — `estimateTokens` is `ceil(len/4)` (`storage.ts:661`); a rough chars÷4 estimate, used for budget accounting.

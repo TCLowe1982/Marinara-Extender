@@ -31,13 +31,29 @@ Read the relevant reference before giving detailed advice in that area. They con
 | User is asking about… | Read this first |
 |---|---|
 | How the pieces fit, the sidecar + extension split, the turn lifecycle end-to-end, the REST surface | `references/architecture.md` |
-| Entry / IndexEntry / Bookmark shapes, the `short/long/core/secondary_core` tiers, the `open_threads/user_topics/character_topics` lanes, scopes, the on-disk YAML layout | `references/data-model.md` |
+| **Why a memory didn't surface** — how relevance is scored, the name weighting, the credit threshold, the known retrieval bugs | `references/architecture.md` (step 4 + sharp edges) |
+| Entry / IndexEntry / Bookmark shapes, the `short/long/core/secondary_core` tiers, the `open_threads/user_topics/character_topics` lanes, scopes, played-vs-unplayed provenance, the on-disk YAML layout | `references/data-model.md` |
 | The ingestion pipeline — Tier-1 snapshot, Tier-2 sentiment/beats, Tier-3 ambient facts, the fire-and-forget async tiers, promotion/cold-archival cadence | `references/pipeline.md` |
 | Internals — identity/aliases, arcs/threads, the dedup matrix, FR3 reconcile/apply-gate, the holding pool, supersession | `references/internals.md` |
 | Env vars, token budgets, choosing a local model, ports, the `/setup` page, troubleshooting an install | `references/config-and-ops.md` |
 | The client side — the loader, the two constant lorebook entries, `[remember:]`/`[bookmark:]` stripping, recitation detection | `references/extension.md` |
 
 Don't answer from memory on specifics (field names, thresholds, tier scores, env-var names) — check the reference or the code.
+
+## Triage: "the character didn't remember X"
+
+The most common report, and it has **three distinct causes**. Establish which before proposing anything — they have opposite fixes, and guessing wrong destroys data.
+
+1. **Capture gap** — it was never written. Check the store first: `grep` the scope dirs for the subject.
+2. **Retrieval invisibility** — it *is* stored but can't surface. The two live causes are `summary`-only scoring (`tp5`) and, before the 2026-07-29 fix, length-normalised relevance (`vrw`). Distinguish from a gap by grepping **bodies** as well as summaries.
+3. **Content corruption at digest** — it surfaced fine and was *wrong*. Sub-species: **chimera fusion** (true fragments, invented joins), referent bleed across the user/character membrane, witness→participant promotion in first-person lane summaries.
+
+**Never conclude "it was never captured" from a blank retrieval.** That exact inference was made, recorded as canon, and was false — the subject had 80 entries across two stores. A blank proves nothing until you have grepped the bodies. Two hard-won corollaries:
+
+- **Word boundaries when grepping names.** Case-insensitive `erica` matches `Am**erica**n` and `sph**erica**l`. Use `\b(Name)\b`.
+- **Grep excludes.** `*embeddings*.yaml` and `arcs.yaml` hold float arrays whose digits swamp any numeric or short search (`2013` matched hundreds of vector components).
+
+An implausibility noticed in-character is a bug report, not flavour. If a character mocks a detail as absurd, check it.
 
 ## Defer to the engine-expert skill
 

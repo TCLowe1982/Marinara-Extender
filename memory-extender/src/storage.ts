@@ -14,6 +14,18 @@ export type Lane = "open_threads" | "user_topics" | "character_topics";
 export type EntryStatus = "open" | "in_progress" | "done" | "deferred";
 export type MemoryTier = "short" | "long" | "core" | "secondary_core";
 
+// Provenance stratum. Absent (or "played") means the memory came from a scene
+// that actually happened in the chat — the only kind a character may recall.
+//
+// "unplayed" marks OUTLINE: canon the author has established out of character,
+// for an arc that has not been played yet. It is stored at full fidelity so the
+// author can build on it, and it is excluded from every recall path, because a
+// character that can "remember" an unplayed scene is a confabulation machine —
+// precisely what the Erica Test exists to detect. Deliberately NOT an
+// EntryStatus value: widening a serialized enum breaks consumers silently (see
+// the EntryStatus audit note on supersededBy).
+export type EntryProvenance = "played" | "unplayed";
+
 // Tier thresholds — score = retrievalCount + (recitationCount × 3)
 export const TIER_SCORE_LONG = 5;
 export const TIER_SCORE_CORE = 25;
@@ -50,6 +62,7 @@ export interface IndexEntry {
   supersededBy?: string;    // id of the replacing entry
   supersededAt?: string;    // ISO datetime
   deletedAt?: string;       // ISO datetime — USER-deleted (in cold, recoverable); distinct from supersededBy
+  provenance?: EntryProvenance; // "unplayed" = outline; never recalled (see EntryProvenance)
 }
 
 export interface ScopeIndex {
@@ -79,6 +92,7 @@ export interface Entry {
   turnStart?: number;       // where in the source chat the moment happened (same-moment dedup)
   supersededBy?: string;    // FR2: id of the replacing entry (see IndexEntry note)
   supersededAt?: string;
+  provenance?: EntryProvenance; // "unplayed" = outline; never recalled (see EntryProvenance)
   // Soft clock context at time of encoding
   timeContext?: { timeOfDay: string; dayOfWeek: string; inferredFrom?: string };
 }

@@ -28,6 +28,7 @@ import {
   type Scope,
   type Lane,
   type EntryStatus,
+  type EntryProvenance,
   type Entry,
   type Bookmark,
 } from "./storage.js";
@@ -122,6 +123,7 @@ function capContent(s: string, maxChars = 600): string {
 const VALID_SCOPES: Scope[] = ["global", "character", "chat"];
 const VALID_LANES: Lane[] = ["open_threads", "user_topics", "character_topics"];
 const VALID_STATUSES: EntryStatus[] = ["open", "in_progress", "done", "deferred"];
+const VALID_PROVENANCE: EntryProvenance[] = ["played", "unplayed"];
 
 // A user message past this many characters is treated as a long-form story and
 // routed through windowed granular ingestion (dq9) instead of the live path's
@@ -224,9 +226,10 @@ export function registerApiRoutes(app: FastifyInstance): void {
       content: string;
       status?: EntryStatus;
       id?: string;
+      provenance?: EntryProvenance;
     };
   }>("/api/entries", async (req, reply) => {
-    const { scope, scopeId, lane, summary, content, status = "open", id: reqId } = req.body;
+    const { scope, scopeId, lane, summary, content, status = "open", id: reqId, provenance } = req.body;
 
     if (!VALID_SCOPES.includes(scope) || !scopeId) {
       return reply.code(400).send({ error: "scope and scopeId are required" });
@@ -237,6 +240,9 @@ export function registerApiRoutes(app: FastifyInstance): void {
     if (!summary?.trim()) return reply.code(400).send({ error: "summary is required" });
     if (!VALID_STATUSES.includes(status)) {
       return reply.code(400).send({ error: `status must be one of: ${VALID_STATUSES.join(", ")}` });
+    }
+    if (provenance !== undefined && !VALID_PROVENANCE.includes(provenance)) {
+      return reply.code(400).send({ error: `provenance must be one of: ${VALID_PROVENANCE.join(", ")}` });
     }
 
     const id = reqId ?? `${idPrefix(lane)}-${nanoid(8)}`;
@@ -251,6 +257,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
       lastAccessed: now,
       content: (content ?? "").trim(),
       tokens: estimateTokens(`${summary} ${content ?? ""}`),
+      ...(provenance && { provenance }),
     };
 
     const relativePath = await writeEntry(scope, scopeId, entry);
@@ -263,6 +270,8 @@ export function registerApiRoutes(app: FastifyInstance): void {
       lane,
       status,
       lastAccessed: now,
+      // Mirrored onto the index row: the loader filters on the row, never the file.
+      ...(provenance && { provenance }),
     });
 
     return reply.code(201).send({ entry, path: relativePath });

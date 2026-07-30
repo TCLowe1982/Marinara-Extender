@@ -40,6 +40,8 @@ import { processResponse, extractRememberTags } from "./writer.js";
 import { loadContext } from "./loader.js";
 import { runPromotion, runPromotionAll, recordRecitation } from "./promotion.js";
 import { runCleanup } from "./cleanup.js";
+import { handleTurnNotification } from "./poller.js";
+import { handleDetectedTurn } from "./turn-bridge.js";
 import { listRetired, rollback } from "./rollback.js";
 import { updateSoftClock, makeTimeContext, timesenseEnabled } from "./soft-clock.js";
 import { runSentimentPipeline, collectPassingClassifications, speakerMatches } from "./sentiment/pipeline.js";
@@ -810,6 +812,33 @@ export function registerApiRoutes(app: FastifyInstance): void {
     }
 
     return reply.send({ memoryBlock: contextBlock, created, bookmarksExtracted, surfaced });
+  });
+
+  // ── POST /api/engine/turn-complete ───────────────────────────────────────
+  // Receives the Marinara Engine's turn-complete notification (its
+  // TURN_NOTIFY_URL points here). Identifiers only — we read the content back
+  // through the engine API, so a swipe cannot leave us holding stale text.
+  //
+  // Always registered, because it is inert unless the operator configured the
+  // engine to call it AND enabled ingestion here. Answers immediately and
+  // ingests in the background: the engine sends this on the generation path
+  // with a 2s timeout, so holding the connection open for a full analysis pass
+  // would make our latency the engine's problem.
+
+  app.post<{
+    Body: { chatId?: string; assistantMessageId?: string };
+  }>("/api/engine/turn-complete", async (req, reply) => {
+    const { chatId, assistantMessageId } = req.body ?? {};
+    if (!chatId || !assistantMessageId) {
+      return reply.code(400).send({ error: "chatId and assistantMessageId are required" });
+    }
+    if (process.env.MARINARA_EXTENDER_TURN_HOOK !== "1") {
+      return reply.send({ accepted: false, reason: "turn hook disabled" });
+    }
+    void handleTurnNotification({ chatId, assistantMessageId }, {
+      onTurn: (turn) => void handleDetectedTurn(turn),
+    });
+    return reply.send({ accepted: true });
   });
 
   // ── POST /api/cleanup ────────────────────────────────────────────────────

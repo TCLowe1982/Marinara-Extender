@@ -268,4 +268,20 @@ app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
   } else {
     console.log(`Engine poller: off (set MARINARA_EXTENDER_POLLER=1 to enable)`);
   }
+
+  // ── Engine turn hook (opt-in) ───────────────────────────────────────────────
+  // The push counterpart to the poller. Needs the engine side configured too:
+  // TURN_NOTIFY_URL=http://127.0.0.1:<port>/api/engine/turn-complete
+  //
+  // Safe to run alongside the poller — both advance the same watermark under the
+  // same per-chat lock, so whichever notices a turn first, the other skips it.
+  // It is also the ONLY path that sees a regeneration: a swipe rewrites the
+  // message in place without moving the chat's lastMessageAt, so polling cannot
+  // detect one at all.
+  if (process.env.MARINARA_EXTENDER_TURN_HOOK === "1") {
+    console.log(`Engine turn hook: ON — POST /api/engine/turn-complete`);
+    console.log(`                  (set the engine's TURN_NOTIFY_URL to http://127.0.0.1:${PORT}/api/engine/turn-complete)`);
+  } else {
+    console.log(`Engine turn hook: off (set MARINARA_EXTENDER_TURN_HOOK=1 to enable)`);
+  }
 });

@@ -24,7 +24,10 @@ import {
   recordWatermark,
   loadPollerState,
   pollOnce,
+  handleTurnNotification,
+  _resetChatLocks,
   type PollerState,
+  type DetectedTurn,
 } from "../poller.js";
 
 // Shapes mirror the live engine payloads verified 2026-07-23.
@@ -335,5 +338,164 @@ describe("pollOnce — integration over stubbed engine", () => {
     await pollOnce({ tailSize: 7 });
     const call = fetchMock.mock.calls.find(([u]) => /messages/.test(u as string))![0] as string;
     expect(call).toContain("limit=7");
+  });
+});
+
+// ── Notification-driven detection (MarinaraExtender-4kbt) ────────────────────
+// The bug this path exists to fix: a regeneration rewrites the assistant
+// message IN PLACE. Measured against a live engine 2026-07-30 — neither the
+// message's createdAt nor the chat's lastMessageAt moves, so selectChangedChats
+// never reports the chat and the poller's own swipe branch is unreachable.
+
+describe("handleTurnNotification — push detection over stubbed engine", () => {
+  let dir: string;
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "me-hook-"));
+    process.env.MARINARA_EXTENDER_DATA = dir;
+    process.env.MARINARA_EXTENDER_ENGINE_URL = "http://engine.test:7860";
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    _resetChatLocks();
+  });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    delete process.env.MARINARA_EXTENDER_DATA;
+    delete process.env.MARINARA_EXTENDER_ENGINE_URL;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const json = (b: unknown) =>
+    new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+
+  function engine(chats: unknown[], messagesByChat: Record<string, unknown[]>) {
+    fetchMock.mockImplementation((url: string) => {
+      if (/\/chats$/.test(url)) return Promise.resolve(json(chats));
+      const m = /\/chats\/([^/?]+)\/messages/.exec(url);
+      if (m) return Promise.resolve(json(messagesByChat[m[1]] ?? []));
+      return Promise.resolve(json([]));
+    });
+  }
+
+  it("detects a swipe that polling structurally cannot see", async () => {
+    // The chat's lastMessageAt is IDENTICAL before and after the re-roll.
+    const at = "2026-07-23T10:00:00Z";
+    await recordWatermark("c1", { lastMessageAt: at, lastMessageId: "m1", lastSwipeIndex: 0 });
+    engine([chat("c1", at)], {
+      c1: [msg("m1", at, "assistant", { activeSwipeIndex: 1, swipeCount: 2, content: "re-rolled" })],
+    });
+
+    // Polling sees nothing at all — lastMessageAt never moved.
+    expect(await pollOnce()).toHaveLength(0);
+
+    const seen: DetectedTurn[] = [];
+    const turns = await handleTurnNotification(
+      { chatId: "c1", assistantMessageId: "m1" },
+      { onTurn: (t) => void seen.push(t) },
+    );
+
+    expect(turns).toHaveLength(1);
+    expect(turns[0].regenerated).toBe(true);
+    expect(turns[0].message.content).toBe("re-rolled");
+    expect(seen).toHaveLength(1);
+  });
+
+  it("ingests a genuinely new turn once, not marked as a re-roll", async () => {
+    await recordWatermark("c1", {
+      lastMessageAt: "2026-07-23T10:00:00Z",
+      lastMessageId: "m1",
+      lastSwipeIndex: 0,
+    });
+    engine([chat("c1", "2026-07-23T11:00:00Z")], {
+      c1: [
+        msg("m1", "2026-07-23T10:00:00Z", "assistant", { activeSwipeIndex: 0 }),
+        msg("u2", "2026-07-23T10:59:00Z", "user"),
+        msg("m2", "2026-07-23T11:00:00Z", "assistant", { activeSwipeIndex: 0 }),
+      ],
+    });
+
+    const turns = await handleTurnNotification({ chatId: "c1", assistantMessageId: "m2" });
+    expect(turns).toHaveLength(1);
+    expect(turns[0].regenerated).toBe(false);
+    // Both halves of the turn reach ingestion, not just the reply.
+    expect(turns[0].precedingUserText).toBe("text-u2");
+  });
+
+  it("is a no-op on a repeated notification for the same message and swipe", async () => {
+    // The engine is fire-and-forget; a retry or a duplicate must not double-ingest.
+    engine([chat("c1", "2026-07-23T11:00:00Z")], {
+      c1: [msg("m2", "2026-07-23T11:00:00Z", "assistant", { activeSwipeIndex: 0 })],
+    });
+    expect(await handleTurnNotification({ chatId: "c1", assistantMessageId: "m2" })).toHaveLength(1);
+    expect(await handleTurnNotification({ chatId: "c1", assistantMessageId: "m2" })).toHaveLength(0);
+  });
+
+  it("skips a turn the poller already ingested", async () => {
+    // Both detectors run against one engine; whichever wins, the other stands down.
+    await recordWatermark("c1", { lastMessageAt: "2026-07-23T10:00:00Z" });
+    engine([chat("c1", "2026-07-23T11:00:00Z")], {
+      c1: [msg("m2", "2026-07-23T11:00:00Z", "assistant", { activeSwipeIndex: 0 })],
+    });
+
+    expect(await pollOnce()).toHaveLength(1);
+    expect(await handleTurnNotification({ chatId: "c1", assistantMessageId: "m2" })).toHaveLength(0);
+  });
+
+  it("declines a message older than the tail rather than blaming the wrong turn", async () => {
+    // Misattributing a swipe to the newest message would corrupt a good memory.
+    await recordWatermark("c1", { lastMessageAt: "2026-07-23T11:00:00Z", lastMessageId: "m2" });
+    engine([chat("c1", "2026-07-23T11:00:00Z")], {
+      c1: [msg("m2", "2026-07-23T11:00:00Z", "assistant", { activeSwipeIndex: 0 })],
+    });
+
+    const turns = await handleTurnNotification({ chatId: "c1", assistantMessageId: "ancient" });
+    expect(turns).toHaveLength(0);
+  });
+
+  it("ingests the first turn of an unseen chat instead of baselining it", async () => {
+    // Deliberately unlike the poller. A poll sweep sees every chat's whole
+    // history at once and must baseline; a notification is evidence that THIS
+    // turn finished just now, so dropping it would silently lose a real turn.
+    engine([chat("c1", "2026-07-23T11:00:00Z")], {
+      c1: [msg("m1", "2026-07-23T11:00:00Z", "assistant", { activeSwipeIndex: 0 })],
+    });
+
+    const turns = await handleTurnNotification({ chatId: "c1", assistantMessageId: "m1" });
+    expect(turns).toHaveLength(1);
+    expect(turns[0].regenerated).toBe(false);
+  });
+
+  it("ignores a notification naming a user message", async () => {
+    engine([chat("c1", "2026-07-23T11:00:00Z")], {
+      c1: [msg("u1", "2026-07-23T11:00:00Z", "user")],
+    });
+    expect(await handleTurnNotification({ chatId: "c1", assistantMessageId: "u1" })).toHaveLength(0);
+  });
+
+  it("survives an unreachable engine without throwing at the HTTP caller", async () => {
+    fetchMock.mockImplementation(() => Promise.reject(new Error("engine down")));
+    await expect(
+      handleTurnNotification({ chatId: "c1", assistantMessageId: "m1" }),
+    ).resolves.toEqual([]);
+  });
+
+  it("serialises concurrent notifications for one chat", async () => {
+    // Without the per-chat lock both passes read the same watermark and both
+    // conclude the turn is new.
+    engine([chat("c1", "2026-07-23T11:00:00Z")], {
+      c1: [msg("m2", "2026-07-23T11:00:00Z", "assistant", { activeSwipeIndex: 0 })],
+    });
+
+    const [a, b] = await Promise.all([
+      handleTurnNotification({ chatId: "c1", assistantMessageId: "m2" }),
+      handleTurnNotification({ chatId: "c1", assistantMessageId: "m2" }),
+    ]);
+    expect(a.length + b.length).toBe(1);
   });
 });

@@ -219,6 +219,17 @@ export function extractNewTurns(
   return { fresh, regenerated };
 }
 
+/**
+ * Swipe index of a message, or undefined when it carries none.
+ *
+ * Shared by the watermark writer and the regeneration checks so the two can
+ * never disagree about what "no swipe index" looks like — a mismatch there
+ * would make every unchanged message look re-rolled.
+ */
+export function swipeIndexOf(message: Record<string, unknown>): number | undefined {
+  return message.activeSwipeIndex === undefined ? undefined : Number(message.activeSwipeIndex);
+}
+
 /** Watermark describing the newest message in a tail. */
 export function watermarkFrom(messages: Record<string, unknown>[]): ChatWatermark | null {
   if (messages.length === 0) return null;
@@ -228,13 +239,73 @@ export function watermarkFrom(messages: Record<string, unknown>[]): ChatWatermar
   return {
     lastMessageAt: at,
     lastMessageId: str(last, "id") ?? undefined,
-    lastSwipeIndex: last.activeSwipeIndex === undefined ? undefined : Number(last.activeSwipeIndex),
+    lastSwipeIndex: swipeIndexOf(last),
   };
 }
 
 /** Only assistant turns drive ingestion; a user message alone is not a finished turn. */
 export function isAssistantTurn(message: Record<string, unknown>): boolean {
   return str(message, "role") === "assistant";
+}
+
+// ── Per-chat serialization ────────────────────────────────────────────────────
+// Two detectors now feed the same watermark: the poll tick and the engine's
+// turn-complete notification. Unserialized they can read the same watermark,
+// both conclude the turn is new, and ingest it twice. Locking per chat rather
+// than globally keeps unrelated chats concurrent.
+
+const chatLocks = new Map<string, Promise<unknown>>();
+
+function withChatLock<T>(chatId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = chatLocks.get(chatId) ?? Promise.resolve();
+  // Run `fn` whether or not the previous holder settled cleanly — one failed
+  // pass must not wedge the chat forever.
+  const result = prev.then(fn, fn);
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  chatLocks.set(chatId, settled);
+  void settled.then(() => {
+    // Only the last waiter clears the entry, so the map cannot grow unbounded
+    // while still keeping a queued pass's predecessor alive.
+    if (chatLocks.get(chatId) === settled) chatLocks.delete(chatId);
+  });
+  return result;
+}
+
+/** Test seam — drops any queued passes so state cannot leak between cases. */
+export function _resetChatLocks(): void {
+  chatLocks.clear();
+}
+
+/** Assemble DetectedTurns for the assistant messages among `candidates`. */
+function buildTurns(
+  chat: Record<string, unknown>,
+  chatId: string,
+  tail: Record<string, unknown>[],
+  candidates: Record<string, unknown>[],
+  regenerated: boolean,
+): DetectedTurn[] {
+  const out: DetectedTurn[] = [];
+  for (const message of candidates) {
+    if (!isAssistantTurn(message)) continue;
+    // Locate the reply within the full tail so we can find the user line that
+    // prompted it — ingestion needs both halves of the turn.
+    const idx = tail.findIndex((m) => str(m, "id") === str(message, "id"));
+    out.push({
+      chatId,
+      chatName: str(chat, "name") ?? chatId,
+      // Prefer the message's own characterId — in a group scene it names the
+      // actual speaker, where the chat only lists participants.
+      characterId: str(message, "characterId") ?? getChatCharacterId(chat),
+      message,
+      regenerated,
+      precedingUserText: idx >= 0 ? precedingUserTextFor(tail, idx) : "",
+      participantIds: getChatParticipantIds(chat),
+    });
+  }
+  return out;
 }
 
 // ── Polling loop ──────────────────────────────────────────────────────────────
@@ -244,6 +315,49 @@ export interface PollOptions {
   tailSize?: number;
   /** Called once per detected assistant turn. Errors are logged, never fatal. */
   onTurn?: (turn: DetectedTurn) => Promise<void> | void;
+}
+
+/**
+ * One chat's pass over its message tail. Runs under that chat's lock.
+ *
+ * The watermark is re-read here rather than taken from the caller's snapshot:
+ * the other detector may have advanced this chat while we waited for the lock,
+ * and acting on a stale mark is exactly how a turn gets ingested twice.
+ */
+async function runChatPass(
+  chat: Record<string, unknown>,
+  chatId: string,
+  tailSize: number,
+): Promise<DetectedTurn[]> {
+  let tail: Record<string, unknown>[];
+  try {
+    tail = await listMessages(chatId, { limit: tailSize });
+  } catch (e) {
+    console.warn(`[ME:poller] could not read messages for ${chatId} — ${String(e)}`);
+    return [];
+  }
+
+  const mark = (await loadPollerState())?.chats?.[chatId];
+  const { fresh, regenerated } = extractNewTurns(tail, mark);
+  const turns = buildTurns(chat, chatId, tail, regenerated ? [regenerated] : fresh, regenerated !== null);
+
+  // Advance the watermark even when nothing was ingestable (e.g. the user
+  // just sent a message and the reply has not landed) — otherwise the same
+  // tail is re-examined every tick.
+  const next = watermarkFrom(tail);
+  if (next) await recordWatermark(chatId, next);
+  return turns;
+}
+
+/** Deliver detected turns to the handler. One bad turn never stops the rest. */
+async function dispatch(turns: DetectedTurn[], opts: PollOptions, tag: string): Promise<void> {
+  for (const turn of turns) {
+    try {
+      await opts.onTurn?.(turn);
+    } catch (e) {
+      console.error(`[${tag}] onTurn handler failed for chat ${turn.chatId} — ${String(e)}`);
+    }
+  }
 }
 
 /**
@@ -262,56 +376,114 @@ export async function pollOnce(opts: PollOptions = {}): Promise<DetectedTurn[]> 
     // First sighting: establish a baseline, ingest nothing. Without this a
     // fresh install would replay every existing chat's history on tick one.
     if (change.isNew) {
-      await recordWatermark(change.chatId, { lastMessageAt: change.lastMessageAt });
+      await withChatLock(change.chatId, () =>
+        recordWatermark(change.chatId, { lastMessageAt: change.lastMessageAt }),
+      );
       continue;
     }
-
-    let tail: Record<string, unknown>[];
-    try {
-      tail = await listMessages(change.chatId, { limit: tailSize });
-    } catch (e) {
-      console.warn(`[ME:poller] could not read messages for ${change.chatId} — ${String(e)}`);
-      continue;
-    }
-
-    const mark = state?.chats?.[change.chatId];
-    const { fresh, regenerated } = extractNewTurns(tail, mark);
-
-    const candidates = regenerated ? [regenerated] : fresh;
-    for (const message of candidates) {
-      if (!isAssistantTurn(message)) continue;
-      // Locate the reply within the full tail so we can find the user line that
-      // prompted it — ingestion needs both halves of the turn.
-      const idx = tail.findIndex((m) => str(m, "id") === str(message, "id"));
-      detected.push({
-        chatId: change.chatId,
-        chatName: str(change.chat, "name") ?? change.chatId,
-        // Prefer the message's own characterId — in a group scene it names the
-        // actual speaker, where the chat only lists participants.
-        characterId: str(message, "characterId") ?? getChatCharacterId(change.chat),
-        message,
-        regenerated: regenerated !== null,
-        precedingUserText: idx >= 0 ? precedingUserTextFor(tail, idx) : "",
-        participantIds: getChatParticipantIds(change.chat),
-      });
-    }
-
-    // Advance the watermark even when nothing was ingestable (e.g. the user
-    // just sent a message and the reply has not landed) — otherwise the same
-    // tail is re-examined every tick.
-    const next = watermarkFrom(tail);
-    if (next) await recordWatermark(change.chatId, next);
+    detected.push(
+      ...(await withChatLock(change.chatId, () => runChatPass(change.chat, change.chatId, tailSize))),
+    );
   }
 
-  for (const turn of detected) {
-    try {
-      await opts.onTurn?.(turn);
-    } catch (e) {
-      console.error(`[ME:poller] onTurn handler failed for chat ${turn.chatId} — ${String(e)}`);
-    }
-  }
-
+  await dispatch(detected, opts, "ME:poller");
   return detected;
+}
+
+// ── Notification-driven detection ─────────────────────────────────────────────
+// The engine's turn-complete hook (TURN_NOTIFY_URL) reports the exact message
+// that just finished. That is DIRECT evidence, where polling only ever infers a
+// turn from a timestamp diff — so this path trusts the notification instead of
+// re-deriving it through extractNewTurns.
+//
+// It is not merely lower latency. A regeneration rewrites the assistant message
+// IN PLACE: neither its createdAt nor the chat's lastMessageAt moves (measured
+// against a live engine, 2026-07-30). So selectChangedChats can never report a
+// chat whose only change was a swipe, and the poller's own regeneration branch
+// is unreachable in practice. Without this path the sidecar keeps remembering
+// text the user explicitly threw away.
+
+export interface TurnNotification {
+  chatId: string;
+  assistantMessageId: string;
+}
+
+async function runNotifiedPass(
+  note: TurnNotification,
+  tailSize: number,
+): Promise<DetectedTurn[]> {
+  let chats: Record<string, unknown>[];
+  let tail: Record<string, unknown>[];
+  try {
+    [chats, tail] = await Promise.all([
+      listChats(),
+      listMessages(note.chatId, { limit: tailSize }),
+    ]);
+  } catch (e) {
+    console.warn(`[ME:hook] could not read chat ${note.chatId} — ${String(e)}`);
+    return [];
+  }
+
+  const chat = chats.find((c) => str(c, "id") === note.chatId);
+  if (!chat) {
+    console.warn(`[ME:hook] notified chat ${note.chatId} not found`);
+    return [];
+  }
+
+  const message = tail.find((m) => str(m, "id") === note.assistantMessageId);
+  if (!message) {
+    // A re-roll further back than the tail we fetch. Ingesting the tail's last
+    // message instead would attribute the swipe to the wrong turn, so decline.
+    console.warn(
+      `[ME:hook] message ${note.assistantMessageId} is not in the last ${tailSize} of chat ${note.chatId} — skipped`,
+    );
+    return [];
+  }
+  if (!isAssistantTurn(message)) return [];
+
+  const mark = (await loadPollerState())?.chats?.[note.chatId];
+
+  // Same message, same swipe: already handled. Both detectors fire for a normal
+  // turn, so an overlap is the ordinary case here, not a fault.
+  if (
+    mark &&
+    str(message, "id") === mark.lastMessageId &&
+    swipeIndexOf(message) === mark.lastSwipeIndex
+  ) {
+    return [];
+  }
+
+  // Not newer than the watermark means we have seen this turn before and its
+  // text has changed underneath us — a re-roll, which supersedes rather than adds.
+  const at = str(message, "createdAt");
+  const regenerated = !!mark && !!at && at <= mark.lastMessageAt;
+
+  const turns = buildTurns(chat, note.chatId, tail, [message], regenerated);
+  const next = watermarkFrom(tail);
+  if (next) await recordWatermark(note.chatId, next);
+  return turns;
+}
+
+/**
+ * Handle one turn-complete notification from the engine.
+ *
+ * Never throws — this is served over HTTP to a fire-and-forget caller that
+ * cannot act on a failure anyway.
+ */
+export async function handleTurnNotification(
+  note: TurnNotification,
+  opts: PollOptions = {},
+): Promise<DetectedTurn[]> {
+  const tailSize = opts.tailSize ?? 10;
+  let turns: DetectedTurn[];
+  try {
+    turns = await withChatLock(note.chatId, () => runNotifiedPass(note, tailSize));
+  } catch (e) {
+    console.error(`[ME:hook] notification failed for chat ${note.chatId} — ${String(e)}`);
+    return [];
+  }
+  await dispatch(turns, opts, "ME:hook");
+  return turns;
 }
 
 let timer: NodeJS.Timeout | null = null;

@@ -49,6 +49,16 @@ Config can also be saved from the **`/setup` page** form or `POST /api/config`, 
 | `MARINARA_EXTENDER_DATA` | `<install>/data` | YAML store location. |
 | `MARINARA_EXTENDER_ALLOWED_ORIGIN` | — | Extra CORS origin if Marinara runs on a non-loopback URL. |
 
+**Turn capture** (the extension replacement — see `references/architecture.md`):
+
+| Var | Default | Notes |
+|---|---|---|
+| `MARINARA_EXTENDER_POLLER` | `0` | `1` starts the pull detector. Off by default: it nuke-and-recreates real lorebooks, so double-writing with the extension must be a decision, not a surprise. |
+| `MARINARA_EXTENDER_POLLER_INTERVAL_MS` | `5000` | Poll period. Detection latency ≈ one interval. |
+| `MARINARA_EXTENDER_TURN_HOOK` | `0` | `1` enables `POST /api/engine/turn-complete`, the push detector. **Also needs the engine to be sending** — `TURN_NOTIFY_URL=http://127.0.0.1:3001/api/engine/turn-complete` on the `feat/turn-complete-notification` branch. Stock Marinara never calls it, so the flag alone does nothing. |
+
+Independent flags — either detector alone, or both. They share one watermark behind a per-chat lock, so running both does not double-ingest. **The hook is the only path that sees a regeneration** (`4kbt`): a swipe moves nothing the poll gate reads.
+
 **Behavior & budgets:**
 
 | Var | Default | Notes |

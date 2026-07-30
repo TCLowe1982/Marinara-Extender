@@ -13,11 +13,17 @@
 > | Module | Slice | Does |
 > |---|---|---|
 > | `engine-client.ts` | `7nx` ✅ | Transport: engine base URL, the static CSRF header, optional Basic auth, actionable CSRF/401/unreachable errors, typed wrappers. Endpoints **ported from the working extension**, not inferred from engine source. |
-> | `poller.ts` | `23i` ✅ | Detection: polls `GET /api/chats` and compares `lastMessageAt`. Watermarks in `poller-state.yaml` via `mutateYamlFile`. |
+> | `poller.ts` | `23i` ✅ | Detection, **two detectors sharing one watermark**. *Pull:* polls `GET /api/chats` and compares `lastMessageAt`. *Push:* `handleTurnNotification()` consumes the engine's turn-complete hook. Both run `buildTurns` behind a per-chat lock (`withChatLock`) against `poller-state.yaml`, so whichever notices a turn first, the other stands down. |
 > | `lorebook-writer.ts` | `lxp` ✅ | Write-back: forced 16384 budget, nuke-and-recreate two constant entries, unlock-before-delete, serialized per character. |
 > | `turn-bridge.ts` | — | Glue: detected turn → `POST /api/process-turn` (the sidecar's own endpoint) → write the returned `memoryBlock` to the lorebook. |
 >
 > **Enable with `MARINARA_EXTENDER_POLLER=1`** (`_POLLER_INTERVAL_MS`, default 5000). **Off by default in code** — it nuke-and-recreates real lorebooks, and if the extension is ever re-enabled both paths would write the same entries.
+>
+> **Push detector — `MARINARA_EXTENDER_TURN_HOOK=1`** (`4kbt`, 2026-07-30). Serves `POST /api/engine/turn-complete`; the engine calls it when a turn finishes. Requires the engine side too: `TURN_NOTIFY_URL=http://127.0.0.1:3001/api/engine/turn-complete`, which needs the `feat/turn-complete-notification` engine branch (see `hkdq`) — **stock Marinara does not send this**. Independent of the poller flag: either alone, or both (the lock and shared watermark make the overlap a no-op). The endpoint is always registered but inert without the flag, and it **answers immediately and ingests in the background** because the engine sends it on the generation path under a 2s timeout.
+>
+> The two detectors differ deliberately on first sighting: an unseen chat is **baselined** by the poller (a sweep sees every chat's whole history at once) but **ingested** by the hook (a notification is evidence *that* turn just finished, so dropping it loses a real turn). The push path also trusts the notification's `assistantMessageId` rather than re-deriving the turn through `extractNewTurns` — direct evidence beats inference — and **declines** a notification whose message is not in the fetched tail rather than blaming the newest turn.
+>
+> Live verification: `npm run smoke:turn-hook` (read-only, scratch data dir, no `onTurn`) — 8/8 against both a dev engine and the maintainer's 94-chat install.
 >
 > **Live status (2026-07-23):** enabled in the maintainer's `.env` and running against their install (91 chats baselined, 0 errors). Detection latency ≈ one poll interval (5s). Data backed up first to `marinara-extender-backups/pre-poller-<stamp>/`. **Revert path when Marinara's fix lands:** remove the `MARINARA_EXTENDER_POLLER` line from `.env`, kill the sidecar, the `start.ps1` watchdog relaunches it without the poller, and the extension resumes as primary. A one-off outage-gap backfill (`scripts/backfill-gap-tags.ts`) recovered the `[remember:]`/`[bookmark:]` tags emitted while the extension was dark — reusable pattern via `/api/ingest-commands` (remembers dedup; bookmarks do NOT, so gate them on topic-absence).
 >
@@ -35,6 +41,7 @@
 > - `GET /chats/:id/messages?limit=N` returns the **newest N ascending**; **unbounded it returns the entire history** (195 messages on a real chat), so the limit is not optional.
 > - Messages carry their **own `characterId`**, so group scenes name the actual speaker per message.
 > - **Regeneration is a swipe** — `activeSwipeIndex` changes on the *same* message id; the engine re-rolls in place rather than appending. Requires the field on *both* sides before claiming a regeneration, or every unchanged message looks re-rolled and the turn is re-ingested every tick.
+> - **⛔ POLLING CANNOT DETECT A REGENERATION AT ALL** (`4kbt`, measured 2026-07-30). A swipe rewrites the message in place and moves **nothing** the poll gate looks at: the message's `createdAt` and the chat's `lastMessageAt`/`updatedAt` are all byte-identical before and after (verified across two consecutive swipes, `activeSwipeIndex` 0 → 2, `swipeCount` → 3, content changed each time). So `selectChangedChats` never emits the chat, and `extractNewTurns`' swipe branch — which is itself correct — is **unreachable on the poll path**. Reading `extractNewTurns` alone gives the wrong answer about whether re-rolls are handled; you have to check what can reach it. The damage is worse than a missed turn: the user re-rolls *because* they rejected that text, and the sidecar goes on remembering the rejected version. **Only the push detector sees swipes.**
 > - A never-seen chat must be **baselined, not ingested**, or a fresh install replays every chat's history at once.
 > - The bridge calls the sidecar's own `/api/process-turn` over loopback rather than importing it: that handler is a large inline route with fire-and-forget tiers, and going through it reuses the exact path the extension used instead of a parallel implementation that can drift.
 >

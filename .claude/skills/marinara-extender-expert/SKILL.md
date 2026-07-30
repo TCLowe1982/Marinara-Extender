@@ -48,6 +48,8 @@ The most common report, and it has **three distinct causes**. Establish which be
 2. **Retrieval invisibility** — it *is* stored but can't surface. The two live causes are `summary`-only scoring (`tp5`) and, before the 2026-07-29 fix, length-normalised relevance (`vrw`). Distinguish from a gap by grepping **bodies** as well as summaries.
 3. **Content corruption at digest** — it surfaced fine and was *wrong*. Sub-species: **chimera fusion** (true fragments, invented joins), referent bleed across the user/character membrane, witness→participant promotion in first-person lane summaries.
 
+The sibling report — **"it remembered the version I re-rolled away"** — is a fourth, separate cause with its own fix. On the poller path a regeneration is *undetectable*: the swipe rewrites the message in place and moves nothing the poll gate reads, so the sidecar keeps the discarded text (`4kbt`). Fix is `MARINARA_EXTENDER_TURN_HOOK=1` plus the engine sending `TURN_NOTIFY_URL`, not anything in the digest. Ask whether they re-rolled before treating a wrong memory as corruption.
+
 **Never conclude "it was never captured" from a blank retrieval.** That exact inference was made, recorded as canon, and was false — the subject had 80 entries across two stores. A blank proves nothing until you have grepped the bodies. Two hard-won corollaries:
 
 - **Word boundaries when grepping names.** Case-insensitive `erica` matches `Am**erica**n` and `sph**erica**l`. Use `\b(Name)\b`.

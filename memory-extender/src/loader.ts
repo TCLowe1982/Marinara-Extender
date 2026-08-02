@@ -21,6 +21,17 @@ import { listActiveThreads } from "./threads.js";
 import type { RecapEntry } from "./arcs.js";
 import { readBeat, companionEntryFromBeat } from "./sentiment/encoder.js";
 import { activateRecaps } from "./recap-activation.js";
+import {
+  capRejections,
+  hashBlock,
+  writeReceipt,
+  type CandidateTrace,
+  type RejectedCandidate,
+  type RejectionReason,
+  type RetrievalReceipt,
+  type ScopeAccounting,
+  type SelectionReason,
+} from "./receipts.js";
 
 // ── Budget config ─────────────────────────────────────────────────────────────
 
@@ -198,28 +209,95 @@ const RELEVANCE_CREDIT_THRESHOLD = 0.29;
 // discount — thread context rides along, it doesn't outrank direct matches.
 const THREAD_SIBLING_FACTOR = 0.75;
 
+// Truncated for the receipt: enough to recognise an entry, not enough to make
+// the receipt a second copy of the store.
+const RECEIPT_SUMMARY_CHARS = 120;
+const traceSummary = (s: string): string =>
+  s.length <= RECEIPT_SUMMARY_CHARS ? s : `${s.slice(0, RECEIPT_SUMMARY_CHARS - 1)}…`;
+
+// Which signal actually earned the entry its place. `relevance` is a max() over
+// three contributors, so the reasons are every contributor that tied the max —
+// a beat pulled in by its thread reads differently from one that matched on its
+// own words, and that difference is the whole point of recording it.
+function selectionReasons(own: number, labelMatch: number, siblingPull: number): SelectionReason[] {
+  const best = Math.max(own, labelMatch, siblingPull);
+  if (best <= 0) return ["recency_rider"];
+  const reasons: SelectionReason[] = [];
+  if (own === best) reasons.push("own_match");
+  if (labelMatch === best) reasons.push("thread_label");
+  if (siblingPull === best) reasons.push("thread_sibling");
+  return reasons;
+}
+
+interface ScopeSelection {
+  selected: IndexEntry[];
+  used: number;
+  summoned: Set<string>;
+  bestRelevance: number;
+  /** Explainability (MarinaraExtender-sph8) — what was chosen and what lost. */
+  traces: CandidateTrace[];
+  rejected: RejectedCandidate[];
+  candidateCount: number;
+}
+
 function selectEntries(
   index: ScopeIndex | null,
   budget: number,
   recentText: string,
   threadLabelRelevance?: Map<string, number>,
-): { selected: IndexEntry[]; used: number; summoned: Set<string>; bestRelevance: number } {
-  if (!index) return { selected: [], used: 0, summoned: new Set(), bestRelevance: 0 };
+): ScopeSelection {
+  const empty: ScopeSelection = {
+    selected: [], used: 0, summoned: new Set(), bestRelevance: 0,
+    traces: [], rejected: [], candidateCount: 0,
+  };
+  if (!index) return empty;
+
+  const scope = index.scope;
+
+  // Own-summary relevance for EVERY row, including the ones filtered out below.
+  // Filtered rows are excluded from the prompt regardless, but a superseded or
+  // resolved entry that scores highly is precisely what someone triaging a
+  // missing memory needs to see — so it must be scored to be rankable in the
+  // receipt, not written off at zero.
+  const ownRelevance = new Map<string, number>();
+  for (const e of index.entries) ownRelevance.set(e.id, relevanceScore(e.summary, recentText));
 
   // done = resolved; supersededBy = replaced fact (FR2) — normally already in
   // cold, filtered here defensively so a stale fact never shares a prompt with
   // its replacement. provenance "unplayed" = OUTLINE: author-established canon
   // for an arc that has not played, excluded so a character can never recall a
   // scene that never happened to them.
-  const candidates = [...index.entries].filter(
-    (e) => e.status !== "done" && !e.supersededBy && e.provenance !== "unplayed",
-  );
+  //
+  // Checked in that order, and an entry reports only its FIRST disqualifier: the
+  // reasons are a closed set meant to be counted, and one row contributing to
+  // three tallies would make every count a lie.
+  const candidates: IndexEntry[] = [];
+  const rejected: RejectedCandidate[] = [];
+  const reject = (e: IndexEntry, rejection: RejectionReason) =>
+    rejected.push({
+      id: e.id, scope, summary: traceSummary(e.summary), tokens: e.tokens,
+      relevance: ownRelevance.get(e.id) ?? 0, rejection,
+    });
+  for (const e of index.entries) {
+    if (e.status === "done") reject(e, "resolved");
+    else if (e.supersededBy) reject(e, "superseded");
+    else if (e.provenance === "unplayed") reject(e, "unplayed");
+    else candidates.push(e);
+  }
 
   // Eidetic mode: skip budgeting — treat every memory as Current. No exposure
-  // credit (it's an inspection mode, not real usage).
+  // credit (it's an inspection mode, not real usage). The filtered rows above
+  // still count as rejected: eidetic bypasses the BUDGET, not the exclusions.
   if (isEideticMode()) {
     const used = candidates.reduce((sum, e) => sum + e.tokens, 0);
-    return { selected: candidates, used, summoned: new Set(), bestRelevance: 1 };
+    return {
+      selected: candidates, used, summoned: new Set(), bestRelevance: 1,
+      candidateCount: candidates.length, rejected,
+      traces: candidates.map((e) => ({
+        id: e.id, scope, summary: traceSummary(e.summary), tokens: e.tokens,
+        relevance: ownRelevance.get(e.id) ?? 0, reasons: ["eidetic" as SelectionReason],
+      })),
+    };
   }
 
   // Thread relevance (MarinaraExtender-pln): a beat is recalled not just on
@@ -227,23 +305,28 @@ function selectEntries(
   // matching the thread's label pulls every member, and (b) one member's
   // strong direct match pulls its siblings (recalling any beat from the
   // Porsche test drive surfaces the test drive, not one disconnected moment).
-  const ownRelevance = new Map<string, number>();
   const threadPeak = new Map<string, number>();
   for (const e of candidates) {
-    const r = relevanceScore(e.summary, recentText);
-    ownRelevance.set(e.id, r);
-    if (e.threadId) threadPeak.set(e.threadId, Math.max(threadPeak.get(e.threadId) ?? 0, r));
+    if (e.threadId) {
+      threadPeak.set(e.threadId, Math.max(threadPeak.get(e.threadId) ?? 0, ownRelevance.get(e.id) ?? 0));
+    }
   }
 
   const ranked = candidates
     .map((e) => {
-      let relevance = ownRelevance.get(e.id)!;
+      const own = ownRelevance.get(e.id)!;
+      let relevance = own;
+      let labelMatch = 0;
+      let siblingPull = 0;
       if (e.threadId) {
-        const labelMatch = threadLabelRelevance?.get(e.threadId) ?? 0;
-        const siblingPull = (threadPeak.get(e.threadId) ?? 0) * THREAD_SIBLING_FACTOR;
+        labelMatch = threadLabelRelevance?.get(e.threadId) ?? 0;
+        siblingPull = (threadPeak.get(e.threadId) ?? 0) * THREAD_SIBLING_FACTOR;
         relevance = Math.max(relevance, labelMatch, siblingPull);
       }
-      return { e, relevance, recency: e.lastRetrievedAt ?? e.lastAccessed ?? "" };
+      return {
+        e, relevance, recency: e.lastRetrievedAt ?? e.lastAccessed ?? "",
+        reasons: selectionReasons(own, labelMatch, siblingPull),
+      };
     })
     .sort((a, b) => {
       if (b.relevance !== a.relevance) return b.relevance - a.relevance;   // topical now
@@ -255,16 +338,27 @@ function selectEntries(
 
   const selected: IndexEntry[] = [];
   const summoned = new Set<string>();
+  const traces: CandidateTrace[] = [];
   let used = 0;
-  for (const { e, relevance } of ranked) {
-    if (used + e.tokens > budget) continue; // greedy fill; skip oversized, keep packing
+  for (const { e, relevance, reasons } of ranked) {
+    if (used + e.tokens > budget) {
+      // Greedy fill; skip oversized, keep packing. Previously this `continue`
+      // was where a stored-but-unsurfaced memory vanished without trace — the
+      // single hardest case to distinguish from "never captured".
+      rejected.push({
+        id: e.id, scope, summary: traceSummary(e.summary), tokens: e.tokens,
+        relevance, rejection: "budget_exhausted",
+      });
+      continue;
+    }
     selected.push(e);
     if (relevance > RELEVANCE_CREDIT_THRESHOLD) summoned.add(e.id); // pulled in by topic, not just present
     used += e.tokens;
+    traces.push({ id: e.id, scope, summary: traceSummary(e.summary), tokens: e.tokens, relevance, reasons });
   }
   // Highest hot relevance — drives the cold-recall miss decision in loadContext.
   const bestRelevance = ranked.length ? ranked[0]!.relevance : 0;
-  return { selected, used, summoned, bestRelevance };
+  return { selected, used, summoned, bestRelevance, traces, rejected, candidateCount: candidates.length };
 }
 
 // ── Cold recall (miss path) ─────────────────────────────────────────────────────
@@ -512,6 +606,8 @@ export interface LoadResult {
   entryTokensUsed: number;
   bookmarkCount: number;
   surfaced: SurfacedEntry[]; // all entries selected this turn (for recitation detection)
+  /** This turn's selection decision, incl. rejected candidates (sph8). */
+  receipt: RetrievalReceipt;
 }
 
 const DBG = process.env.ME_DEBUG !== "0"; // set ME_DEBUG=0 in .env to silence
@@ -571,10 +667,19 @@ export async function loadContext(
       miss(charSelection)   ? coldRecall("character", session.characterId, recentText)  : Promise.resolve(null),
       miss(globalSelection) ? coldRecall("global", "global", recentText)                : Promise.resolve(null),
     ]);
-    const adopt = async (hit: IndexEntry | null, scope: Scope, scopeId: string, into: Entry[], sel: { selected: IndexEntry[]; summoned: Set<string> }) => {
+    const adopt = async (hit: IndexEntry | null, scope: Scope, scopeId: string, into: Entry[], sel: ScopeSelection) => {
       if (!hit) return;
       const e = await readEntry(scope, scopeId, hit.path);
-      if (e) { into.push(e); sel.selected.push(hit); sel.summoned.add(hit.id); } // counts as a summon
+      if (e) {
+        into.push(e); sel.selected.push(hit); sel.summoned.add(hit.id); // counts as a summon
+        // A cold hit is invisible in the hot accounting above — record it, or the
+        // receipt will show a scope that surfaced nothing while the prompt carries
+        // a memory that came from the archive.
+        sel.traces.push({
+          id: hit.id, scope, summary: traceSummary(hit.summary), tokens: hit.tokens,
+          relevance: relevanceScore(hit.summary, recentText), reasons: ["cold_recall"],
+        });
+      }
     };
     await Promise.all([
       adopt(cChat,   "chat",      session.chatId,      chatEntries,   chatSelection),
@@ -705,11 +810,46 @@ export async function loadContext(
     ...globalSelection.selected.map((e) => ({ id: e.id, summary: e.summary, scope: "global" as Scope, scopeId: "global" })),
   ];
 
+  // Receipt (MarinaraExtender-sph8) — the turn's decision, written down. Built
+  // after assembly so the block hash describes exactly what the prompt will
+  // carry.
+  //
+  // AWAITED, deliberately, unlike the exposure-credit stamping below. A
+  // fire-and-forget receipt was tried first and is wrong twice over: the write
+  // can still be in flight when the caller reads it back (a diagnostic that
+  // races its own reader is worse than none), and it can land AFTER the chat's
+  // data is cleaned up, recreating a file for a chat that no longer exists.
+  // It is one small atomic write, and it must not outlive the turn that made it.
+  // Errors are swallowed: a receipt is diagnostics and must never fail a recall.
+  const budgetsUsed = getBudgets();
+  const scopeAccounting: ScopeAccounting[] = [
+    { scope: "chat", budget: budgetsUsed.chat, used: chatSelection.used, candidates: chatSelection.candidateCount, selected: chatSelection.traces.length, rejected: chatSelection.rejected.length },
+    { scope: "character", budget: budgetsUsed.character, used: charSelection.used, candidates: charSelection.candidateCount, selected: charSelection.traces.length, rejected: charSelection.rejected.length },
+    { scope: "global", budget: budgetsUsed.global, used: globalSelection.used, candidates: globalSelection.candidateCount, selected: globalSelection.traces.length, rejected: globalSelection.rejected.length },
+  ];
+  const allRejected = [...chatSelection.rejected, ...charSelection.rejected, ...globalSelection.rejected];
+  const capped = capRejections(allRejected);
+  const receipt: RetrievalReceipt = {
+    version: 1,
+    chatId: session.chatId,
+    characterId: session.characterId,
+    turnNumber: session.turnNumber,
+    createdAt: new Date().toISOString(),
+    querySize: recentText.length,
+    scopes: scopeAccounting,
+    selected: [...chatSelection.traces, ...charSelection.traces, ...globalSelection.traces],
+    rejected: capped.rejected,
+    rejectedTruncated: capped.truncated,
+    injection: { status: "pending", hash: hashBlock(contextBlock), tokens: entryTokensUsed },
+  };
+  await writeReceipt(receipt).catch((err) => dbg("receipt write failed (non-fatal):", err));
+
   return {
     contextBlock,
     indexTokensUsed,
     entryTokensUsed,
     bookmarkCount: surfaced.length,
     surfaced: surfacedEntries,
+    receipt,
   };
 }

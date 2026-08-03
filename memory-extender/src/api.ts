@@ -38,6 +38,7 @@ import { backupDataDir, snapshotScope } from "./backup.js";
 import { digestMessages, snapshotSession, type DigestMessage } from "./digest.js";
 import { processResponse, extractRememberTags } from "./writer.js";
 import { loadContext } from "./loader.js";
+import { confirmInjection } from "./receipts.js";
 import { runPromotion, runPromotionAll, recordRecitation } from "./promotion.js";
 import { runCleanup } from "./cleanup.js";
 import { handleTurnNotification } from "./poller.js";
@@ -1612,6 +1613,32 @@ export function registerApiRoutes(app: FastifyInstance): void {
     console.info(`[ME:pre-turn] ${identityKey} chat:${chatId} — block rebuilt against outgoing message (${surfaced.length} entries)`);
     return reply.send({ memoryBlock: contextBlock, surfaced: surfaced.length });
   });
+
+  // Close the loop opened by /api/pre-turn: confirm the block we built actually
+  // reached the prompt (MarinaraExtender-sph8).
+  //
+  // Assembling a block and shipping it are different events. On the lorebook
+  // path they were indistinguishable — a stale entry, a failed write and a
+  // truncating consumer all presented as "the character didn't remember", and
+  // all three got misfiled as retrieval bugs. The caller sends back the text it
+  // observed in the dispatched prompt (or null if it was absent); we hash it
+  // against this turn's receipt and record confirmed / mismatch.
+  //
+  // `block: null` is a legitimate, meaningful call — "I looked and it was not
+  // there" is exactly the signal this endpoint exists to capture, so it must
+  // never be treated as a missing parameter.
+  app.post<{ Body: { chatId?: string; block?: string | null } }>(
+    "/api/prompt-accepted",
+    async (req, reply) => {
+      const { chatId, block = null } = req.body ?? {};
+      if (!chatId) return reply.code(400).send({ error: "chatId is required" });
+      const status = await confirmInjection(chatId, block ?? null);
+      if (status === "mismatch") {
+        console.warn(`[ME:prompt-accepted] chat:${chatId} — injected block did NOT match this turn's receipt`);
+      }
+      return reply.send({ ok: true, status });
+    },
+  );
 
   // ── One-click update (uo4) ────────────────────────────────────────────────
   // Spawns the visible updater console; it stops this process, pulls, builds,

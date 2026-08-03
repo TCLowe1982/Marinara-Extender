@@ -1,0 +1,17 @@
+[
+  {
+    "id": "marinara-extender",
+    "name": "Marinara Extender",
+    "description": "Injects scoped persistent memory from the Marinara Extender sidecar while the prompt is being assembled, so recall is scored against the message being answered rather than the previous turn. Requires the Marinara Extender sidecar running locally. Add the Agent in Chat Settings → Agents → Misc Agents for Conversation, Roleplay, and Game modes.",
+    "author": "TC Lowe",
+    "phase": "pre_generation",
+    "enabledByDefault": false,
+    "category": "misc",
+    "runtimeDisabled": true,
+    "modeAllowlist": ["conversation", "roleplay", "game"],
+    "defaultTools": [],
+    "defaultSettings": {},
+    "defaultPromptTemplate": "",
+    "execution": "feature"
+  }
+]

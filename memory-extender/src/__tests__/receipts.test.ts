@@ -11,7 +11,7 @@ import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { upsertIndexEntry, writeEntry, type IndexEntry, type Entry } from "../storage.js";
-import { loadContext } from "../loader.js";
+import { awaitPendingCredit, loadContext } from "../loader.js";
 import { capRejections, confirmInjection, hashBlock, readReceipt, type RejectedCandidate } from "../receipts.js";
 
 let dir: string;
@@ -20,6 +20,10 @@ beforeEach(async () => {
   process.env.MARINARA_EXTENDER_DATA = dir;
 });
 afterEach(async () => {
+  // loadContext stamps exposure credit in the background. Deleting the data
+  // directory out from under an in-flight index write recreates it and fails
+  // the rmdir — intermittently, at ~50%, in whichever test happened to run last.
+  await awaitPendingCredit();
   delete process.env.MARINARA_EXTENDER_DATA;
   delete process.env.MARINARA_EXTENDER_BUDGET_CHARACTER;
   await rm(dir, { recursive: true, force: true });

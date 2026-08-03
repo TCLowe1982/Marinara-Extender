@@ -85,10 +85,50 @@ export function stripBookmarkTags(text: string): string {
 const VALID_LANES_SET = new Set<string>(["open_threads", "user_topics", "character_topics"]);
 const VALID_SCOPES_SET = new Set<string>(["chat", "character", "global"]);
 
+/** The scope a tag gets when it names none — and, now, when it names one we don't know. */
+const DEFAULT_SCOPE: Scope = "character";
+
 export interface ExtractedRemember {
   lane: Lane;
   scope: Scope;
   content: string;
+}
+
+// Bad scope values are logged once each, not once per turn. A persistently
+// typo-ing emitter should be visible without drowning the log in a duplicate
+// line every message.
+const warnedScopes = new Set<string>();
+
+/**
+ * Resolve the scope named by a tag.
+ *
+ * The value comes from a MODEL, so it arrives with model-shaped defects: stray
+ * casing, surrounding whitespace, a near-miss synonym. Case and whitespace are
+ * unambiguous in intent and are simply normalised away.
+ *
+ * A value we still don't recognise falls back to the SAME default as an omitted
+ * one. It used to fall to "chat", which made invalid and omitted disagree — and
+ * disagree in the damaging direction, because "chat" is the narrowest scope
+ * there is. A typo'd `scope="charcter"` therefore didn't degrade to the default,
+ * it quietly buried the memory in the conversation that produced it, where it
+ * died with that chat. That presents much later as "she forgot something I told
+ * her to remember forever", and triages as a capture gap or a retrieval miss
+ * when it is neither: the memory was captured correctly and filed one scope too
+ * narrow. Widening the failure to the default is the safe direction — the
+ * default is what the author of the tag would have got by saying nothing.
+ */
+function resolveScope(raw: string | undefined): Scope {
+  if (raw === undefined) return DEFAULT_SCOPE;
+  const normalized = raw.trim().toLowerCase();
+  if (VALID_SCOPES_SET.has(normalized)) return normalized as Scope;
+  if (!warnedScopes.has(normalized)) {
+    warnedScopes.add(normalized);
+    console.warn(
+      `[ME] unknown scope ${JSON.stringify(raw)} on a remember tag — filed as "${DEFAULT_SCOPE}". ` +
+        `Valid: ${[...VALID_SCOPES_SET].join(" | ")}.`,
+    );
+  }
+  return DEFAULT_SCOPE;
 }
 
 // Accept both quoted (content="…") and unquoted (weight=0.8) values. The model
@@ -112,11 +152,10 @@ export function extractRememberTags(text: string): ExtractedRemember[] {
     const attrStr = match[1]!;
     const content = match[2]!.trim();
     if (!content) continue;
-    const laneRaw  = extractAttr(attrStr, "lane")  ?? "user_topics";
-    const scopeRaw = extractAttr(attrStr, "scope") ?? "character";
+    const laneRaw = extractAttr(attrStr, "lane") ?? "user_topics";
     found.push({
-      lane:  (VALID_LANES_SET.has(laneRaw)  ? laneRaw  : "user_topics")  as Lane,
-      scope: (VALID_SCOPES_SET.has(scopeRaw) ? scopeRaw : "chat")         as Scope,
+      lane: (VALID_LANES_SET.has(laneRaw) ? laneRaw : "user_topics") as Lane,
+      scope: resolveScope(extractAttr(attrStr, "scope")),
       content,
     });
   }
@@ -127,11 +166,10 @@ export function extractRememberTags(text: string): ExtractedRemember[] {
     const params = match[1]!;
     const content = parseBracketParam(params, "content");
     if (!content || content.trim().length === 0) continue;
-    const laneRaw  = parseBracketParam(params, "lane")  ?? "user_topics";
-    const scopeRaw = parseBracketParam(params, "scope") ?? "character";
+    const laneRaw = parseBracketParam(params, "lane") ?? "user_topics";
     found.push({
-      lane:  (VALID_LANES_SET.has(laneRaw)  ? laneRaw  : "user_topics")  as Lane,
-      scope: (VALID_SCOPES_SET.has(scopeRaw) ? scopeRaw : "chat")         as Scope,
+      lane: (VALID_LANES_SET.has(laneRaw) ? laneRaw : "user_topics") as Lane,
+      scope: resolveScope(parseBracketParam(params, "scope")),
       content: content.trim(),
     });
   }

@@ -15,7 +15,7 @@ import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { upsertIndexEntry, writeEntry, type IndexEntry, type Entry } from "../storage.js";
-import { loadContext } from "../loader.js";
+import { awaitPendingCredit, loadContext } from "../loader.js";
 
 let dir: string;
 beforeEach(async () => {
@@ -23,6 +23,9 @@ beforeEach(async () => {
   process.env.MARINARA_EXTENDER_DATA = dir;
 });
 afterEach(async () => {
+  // Join the background exposure-credit writes before deleting the data dir —
+  // see awaitPendingCredit. Without it, an index write can land mid-rm.
+  await awaitPendingCredit();
   delete process.env.MARINARA_EXTENDER_DATA;
   // loadContext stamps retrieval credit fire-and-forget; retries let rm clear
   // files that land mid-delete.

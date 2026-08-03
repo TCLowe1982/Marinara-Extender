@@ -25,7 +25,7 @@ import {
   type Entry,
 } from "../storage.js";
 import { runPromotion } from "../promotion.js";
-import { loadContext } from "../loader.js";
+import { awaitPendingCredit, loadContext } from "../loader.js";
 import { resolveOrMintThread, closeThread, autoCloseStaleThreads, listActiveThreads } from "../threads.js";
 
 let dir: string;
@@ -34,6 +34,9 @@ beforeEach(async () => {
   process.env.MARINARA_EXTENDER_DATA = dir;
 });
 afterEach(async () => {
+  // Join the background exposure-credit writes before deleting the data dir —
+  // see awaitPendingCredit. Without it, an index write can land mid-rm.
+  await awaitPendingCredit();
   delete process.env.MARINARA_EXTENDER_DATA;
   // loadContext's fire-and-forget retrieval-credit stamping can race teardown;
   // retries let rm re-scan and clear files that land mid-delete.

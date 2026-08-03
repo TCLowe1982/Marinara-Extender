@@ -615,6 +615,26 @@ function dbg(...args: unknown[]): void {
   if (DBG) console.debug("[ME:loader]", ...args);
 }
 
+/**
+ * The last turn's exposure-credit writes, still possibly in flight.
+ *
+ * Those writes are deliberately not awaited by the recall path — stamping
+ * lastAccessed must never add latency to a response. But "not awaited" is not
+ * the same as "nobody may ever wait", and a caller that is about to DELETE the
+ * data directory is exactly the case that must: an index write landing after
+ * the directory is gone recreates it, which surfaces as an ENOTEMPTY teardown
+ * failure with no connection to the code that caused it.
+ *
+ * Same lesson as the receipt write further down, one layer out — a background
+ * write needs a join point even when the hot path never uses it.
+ */
+let pendingCredit: Promise<unknown> = Promise.resolve();
+
+/** Wait for background exposure-credit writes to settle. For teardown, not the hot path. */
+export function awaitPendingCredit(): Promise<unknown> {
+  return pendingCredit;
+}
+
 export async function loadContext(
   session: LoaderSession,
   budgets: TokenBudgets = getBudgets(),
@@ -776,7 +796,9 @@ export async function loadContext(
   // what keeps the promotion signal honest: "was SUMMONED" earns credit, "was
   // AROUND" does not. As the Current cache improves, more loads are relevance-
   // driven, so exposure-count becomes a better proxy for use on its own.
-  // Fire-and-forget — don't block the response on file I/O.
+  // Fire-and-forget — don't block the response on file I/O. The handle is kept
+  // (see awaitPendingCredit) so a caller that is about to tear down the data
+  // directory can wait for it; nothing on the hot path ever does.
   const todayStr = new Date().toISOString().slice(0, 10);
   const stamp = (scope: Scope, scopeId: string, e: IndexEntry, summoned: boolean) =>
     upsertIndexEntry(scope, scopeId, {
@@ -789,7 +811,7 @@ export async function loadContext(
       retrievalCount: (e.retrievalCount ?? 0) + (summoned ? 1 : 0),
     });
   if (!session.skipCredit) {
-    void Promise.all([
+    pendingCredit = Promise.all([
       ...chatSelection.selected.map((e) => stamp("chat", session.chatId, e, chatSelection.summoned.has(e.id))),
       ...charSelection.selected.map((e) => stamp("character", session.characterId, e, charSelection.summoned.has(e.id))),
       ...globalSelection.selected.map((e) => stamp("global", "global", e, globalSelection.summoned.has(e.id))),

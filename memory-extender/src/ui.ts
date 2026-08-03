@@ -55,10 +55,6 @@ const PAGE = String.raw`<!DOCTYPE html>
   .item:hover { background: var(--panel); }
   .item.sel { background: var(--panel); box-shadow: inset 2px 0 0 var(--accent); }
   .item .k { color: var(--muted); font-size: 11px; }
-  .tabs { display: flex; gap: 6px; margin-bottom: 16px; }
-  .tab { padding: 6px 13px; border-radius: 999px; border: 1px solid var(--edge);
-    background: none; color: var(--muted); cursor: pointer; font: inherit; }
-  .tab.on { color: var(--text); border-color: var(--accent); background: var(--panel); }
   .card { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px;
     padding: 13px 15px; margin-bottom: 10px; }
   .card .sum { font-weight: 600; margin-bottom: 5px; }
@@ -83,6 +79,15 @@ const PAGE = String.raw`<!DOCTYPE html>
   .fill { background: var(--accent); height: 100%; }
   code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
   .note { color: var(--muted); font-size: 12px; margin: -6px 0 16px; }
+  .why-btn { margin-left: auto; padding: 2px 11px; border-radius: 999px; cursor: pointer;
+    background: none; border: 1px solid var(--accent); color: var(--accent); font: inherit; font-size: 11px; }
+  .why-btn:hover { background: var(--bg); }
+  .why-line { margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--edge);
+    color: var(--muted); font-size: 12.5px; line-height: 1.7; }
+  .why-line .k { color: var(--muted); font-size: 11px; }
+  .back { background: none; border: 1px solid var(--edge); color: var(--muted); cursor: pointer;
+    border-radius: 7px; padding: 4px 11px; font: inherit; font-size: 12px; margin-bottom: 14px; }
+  .back:hover { color: var(--text); }
 </style>
 </head>
 <body>
@@ -100,17 +105,34 @@ const PAGE = String.raw`<!DOCTYPE html>
     <div id="receipts"></div>
   </aside>
   <main>
-    <div class="tabs">
-      <button class="tab on" data-view="entries">Memories</button>
-      <button class="tab" data-view="receipt">Why this recall</button>
-    </div>
     <div id="view"></div>
   </main>
 </div>
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
-const state = { view: "entries", scope: "global", scopeId: "global", label: "Global", chatId: null, open: new Set() };
+const state = { mode: "entries", scope: "global", scopeId: "global", label: "Global", chatId: null };
+
+// entryId -> the most recent verdict we have for it, across recent turns.
+// Built once at load so a memory can answer "was I used, and why not" without
+// the reader having to know which chat to look in — the question is about the
+// MEMORY, not about a turn they have to go find.
+const verdicts = new Map();
+let turnsScanned = 0;
+
+const PLAIN = {
+  own_match: "its own words matched the message",
+  thread_label: "the conversation matched its thread",
+  thread_sibling: "a sibling beat in its thread matched strongly",
+  recency_rider: "no topical match — rode in on recency because budget remained",
+  cold_recall: "reached for in the cold archive after a miss",
+  eidetic: "eidetic mode — everything injected",
+  resolved: "the thread it belonged to is resolved",
+  superseded: "a newer fact replaced it",
+  unplayed: "outline canon — excluded from recall by design",
+  budget_exhausted: "ranked, but the scope's token budget was already full",
+};
+const plain = (k) => PLAIN[k] || String(k).replace(/_/g, " ");
 
 async function get(path) {
   const res = await fetch(path);
@@ -144,36 +166,47 @@ async function boot() {
         esc(r.chatId) + '<div class="k">' + esc(String(r.createdAt).replace("T", " ").slice(0, 16)) + '</div></button>').join("")
     : '<div class="empty">no turns recorded yet</div>';
   for (const b of $("receipts").querySelectorAll(".item")) {
-    b.onclick = () => { pick($("receipts"), b); state.chatId = b.dataset.chat; setView("receipt"); };
+    b.onclick = () => { pick($("receipts"), b); state.chatId = b.dataset.chat; state.mode = "turn"; render(); };
   }
 
+  await buildVerdicts(rs.slice(0, 8));
   $("hdr").textContent = chars.length + " character(s) · " + rs.length + " recorded turn(s)";
   render();
 }
 
-function select(scope, scopeId, label) {
-  Object.assign(state, { scope, scopeId, label });
-  setView("entries");
+// Newest first, so the first verdict written for an entry is the freshest and
+// later (older) turns must not overwrite it.
+async function buildVerdicts(rows) {
+  for (const row of rows) {
+    const r = await get("/api/receipts/" + encodeURIComponent(row.chatId)).catch(() => null);
+    if (!r) continue;
+    turnsScanned += 1;
+    for (const c of r.selected || []) {
+      if (!verdicts.has(c.id)) verdicts.set(c.id, { used: true, at: r.createdAt, chatId: r.chatId, reasons: c.reasons || [], relevance: c.relevance });
+    }
+    for (const c of r.rejected || []) {
+      if (!verdicts.has(c.id)) verdicts.set(c.id, { used: false, at: r.createdAt, chatId: r.chatId, rejection: c.rejection, relevance: c.relevance });
+    }
+  }
 }
 
-function setView(v) {
-  state.view = v;
-  for (const t of document.querySelectorAll(".tab")) t.classList.toggle("on", t.dataset.view === v);
+function select(scope, scopeId, label) {
+  Object.assign(state, { scope, scopeId, label, mode: "entries" });
   render();
 }
-for (const t of document.querySelectorAll(".tab")) t.onclick = () => setView(t.dataset.view);
 
 async function render() {
   const el = $("view");
   el.innerHTML = '<div class="empty">loading…</div>';
-  try { state.view === "entries" ? await renderEntries(el) : await renderReceipt(el); }
+  try { state.mode === "entries" ? await renderEntries(el) : await renderReceipt(el); }
   catch (err) { el.innerHTML = '<div class="empty">' + esc(err.message) + "</div>"; }
 }
 
 async function renderEntries(el) {
   const rows = await get("/api/entries?scope=" + encodeURIComponent(state.scope) + "&scopeId=" + encodeURIComponent(state.scopeId) + "&status=all");
   if (!rows.length) { el.innerHTML = '<div class="empty">No memories stored for ' + esc(state.label) + " yet.</div>"; return; }
-  el.innerHTML = '<div class="note">' + rows.length + " memory(ies) in " + esc(state.label) + " · click one to read it</div>" +
+  el.innerHTML = '<div class="note">' + rows.length + " memory(ies) in " + esc(state.label) +
+      " · click one to read it · <b>Why?</b> shows how it fared in the last " + turnsScanned + " recorded turn(s)</div>" +
     rows.map((r) => '<div class="card" data-id="' + esc(r.id) + '">' +
       '<div class="sum">' + esc(r.summary) + "</div>" +
       '<div class="meta"><span class="pill lane-' + esc(r.lane) + '">' + esc(String(r.lane).replace(/_/g, " ")) + "</span>" +
@@ -181,12 +214,23 @@ async function renderEntries(el) {
       '<span class="pill">' + esc(r.tokens) + " tok</span>" +
       (r.supersededBy ? '<span class="pill nope">superseded</span>' : "") +
       (r.provenance === "unplayed" ? '<span class="pill nope">outline — never recalled</span>' : "") +
+      '<button class="why-btn" data-why="' + esc(r.id) + '">Why?</button>' +
       "<span>" + esc(r.lastAccessed || "") + "</span></div>" +
+      '<div class="why-line" hidden></div>' +
       '<div class="body" hidden></div></div>').join("");
 
   for (const card of el.querySelectorAll(".card")) {
+    const body = card.querySelector(".body");
+    const why = card.querySelector(".why-line");
+
+    card.querySelector(".why-btn").onclick = (ev) => {
+      ev.stopPropagation();            // reading the verdict is not reading the body
+      if (!why.hidden) { why.hidden = true; return; }
+      why.innerHTML = verdictHtml(card.dataset.id);
+      why.hidden = false;
+    };
+
     card.onclick = async () => {
-      const body = card.querySelector(".body");
       if (!body.hidden) { body.hidden = true; return; }
       if (!body.dataset.loaded) {
         body.textContent = "loading…"; body.hidden = false;
@@ -198,6 +242,25 @@ async function renderEntries(el) {
       body.hidden = false;
     };
   }
+}
+
+/** The verdict for one memory, in plain language. */
+function verdictHtml(id) {
+  const v = verdicts.get(id);
+  if (!v) {
+    return turnsScanned
+      ? '<span class="pill">not considered</span> It did not come up in the last ' + turnsScanned +
+        " recorded turn(s) — nothing has asked for it."
+      : '<span class="pill">no data</span> No turns recorded yet, so there is nothing to explain.';
+  }
+  const when = esc(String(v.at).replace("T", " ").slice(0, 16)) + ' in chat <code>' + esc(v.chatId) + "</code>";
+  if (v.used) {
+    return '<span class="pill why">injected</span> ' + when + "<br>" +
+      (v.reasons || []).map((r) => "· " + esc(plain(r))).join("<br>") +
+      '<br><span class="k">relevance ' + (v.relevance ?? 0).toFixed(3) + "</span>";
+  }
+  return '<span class="pill nope">held back</span> ' + when + "<br>· " + esc(plain(v.rejection)) +
+    '<br><span class="k">relevance ' + (v.relevance ?? 0).toFixed(3) + "</span>";
 }
 
 async function renderReceipt(el) {
@@ -222,6 +285,7 @@ async function renderReceipt(el) {
     || '<div class="empty">Nothing was rejected — everything eligible fit.</div>';
 
   el.innerHTML =
+    '<button class="back" id="back">← back to memories</button>' +
     '<div class="note">Turn recorded ' + esc(String(r.createdAt).replace("T", " ").slice(0, 19)) +
       " · query " + esc(r.querySize) + " chars · injection <b class=\"status-" + esc(r.injection?.status) + '">' +
       esc(r.injection?.status) + "</b>" + (r.injection?.status === "mismatch"
@@ -230,6 +294,8 @@ async function renderReceipt(el) {
     "<h2>Injected — and why</h2>" + sel +
     "<h2>Considered and rejected — and why</h2>" + rej +
     (r.rejectedTruncated ? '<div class="note">Rejection list truncated; lowest-scoring were dropped first.</div>' : "");
+
+  $("back").onclick = () => { pick($("receipts"), null); state.mode = "entries"; render(); };
 }
 
 boot().catch((e) => { $("hdr").textContent = "cannot reach the memory server — " + e.message; });

@@ -3,12 +3,11 @@
 // Licensed under AGPL-3.0-only. See LICENSE.
 
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
-import { readFile } from "fs/promises";
 import { writeFileSync, mkdirSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { allowedCorsOrigin } from "./cors.js";
-import { defaultEnvPath } from "./paths.js";
+import { loadDotEnv } from "./env.js";
 import { getDataDir } from "./storage.js";
 import { localUrl, localEnabled, localModel, externalUpstream, externalModel } from "./llm-config.js";
 import { getCachedAuth } from "./auth-cache.js";
@@ -22,28 +21,6 @@ import { registerUiRoutes } from "./ui.js";
 import { updateStatus } from "./update.js";
 import { embeddingsStatus, describeEmbeddingsStatus } from "./embeddings.js";
 import { isEideticMode } from "./loader.js";
-
-// ── .env loader ───────────────────────────────────────────────────────────────
-// Reads sidecar/.env at startup so users can store their API key once instead
-// of re-entering it in every Marinara connection form.
-
-async function loadDotEnv(): Promise<void> {
-  try {
-    const raw = await readFile(defaultEnvPath(), "utf8");
-    for (const line of raw.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-      const eq = trimmed.indexOf("=");
-      if (eq < 1) continue;
-      const key = trimmed.slice(0, eq).trim();
-      const val = trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
-      // .env always wins — overwrites stale system env vars (e.g. from Python venvs)
-      if (key && val) process.env[key] = val;
-    }
-  } catch {
-    // no .env — fine
-  }
-}
 
 await loadDotEnv();
 

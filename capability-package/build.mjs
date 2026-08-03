@@ -40,9 +40,23 @@ const files = ENTRYPOINTS.map(({ from, to }) => {
   return { path: to, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.length };
 });
 
+// Required by manifest schemaVersion 2, and validated at Engine startup — a
+// missing or malformed value fails registry parsing hard enough to abort
+// bootstrap, so it is derived rather than typed by hand. Override via env when
+// building against a different Engine checkout.
+const BUILT_AGAINST = {
+  engineVersion: process.env.MARINARA_ENGINE_VERSION ?? "2.4.1",
+  engineCommit: process.env.MARINARA_ENGINE_COMMIT ?? "ac2c3c4dfb3d254895781a3e84c38146762ed4e2",
+};
+
+if (!/^[a-f0-9]{40}$/.test(BUILT_AGAINST.engineCommit)) {
+  throw new Error(`builtAgainst.engineCommit must be a 40-character hex sha: got "${BUILT_AGAINST.engineCommit}"`);
+}
+
 const manifest = {
   schemaVersion: 2,
   capabilityApi: { major: 1, minor: 7 },
+  builtAgainst: BUILT_AGAINST,
   id: "marinara-extender",
   name: "Marinara Extender",
   version: VERSION,

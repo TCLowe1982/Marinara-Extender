@@ -14,10 +14,27 @@
 // the Engine is a different version, and when the Engine is not running at all.
 // The in-Marinara panel is a later, additive surface — not a replacement.
 //
-// Slice 1 is READ-ONLY on purpose. Every mutating route is CSRF-guarded (a
-// browser page sends Origin, so it must carry a token), and editing memories is
-// the operation where a half-built UI does real damage. Reading answers the
-// urgent question first: what is stored, and why did recall behave that way.
+// Slice 1 was READ-ONLY on purpose — editing memories is where a half-built UI
+// does real damage, and reading answered the urgent question first: what is
+// stored, and why did recall behave that way.
+//
+// Slice 2 adds the mutations (edit / delete / restore / purge). Two rules govern
+// them, and both are load-bearing rather than decorative:
+//
+//   Delete is SOFT and the page says so at the point of action. The store's
+//   whole design rests on never destroying a memory on a single action —
+//   supersession is a tier move, cold storage is demotion not compression — and
+//   a delete button that silently contradicted that would be the one place the
+//   UI lied about the architecture. Purge, the single irreversible action in the
+//   product, is reachable only from inside the deleted view.
+//
+//   Mutations live ON the memory, next to Why?, for the reason TC gave when Why?
+//   was a top-level tab: model the surface around the question the reader is
+//   holding ("should this be here?"), not around the shape of the operation.
+//
+// Every mutating route is CSRF-guarded. This page is served BY the sidecar, but
+// same-origin does not exempt it: browsers send Origin on non-GET fetches, so
+// the token is required here exactly as it is for any other client.
 //
 // Self-contained: no CDN, no build step, no external fonts. It is served by the
 // same process that owns the data.
@@ -79,7 +96,7 @@ const PAGE = String.raw`<!DOCTYPE html>
   .fill { background: var(--accent); height: 100%; }
   code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
   .note { color: var(--muted); font-size: 12px; margin: -6px 0 16px; }
-  .why-btn { margin-left: auto; padding: 2px 11px; border-radius: 999px; cursor: pointer;
+  .why-btn { padding: 2px 11px; border-radius: 999px; cursor: pointer;
     background: none; border: 1px solid var(--accent); color: var(--accent); font: inherit; font-size: 11px; }
   .why-btn:hover { background: var(--bg); }
   .why-line { margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--edge);
@@ -88,6 +105,36 @@ const PAGE = String.raw`<!DOCTYPE html>
   .back { background: none; border: 1px solid var(--edge); color: var(--muted); cursor: pointer;
     border-radius: 7px; padding: 4px 11px; font: inherit; font-size: 12px; margin-bottom: 14px; }
   .back:hover { color: var(--text); }
+
+  /* Action buttons share the Why? shape so nothing reads as more important than
+     it is — except the destructive ones, which are coloured to be found. */
+  .act { padding: 2px 11px; border-radius: 999px; cursor: pointer; background: none;
+    border: 1px solid var(--edge); color: var(--muted); font: inherit; font-size: 11px; }
+  .act:hover { background: var(--bg); color: var(--text); }
+  .act.danger { border-color: var(--bad); color: var(--bad); }
+  .act.go { border-color: var(--good); color: var(--good); }
+  .act[disabled] { opacity: .5; cursor: default; }
+  .acts { display: flex; gap: 6px; margin-left: auto; }
+
+  .edit { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--edge); display: grid; gap: 8px; }
+  .edit label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+  .edit input, .edit textarea, .edit select {
+    width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--edge);
+    border-radius: 7px; padding: 8px 10px; font: inherit; font-size: 13px; }
+  .edit textarea { min-height: 120px; resize: vertical; line-height: 1.55; }
+  .edit .row { display: flex; gap: 8px; align-items: center; }
+  .edit .row select { width: auto; }
+
+  /* Reversibility is stated where the action is taken, not in a doc nobody opens. */
+  .confirm { margin-top: 10px; padding: 10px 12px; border-radius: 8px;
+    border: 1px solid var(--bad); background: rgba(255,128,149,.07); font-size: 13px; }
+  .confirm .row { display: flex; gap: 8px; margin-top: 9px; align-items: center; }
+  .toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    background: var(--panel); border: 1px solid var(--edge); border-radius: 9px;
+    padding: 9px 15px; font-size: 13px; box-shadow: 0 6px 24px rgba(0,0,0,.45); z-index: 9; }
+  .toast.bad { border-color: var(--bad); color: var(--bad); }
+  .card.gone { opacity: .55; }
+  .viewbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
 </style>
 </head>
 <body>
@@ -112,6 +159,7 @@ const PAGE = String.raw`<!DOCTYPE html>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const state = { mode: "entries", scope: "global", scopeId: "global", label: "Global", chatId: null };
+const VALID_STATUSES = ["open", "in_progress", "done", "deferred"];
 
 // entryId -> the most recent verdict we have for it, across recent turns.
 // Built once at load so a memory can answer "was I used, and why not" without
@@ -140,12 +188,62 @@ async function get(path) {
   return res.json();
 }
 
+// ── Mutating requests ────────────────────────────────────────────────────────
+// The CSRF token is minted per PROCESS, so a sidecar restart silently
+// invalidates whatever this page is holding — and the page can outlive the
+// server easily (a tab left open overnight). One 403 therefore means "stale",
+// not "forbidden": refetch once and retry, and only then surface a failure.
+
+let csrf = null;
+
+async function loadCsrf() {
+  csrf = (await get("/api/csrf-token")).token;
+  return csrf;
+}
+
+async function send(method, path, body) {
+  const attempt = async () => fetch(path, {
+    method,
+    headers: Object.assign({ "x-me-csrf": csrf || "" }, body ? { "content-type": "application/json" } : {}),
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+
+  let res = await attempt();
+  if (res.status === 403) {          // stale token — the sidecar restarted
+    await loadCsrf().catch(() => {});
+    res = await attempt();
+  }
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.error || method + " " + path + " -> " + res.status);
+  }
+  return res.json().catch(() => ({}));
+}
+
+let toastTimer = null;
+function toast(message, bad) {
+  const prev = document.querySelector(".toast");
+  if (prev) prev.remove();
+  clearTimeout(toastTimer);
+  const el = document.createElement("div");
+  el.className = "toast" + (bad ? " bad" : "");
+  el.textContent = message;
+  document.body.appendChild(el);
+  toastTimer = setTimeout(() => el.remove(), bad ? 6000 : 3200);
+}
+
+const q = () => "scope=" + encodeURIComponent(state.scope) + "&scopeId=" + encodeURIComponent(state.scopeId);
+
 function pick(el, on) { for (const b of el.querySelectorAll(".item")) b.classList.remove("sel"); if (on) on.classList.add("sel"); }
 
 async function boot() {
   const [idents, receipts] = await Promise.all([
     get("/api/identity").catch(() => ({ entries: [] })),
     get("/api/receipts").catch(() => ({ receipts: [] })),
+    // Not fatal: the page is useful read-only without it, and send() refetches
+    // on the first 403 anyway. Failing boot over an unusable Edit button would
+    // trade the whole browser for one feature.
+    loadCsrf().catch(() => {}),
   ]);
 
   $("scopes").innerHTML = '<button class="item sel" data-scope="global" data-id="global">Global</button>';
@@ -195,54 +293,245 @@ function select(scope, scopeId, label) {
   render();
 }
 
+const VIEWS = { entries: renderEntries, turn: renderReceipt, deleted: renderDeleted };
+
 async function render() {
   const el = $("view");
   el.innerHTML = '<div class="empty">loading…</div>';
-  try { state.mode === "entries" ? await renderEntries(el) : await renderReceipt(el); }
+  try { await VIEWS[state.mode](el); }
   catch (err) { el.innerHTML = '<div class="empty">' + esc(err.message) + "</div>"; }
 }
 
 async function renderEntries(el) {
-  const rows = await get("/api/entries?scope=" + encodeURIComponent(state.scope) + "&scopeId=" + encodeURIComponent(state.scopeId) + "&status=all");
-  if (!rows.length) { el.innerHTML = '<div class="empty">No memories stored for ' + esc(state.label) + " yet.</div>"; return; }
-  el.innerHTML = '<div class="note">' + rows.length + " memory(ies) in " + esc(state.label) +
+  const rows = await get("/api/entries?" + q() + "&status=all");
+  const bar = '<div class="viewbar"><button class="act" id="see-deleted">Recently deleted…</button></div>';
+  if (!rows.length) {
+    el.innerHTML = bar + '<div class="empty">No memories stored for ' + esc(state.label) + " yet.</div>";
+    $("see-deleted").onclick = () => { state.mode = "deleted"; render(); };
+    return;
+  }
+  el.innerHTML = bar +
+    '<div class="note">' + rows.length + " memory(ies) in " + esc(state.label) +
       " · click one to read it · <b>Why?</b> shows how it fared in the last " + turnsScanned + " recorded turn(s)</div>" +
     rows.map((r) => '<div class="card" data-id="' + esc(r.id) + '">' +
       '<div class="sum">' + esc(r.summary) + "</div>" +
       '<div class="meta"><span class="pill lane-' + esc(r.lane) + '">' + esc(String(r.lane).replace(/_/g, " ")) + "</span>" +
-      '<span class="pill">' + esc(r.status || "open") + "</span>" +
-      '<span class="pill">' + esc(r.tokens) + " tok</span>" +
+      '<span class="pill st">' + esc(r.status || "open") + "</span>" +
+      '<span class="pill tok">' + esc(r.tokens) + " tok</span>" +
       (r.supersededBy ? '<span class="pill nope">superseded</span>' : "") +
       (r.provenance === "unplayed" ? '<span class="pill nope">outline — never recalled</span>' : "") +
-      '<button class="why-btn" data-why="' + esc(r.id) + '">Why?</button>' +
-      "<span>" + esc(r.lastAccessed || "") + "</span></div>" +
+      '<span>' + esc(r.lastAccessed || "") + "</span>" +
+      '<span class="acts">' +
+        '<button class="why-btn">Why?</button>' +
+        '<button class="act edit-btn">Edit</button>' +
+        '<button class="act danger del-btn">Delete</button>' +
+      "</span></div>" +
       '<div class="why-line" hidden></div>' +
-      '<div class="body" hidden></div></div>').join("");
+      '<div class="body" hidden></div>' +
+      '<div class="pane"></div></div>').join("");
+
+  $("see-deleted").onclick = () => { state.mode = "deleted"; render(); };
 
   for (const card of el.querySelectorAll(".card")) {
     const body = card.querySelector(".body");
     const why = card.querySelector(".why-line");
+    const pane = card.querySelector(".pane");   // holds the editor / delete confirm
+    const id = card.dataset.id;
+
+    // Load the entry body once; both reading and editing need it.
+    const full = async () => {
+      if (!body.dataset.loaded) {
+        const e = await get("/api/entries/" + encodeURIComponent(id) + "?" + q());
+        body.textContent = e.content || "(no body)";
+        body.dataset.loaded = "1";
+        card.dataset.content = e.content || "";
+      }
+      return card.dataset.content || "";
+    };
 
     card.querySelector(".why-btn").onclick = (ev) => {
       ev.stopPropagation();            // reading the verdict is not reading the body
       if (!why.hidden) { why.hidden = true; return; }
-      why.innerHTML = verdictHtml(card.dataset.id);
+      why.innerHTML = verdictHtml(id);
       why.hidden = false;
+    };
+
+    card.querySelector(".edit-btn").onclick = async (ev) => {
+      ev.stopPropagation();
+      if (pane.dataset.open === "edit") { closePane(pane); return; }
+      const content = await full();
+      openEditor(card, pane, id, content);
+    };
+
+    card.querySelector(".del-btn").onclick = (ev) => {
+      ev.stopPropagation();
+      if (pane.dataset.open === "del") { closePane(pane); return; }
+      openDeleteConfirm(card, pane, id);
     };
 
     card.onclick = async () => {
       if (!body.hidden) { body.hidden = true; return; }
-      if (!body.dataset.loaded) {
-        body.textContent = "loading…"; body.hidden = false;
-        const full = await get("/api/entries/" + encodeURIComponent(card.dataset.id) +
-          "?scope=" + encodeURIComponent(state.scope) + "&scopeId=" + encodeURIComponent(state.scopeId));
-        body.textContent = full.content || "(no body)";
-        body.dataset.loaded = "1";
-      }
+      body.textContent = body.dataset.loaded ? body.textContent : "loading…";
       body.hidden = false;
+      await full();
     };
   }
 }
+
+function closePane(pane) { pane.innerHTML = ""; delete pane.dataset.open; }
+
+/**
+ * Inline editor. Deliberately not a modal: the surrounding card carries the
+ * lane, the status and the recall verdict, and those are exactly the context
+ * someone needs while deciding what to change. A modal would hide them.
+ */
+function openEditor(card, pane, id, content) {
+  pane.dataset.open = "edit";
+  const status = card.querySelector(".st").textContent.trim();
+  const summary = card.querySelector(".sum").textContent;
+  pane.innerHTML =
+    '<div class="edit">' +
+      "<div><label>Summary</label><input class=\"f-sum\" value=\"" + esc(summary) + "\"></div>" +
+      "<div><label>Body</label><textarea class=\"f-body\">" + esc(content) + "</textarea></div>" +
+      '<div class="row"><label>Status</label><select class="f-status">' +
+        VALID_STATUSES.map((s) => '<option value="' + s + '"' + (s === status ? " selected" : "") + ">" +
+          s.replace(/_/g, " ") + "</option>").join("") +
+      "</select>" +
+      '<span class="acts"><button class="act save">Save</button>' +
+      '<button class="act cancel">Cancel</button></span></div>' +
+      '<div class="note" style="margin:0">Marking an open thread <b>done</b> retires it from recall — it stays stored and readable.</div>' +
+    "</div>";
+
+  pane.querySelector(".cancel").onclick = (ev) => { ev.stopPropagation(); closePane(pane); };
+  pane.onclick = (ev) => ev.stopPropagation();   // typing must not toggle the body
+
+  pane.querySelector(".save").onclick = async (ev) => {
+    ev.stopPropagation();
+    const btn = ev.target;
+    btn.disabled = true; btn.textContent = "saving…";
+    try {
+      const r = await send("PATCH", "/api/entries/" + encodeURIComponent(id), {
+        scope: state.scope, scopeId: state.scopeId,
+        summary: pane.querySelector(".f-sum").value,
+        content: pane.querySelector(".f-body").value,
+        status: pane.querySelector(".f-status").value,
+      });
+      // Patch the card in place rather than re-rendering the list: a re-render
+      // would collapse every other card the reader had opened.
+      const e = r.entry || {};
+      card.querySelector(".sum").textContent = e.summary ?? "";
+      card.querySelector(".st").textContent = e.status ?? "open";
+      card.querySelector(".tok").textContent = (e.tokens ?? 0) + " tok";
+      card.dataset.content = e.content ?? "";
+      card.querySelector(".body").textContent = e.content || "(no body)";
+      closePane(pane);
+      toast("Saved.");
+    } catch (err) {
+      btn.disabled = false; btn.textContent = "Save";
+      toast(err.message, true);
+    }
+  };
+}
+
+/**
+ * Delete confirmation.
+ *
+ * The wording is the feature. Delete here is a SOFT delete — the entry moves to
+ * cold storage and stays recoverable — and that has to be said at the point of
+ * action, because every instinct a user brings to a red button says otherwise.
+ * The store never destroys a memory on one action anywhere else in the
+ * architecture; this is the one screen where that promise is visible.
+ */
+function openDeleteConfirm(card, pane, id) {
+  pane.dataset.open = "del";
+  pane.innerHTML =
+    '<div class="confirm">Delete this memory? It moves to <b>Recently deleted</b> and can be restored — ' +
+    "nothing is destroyed by this action." +
+    '<div class="row"><button class="act danger yes">Delete</button>' +
+    '<button class="act no">Cancel</button></div></div>';
+  pane.onclick = (ev) => ev.stopPropagation();
+  pane.querySelector(".no").onclick = () => closePane(pane);
+  pane.querySelector(".yes").onclick = async (ev) => {
+    const btn = ev.target;
+    btn.disabled = true;
+    try {
+      await send("DELETE", "/api/entries/" + encodeURIComponent(id) + "?" + q());
+      card.classList.add("gone");
+      closePane(pane);
+      card.querySelector(".acts").innerHTML = '<span class="pill nope">deleted — recoverable</span>';
+      toast("Moved to Recently deleted.");
+    } catch (err) {
+      btn.disabled = false;
+      toast(err.message, true);
+    }
+  };
+}
+
+/**
+ * The recovery view — and the only place purge is reachable.
+ *
+ * Purge is the single irreversible action in the product, so it is deliberately
+ * two decisions deep: come in here on purpose, then confirm. It is not offered
+ * on the main list at all, because a control that destroys data should never sit
+ * one misclick from a control that does not.
+ */
+async function renderDeleted(el) {
+  const { deleted } = await get("/api/deleted?" + q());
+  const bar = '<button class="back" id="back-del">← back to memories</button>';
+  if (!deleted || !deleted.length) {
+    el.innerHTML = bar + '<div class="empty">Nothing deleted in ' + esc(state.label) + ".</div>";
+    $("back-del").onclick = back;
+    return;
+  }
+  el.innerHTML = bar +
+    '<div class="note">' + deleted.length + " deleted memory(ies) in " + esc(state.label) +
+      " · restore puts one back into recall · purge is permanent</div>" +
+    deleted.map((r) => '<div class="card" data-id="' + esc(r.id) + '">' +
+      '<div class="sum">' + esc(r.summary) + "</div>" +
+      // listDeleted returns { id, summary, lane, deletedAt } only — no tokens.
+      '<div class="meta"><span class="pill lane-' + esc(r.lane) + '">' + esc(String(r.lane).replace(/_/g, " ")) + "</span>" +
+      "<span>deleted " + esc(String(r.deletedAt || "").replace("T", " ").slice(0, 16)) + "</span>" +
+      '<span class="acts"><button class="act go restore-btn">Restore</button>' +
+      '<button class="act danger purge-btn">Purge…</button></span></div>' +
+      '<div class="pane"></div></div>').join("");
+
+  $("back-del").onclick = back;
+
+  for (const card of el.querySelectorAll(".card")) {
+    const id = card.dataset.id;
+    const pane = card.querySelector(".pane");
+
+    card.querySelector(".restore-btn").onclick = async (ev) => {
+      ev.target.disabled = true;
+      try {
+        await send("POST", "/api/entries/" + encodeURIComponent(id) + "/restore?" + q());
+        card.remove();
+        toast("Restored.");
+      } catch (err) { ev.target.disabled = false; toast(err.message, true); }
+    };
+
+    card.querySelector(".purge-btn").onclick = () => {
+      if (pane.dataset.open) { closePane(pane); return; }
+      pane.dataset.open = "purge";
+      pane.innerHTML =
+        '<div class="confirm"><b>Permanently destroy this memory?</b> Unlike Delete, this cannot be undone — ' +
+        "the entry and its file are removed. Restore it instead if you are unsure." +
+        '<div class="row"><button class="act danger yes">Purge permanently</button>' +
+        '<button class="act no">Cancel</button></div></div>';
+      pane.querySelector(".no").onclick = () => closePane(pane);
+      pane.querySelector(".yes").onclick = async (ev) => {
+        ev.target.disabled = true;
+        try {
+          await send("DELETE", "/api/entries/" + encodeURIComponent(id) + "?" + q() + "&purge=true");
+          card.remove();
+          toast("Purged permanently.");
+        } catch (err) { ev.target.disabled = false; toast(err.message, true); }
+      };
+    };
+  }
+}
+
+function back() { state.mode = "entries"; render(); }
 
 /** The verdict for one memory, in plain language. */
 function verdictHtml(id) {

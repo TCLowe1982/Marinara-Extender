@@ -18,6 +18,7 @@ import { startPoller } from "./poller.js";
 import { handleDetectedTurn } from "./turn-bridge.js";
 import { engineUrl } from "./engine-client.js";
 import { registerSetupRoutes } from "./setup.js";
+import { registerUiRoutes } from "./ui.js";
 import { updateStatus } from "./update.js";
 import { embeddingsStatus, describeEmbeddingsStatus } from "./embeddings.js";
 import { isEideticMode } from "./loader.js";
@@ -170,6 +171,7 @@ app.post("/chat/completions", handleChatCompletions); // alias when the URL is s
 // http://127.0.0.1:{PORT}/extension.js — raw extension file for the copy button.
 
 registerSetupRoutes(app, { port: PORT });
+registerUiRoutes(app);
 
 // ── Management API ────────────────────────────────────────────────────────────
 

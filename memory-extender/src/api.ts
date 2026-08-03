@@ -38,7 +38,7 @@ import { backupDataDir, snapshotScope } from "./backup.js";
 import { digestMessages, snapshotSession, type DigestMessage } from "./digest.js";
 import { processResponse, extractRememberTags } from "./writer.js";
 import { loadContext } from "./loader.js";
-import { confirmInjection } from "./receipts.js";
+import { confirmInjection, listReceipts, readReceipt } from "./receipts.js";
 import { runPromotion, runPromotionAll, recordRecitation } from "./promotion.js";
 import { runCleanup } from "./cleanup.js";
 import { handleTurnNotification } from "./poller.js";
@@ -1639,6 +1639,21 @@ export function registerApiRoutes(app: FastifyInstance): void {
       return reply.send({ ok: true, status });
     },
   );
+
+  // ── Receipts (read) ───────────────────────────────────────────────────────
+  // The retrieval decision, readable. These back the "why didn't it remember X"
+  // view: what was considered, what was chosen and why, what was rejected and
+  // why. Read-only and non-mutating, so no CSRF token is needed.
+
+  app.get("/api/receipts", async (_req, reply) => {
+    return reply.send({ receipts: await listReceipts() });
+  });
+
+  app.get<{ Params: { chatId: string } }>("/api/receipts/:chatId", async (req, reply) => {
+    const receipt = await readReceipt(req.params.chatId).catch(() => null);
+    if (!receipt) return reply.code(404).send({ error: "no receipt for this chat yet" });
+    return reply.send(receipt);
+  });
 
   // ── One-click update (uo4) ────────────────────────────────────────────────
   // Spawns the visible updater console; it stops this process, pulls, builds,

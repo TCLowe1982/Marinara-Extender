@@ -25,6 +25,7 @@
 // only produce confident explanations of wrong answers.
 
 import { createHash } from "crypto";
+import { readdir } from "fs/promises";
 import { join } from "path";
 import { stringify } from "yaml";
 import { atomicWriteFile, getDataDir, assertSafeId, readYamlFile, type Scope } from "./storage.js";
@@ -158,6 +159,30 @@ export async function writeReceipt(receipt: RetrievalReceipt): Promise<void> {
 
 export async function readReceipt(chatId: string): Promise<RetrievalReceipt | null> {
   return readYamlFile<RetrievalReceipt>(receiptPath(chatId));
+}
+
+/**
+ * Chat ids that have a receipt, newest turn first.
+ *
+ * Reads each file rather than trusting mtime: a receipt carries its own
+ * createdAt, and ordering by the recorded turn is what a reader actually wants.
+ * Unreadable or half-written files are skipped — a corrupt diagnostic must not
+ * take down the diagnostics view.
+ */
+export async function listReceipts(): Promise<Array<{ chatId: string; createdAt: string; status: InjectionStatus }>> {
+  let files: string[];
+  try {
+    files = (await readdir(receiptsDir())).filter((name) => name.endsWith(".yaml"));
+  } catch {
+    return [];
+  }
+  const rows: Array<{ chatId: string; createdAt: string; status: InjectionStatus }> = [];
+  for (const file of files) {
+    const receipt = await readYamlFile<RetrievalReceipt>(join(receiptsDir(), file)).catch(() => null);
+    if (!receipt?.chatId) continue;
+    rows.push({ chatId: receipt.chatId, createdAt: receipt.createdAt, status: receipt.injection?.status ?? "pending" });
+  }
+  return rows.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 }
 
 /**

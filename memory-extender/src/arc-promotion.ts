@@ -20,6 +20,7 @@
 // Centroids recompute once per pass, not per beat (Resolved #4).
 
 import { join } from "path";
+import { harvestBodyTerms } from "./relevance.js";
 import {
   getDataDir,
   readYamlFile,
@@ -397,6 +398,7 @@ async function writeArcRecap(
     path,
     summary: recap.summary,
     tokens: recap.tokens,
+    bodyTerms: harvestBodyTerms(recap.content, recap.summary),
     lane: recap.lane,
     status: "open",
     lastAccessed: date,

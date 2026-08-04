@@ -63,6 +63,20 @@ export interface IndexEntry {
   supersededAt?: string;    // ISO datetime
   deletedAt?: string;       // ISO datetime — USER-deleted (in cold, recoverable); distinct from supersededBy
   provenance?: EntryProvenance; // "unplayed" = outline; never recalled (see EntryProvenance)
+  /**
+   * Names that appear in the entry's BODY but not its summary (tp5).
+   *
+   * The loader ranks over this index precisely so it never opens 7441 entry
+   * files per turn — which meant anything named only in a body was unreachable
+   * by topic forever. Measured: of 96 entries whose bodies name Erica/Cathmore,
+   * 59 could not be summoned by her name. Carrying the names on the row makes
+   * them matchable at index cost (~30 bytes/entry) instead of read cost.
+   *
+   * Written by harvestBodyTerms (relevance.ts) at entry-creation time and
+   * backfilled by scripts/backfill-body-terms.mjs. Absent on rows written before
+   * tp5 — treat as "not yet harvested", never as "this entry has no names".
+   */
+  bodyTerms?: string[];
 }
 
 export interface ScopeIndex {

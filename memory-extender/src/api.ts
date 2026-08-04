@@ -11,6 +11,7 @@
 // Scopes route:     GET /api/scopes
 
 import type { FastifyInstance } from "fastify";
+import { harvestBodyTerms } from "./relevance.js";
 import {
   readIndex,
   readEntry,
@@ -270,6 +271,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
       path: relativePath,
       summary: entry.summary,
       tokens: entry.tokens,
+      bodyTerms: harvestBodyTerms(entry.content, entry.summary),
       lane,
       status,
       lastAccessed: now,
@@ -325,6 +327,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
       ...indexEntry,
       summary: updated.summary,
       tokens: updated.tokens,
+      bodyTerms: harvestBodyTerms(updated.content, updated.summary),
       status: updated.status,
       lastAccessed: updated.lastAccessed,
     });
@@ -589,6 +592,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
       await upsertIndexEntry(rem.scope, scopeId, {
         id, path: relativePath, summary,
         tokens: entry.tokens, lane: rem.lane,
+        bodyTerms: harvestBodyTerms(entry.content, summary),
         status: "open", lastAccessed: now,
       });
       // Add to cache so later tags in the same message don't duplicate each other.
@@ -989,6 +993,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
         path: relativePath,
         summary,
         tokens: entry.tokens,
+        bodyTerms: harvestBodyTerms(entry.content, summary),
         lane,
         status: "open",
         lastAccessed: now,

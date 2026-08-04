@@ -17,6 +17,7 @@
 //   Key conflict: renameIdentityKey("lara", "lara_morrigan")
 
 import { readFile, rename, access } from "fs/promises";
+import { harvestBodyTerms } from "./relevance.js";
 import { join } from "path";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 import {
@@ -377,6 +378,7 @@ export async function importIdentity(
       path: relativePath,
       summary: entry.summary,
       tokens: entry.tokens,
+      bodyTerms: harvestBodyTerms(entry.content, entry.summary),
       lane: entry.lane,
       status: entry.status ?? "open",
       lastAccessed: entry.lastAccessed,

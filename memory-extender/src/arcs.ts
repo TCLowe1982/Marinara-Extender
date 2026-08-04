@@ -19,6 +19,7 @@
 // retrieval unit without any bespoke eviction mechanism.
 
 import { join } from "path";
+import { harvestBodyTerms } from "./relevance.js";
 import {
   getDataDir,
   readYamlFile,
@@ -208,6 +209,7 @@ export async function ingestSceneRecap(input: SceneRecapInput): Promise<SceneRec
     path,
     summary: recap.summary,
     tokens: recap.tokens,
+    bodyTerms: harvestBodyTerms(recap.content, recap.summary),
     lane: "character_topics",
     status: "open",
     lastAccessed: date,

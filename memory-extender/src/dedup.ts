@@ -28,6 +28,7 @@
 //   and FR3 (LLM reconciliation) consume. Plain restatements still dedup.
 
 import { join } from "path";
+import { harvestBodyTerms } from "./relevance.js";
 import {
   readIndex,
   writeEntry,
@@ -266,6 +267,7 @@ export async function createEntry(
     path: relativePath,
     summary,
     tokens: entry.tokens,
+    bodyTerms: harvestBodyTerms(entry.content, summary),
     lane: input.lane,
     status,
     lastAccessed: now,

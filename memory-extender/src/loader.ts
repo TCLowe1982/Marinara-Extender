@@ -15,6 +15,7 @@ import {
   type Entry,
   type Bookmark,
 } from "./storage.js";
+import { relevanceScore, RELEVANCE_STOPWORDS } from "./relevance.js";
 import { computeScore } from "./promotion.js";
 import { getSoftClock, formatClockContext, timesenseEnabled } from "./soft-clock.js";
 import { listActiveThreads } from "./threads.js";
@@ -84,76 +85,10 @@ export interface LoaderSession {
 }
 
 // ── Relevance (lexical) ─────────────────────────────────────────────────────────
-// How much of a memory summary shows up in the recent conversation. This is what
-// lets a memory resurface when its topic comes up, even if it had drifted out of
-// the working set — the miss-path a pure-recency cache lacks.
-//
-// Scored as ACCUMULATED EVIDENCE, not as a fraction of the summary (MarinaraExtender-vrw).
-// The old form was hit / words.size, which divided by summary length and so
-// punished a memory for its own detail: one proper noun matched out of a
-// fifteen-word summary scored 0.067, while a four-word throwaway sharing a
-// common verb scored 0.250. Measured on the live stores, entries like "wants to
-// remember past crimes" outranked every substantive record of a named person,
-// and a memory noting that the author had FORGOTTEN a name outranked the memory
-// containing it. Density is exactly what a summary should have, so normalising
-// it away is backwards.
-//
-// Each distinct meaningful summary word present in the conversation is one unit
-// of evidence. The score saturates, so more evidence always ranks higher while
-// no summary is penalised for length.
-
-const RELEVANCE_STOPWORDS = new Set(
-  ("a an and are as at be been but by for from had has have he her his i if in into is it its me my " +
-   "no not of on or our she that the their them then they this to up us was we were what when which " +
-   "who will with would you your").split(" "),
-);
-
-// Tuned so one ordinary matched term ≈ 0.30, two ≈ 0.51, three ≈ 0.66.
-// Keeps every score inside [0,1) so the thread-sibling discount and the
-// existing threshold comparisons keep their meaning.
-const RELEVANCE_SATURATION = 0.357;
-
-// A matched NAME is worth more than a matched common word. Length was only ever
-// a crude proxy for this: terse summaries looked "focused" because they carried
-// little but their subject. Weighting the subject directly is what we actually
-// meant, and capitalisation already marks it — we were lowercasing that signal
-// away before scoring. At 2.5 a single matched name (≈0.59) outranks two matched
-// common words (≈0.51), so "wants to remember past crimes" can no longer beat
-// the record of a person the conversation just named.
-const PROPER_NOUN_WEIGHT = 2.5;
-
-const tokenize = (s: string) =>
-  s.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean);
-
-// Meaningful summary terms → match weight. Capitalised mid-summary tokens are
-// treated as names; the leading token is exempt because a capital there is just
-// sentence case ("Statement about established knowledge" names nobody).
-function summaryTerms(summary: string): Map<string, number> {
-  const terms = new Map<string, number>();
-  let seenWord = false;
-  for (const rawToken of summary.split(/\s+/)) {
-    const bare = rawToken.replace(/[^\p{L}\p{N}]/gu, "");
-    if (!bare) continue;
-    const lower = bare.toLowerCase();
-    const isName = seenWord && /^\p{Lu}/u.test(bare);
-    seenWord = true;
-    if (lower.length <= 2 || RELEVANCE_STOPWORDS.has(lower)) continue;
-    const weight = isName ? PROPER_NOUN_WEIGHT : 1;
-    terms.set(lower, Math.max(terms.get(lower) ?? 0, weight));
-  }
-  return terms;
-}
-
-function relevanceScore(summary: string, recentText: string): number {
-  if (!recentText) return 0;
-  const terms = summaryTerms(summary);
-  if (terms.size === 0) return 0;
-  const hay = new Set(tokenize(recentText));
-  let evidence = 0;
-  for (const [term, weight] of terms) if (hay.has(term)) evidence += weight;
-  if (evidence === 0) return 0;
-  return 1 - Math.exp(-RELEVANCE_SATURATION * evidence);
-}
+// The scoring vocabulary moved to relevance.ts (tp5): terms are now harvested
+// from an entry body at WRITE time and compared here at READ time, and the two
+// sides must tokenise identically or the stored terms silently never match.
+// One definition, imported by both.
 
 // ── Pass 1: load all three scope indexes ─────────────────────────────────────
 
@@ -260,7 +195,7 @@ function selectEntries(
   // missing memory needs to see — so it must be scored to be rankable in the
   // receipt, not written off at zero.
   const ownRelevance = new Map<string, number>();
-  for (const e of index.entries) ownRelevance.set(e.id, relevanceScore(e.summary, recentText));
+  for (const e of index.entries) ownRelevance.set(e.id, relevanceScore(e.summary, recentText, e.bodyTerms));
 
   // done = resolved; supersededBy = replaced fact (FR2) — normally already in
   // cold, filtered here defensively so a stale fact never shares a prompt with
@@ -394,7 +329,7 @@ async function coldRecall(
     if (e.deletedAt) continue;
     // Outline never resurfaces, cold or hot — see selectEntries.
     if (e.provenance === "unplayed") continue;
-    const r = relevanceScore(e.summary, recentText);
+    const r = relevanceScore(e.summary, recentText, e.bodyTerms);
     if (r > RELEVANCE_CREDIT_THRESHOLD && (!best || r > best.r)) best = { e, r };
   }
   if (!best) return null;
@@ -697,7 +632,7 @@ export async function loadContext(
         // a memory that came from the archive.
         sel.traces.push({
           id: hit.id, scope, summary: traceSummary(hit.summary), tokens: hit.tokens,
-          relevance: relevanceScore(hit.summary, recentText), reasons: ["cold_recall"],
+          relevance: relevanceScore(hit.summary, recentText, hit.bodyTerms), reasons: ["cold_recall"],
         });
       }
     };

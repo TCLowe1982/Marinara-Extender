@@ -78,6 +78,23 @@ export interface IndexEntry {
   supersededBy?: string;    // id of the replacing entry
   supersededAt?: string;    // ISO datetime
   deletedAt?: string;       // ISO datetime — USER-deleted (in cold, recoverable); distinct from supersededBy
+  /**
+   * ISO datetime — the reply this came from was THROWN AWAY by a re-roll (s2lw).
+   *
+   * A third retirement reason, and deliberately not either of the existing two.
+   * It is not deletedAt: the user deleted nothing, and surfacing these in
+   * "Recently deleted" would attribute an act to them they never performed. It
+   * is not supersededBy either, which is documented as "id of the replacing
+   * entry" — a re-roll is not 1:1 (three entries in, two out, different scopes)
+   * and often replaces with NOTHING, because the new text need not trip the same
+   * thresholds. Putting a non-replacement in that field is the same class of
+   * mistake as widening a serialized enum, which this codebase has been bitten
+   * by twice.
+   *
+   * So: the entry is retired, kept at full fidelity in cold, and says truthfully
+   * WHY. sourceMessageId + sourceSwipeIndex already record which swipe lost.
+   */
+  discardedAt?: string;
   provenance?: EntryProvenance; // "unplayed" = outline; never recalled (see EntryProvenance)
   /**
    * Names that appear in the entry's BODY but not its summary (tp5).
@@ -501,6 +518,48 @@ export async function softDeleteEntry(scope: Scope, scopeId: string, id: string)
   await moveToCold(scope, scopeId, [id]);
   console.info(`[ME:delete] ${scope}:${scopeId} — ${id} soft-deleted (moved to cold, recoverable)`);
   return true;
+}
+
+// ── Discarded swipes: retire what the user threw away (s2lw) ─────────────────
+// A re-roll keeps the message id and moves the swipe index. Everything derived
+// from a LOSING swipe of that message is retired here — same tier move to cold
+// as a delete, but marked discardedAt so it never claims the user deleted it and
+// never claims a specific fact replaced it.
+//
+// SCOPE ENUMERATION IS THE CALLER'S JOB, and it is the honest limit of this: a
+// turn's entries can land in any character's ledger (tier-2 routes by analyzed
+// subject) and there is no index from message id back to scope. The caller
+// passes the scopes it can name — the session character, the chat, the roster —
+// so an entry routed to an off-roster character is NOT retired. Logged, not
+// silently ignored; widening it needs a real reverse index, not a store scan
+// per turn.
+export async function discardLosingSwipe(
+  scope: Scope,
+  scopeId: string,
+  sourceMessageId: string,
+  keptSwipeIndex: number | undefined,
+): Promise<string[]> {
+  if (!sourceMessageId) return [];
+  const now = new Date().toISOString();
+  const hit: string[] = [];
+  await mutateIndex(scope, scopeId, (index) => {
+    for (const r of index.entries) {
+      if (r.sourceMessageId !== sourceMessageId) continue;
+      // The kept swipe is canon — never retire it. An entry with no recorded
+      // swipe cannot be proven to be a loser, so it stays (absent means unknown).
+      if (typeof r.sourceSwipeIndex !== "number") continue;
+      if (r.sourceSwipeIndex === keptSwipeIndex) continue;
+      if (r.discardedAt) continue; // already retired by an earlier re-roll
+      r.discardedAt = now;
+      hit.push(r.id);
+    }
+  });
+  if (hit.length === 0) return [];
+  await moveToCold(scope, scopeId, hit);
+  console.info(
+    `[ME:discard] ${scope}:${scopeId} — retired ${hit.length} entr${hit.length === 1 ? "y" : "ies"} from a discarded swipe of ${sourceMessageId}`,
+  );
+  return hit;
 }
 
 // Cold entries the USER deleted (deletedAt set, not a supersession) — newest first.

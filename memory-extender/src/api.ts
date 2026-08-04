@@ -20,6 +20,7 @@ import {
   softDeleteEntry,
   listDeleted,
   restoreDeletedEntry,
+  discardLosingSwipe,
   purgeColdEntry,
   upsertIndexEntry,
   removeEntriesBySourceChat,
@@ -521,12 +522,41 @@ export function registerApiRoutes(app: FastifyInstance): void {
   app.post<{
     Body: { characterId: string; characterName?: string; participantIds?: string[]; personaName?: string; sceneTitle?: string; chatId: string; turnNumber?: number; messageText?: string; userMessageText?: string; sourceMessageId?: string; sourceSwipeIndex?: number; regenerated?: boolean };
   }>("/api/process-turn", async (req, reply) => {
-    const { characterId, characterName, participantIds, personaName, sceneTitle, chatId, turnNumber = 0, messageText = "", userMessageText = "", sourceMessageId, sourceSwipeIndex } = req.body ?? {};
+    const { characterId, characterName, participantIds, personaName, sceneTitle, chatId, turnNumber = 0, messageText = "", userMessageText = "", sourceMessageId, sourceSwipeIndex, regenerated = false } = req.body ?? {};
     if (!characterId || !chatId) {
       return reply.code(400).send({ error: "characterId and chatId are required" });
     }
 
     const identityKey = await resolveIdentity(characterId, characterName);
+
+    // s2lw — RETIRE THE DISCARDED SWIPE BEFORE INGESTING THE NEW ONE.
+    //
+    // Order is load-bearing. Retiring first means the incoming beats are ranked
+    // against a ledger that no longer contains the thrown-away version, so the
+    // dedup matrix cannot skip a new beat as a "duplicate" of a memory that is
+    // on its way out. Doing it after would make the outcome depend on which of
+    // the two ran first.
+    //
+    // Awaited, unlike the tiers below: it is a small bounded index edit, and the
+    // whole point is that it lands before capture. Failures are logged and never
+    // fail the turn — a re-roll that keeps a stale entry is bad, a re-roll that
+    // 500s and loses the new one is worse.
+    if (regenerated && sourceMessageId) {
+      const targets: { scope: "character" | "chat"; scopeId: string }[] = [
+        { scope: "character", scopeId: identityKey },
+        { scope: "chat", scopeId: chatId },
+      ];
+      let retired = 0;
+      for (const t of targets) {
+        retired += (await discardLosingSwipe(t.scope, t.scopeId, sourceMessageId, sourceSwipeIndex).catch((e) => {
+          console.warn(`[ME:discard] ${t.scope}:${t.scopeId} failed —`, e);
+          return [] as string[];
+        })).length;
+      }
+      console.info(
+        `[ME:discard] re-roll of ${sourceMessageId} (kept swipe ${sourceSwipeIndex ?? "?"}) — retired ${retired} entr${retired === 1 ? "y" : "ies"}`,
+      );
+    }
 
     // A long user message is a told story (dq9): the live one-message-one-chunk
     // path would flatten a multi-page memory into ~1 beat. When this trips, the

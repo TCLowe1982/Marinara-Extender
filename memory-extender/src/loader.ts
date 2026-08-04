@@ -329,6 +329,11 @@ async function coldRecall(
     // it must never be recalled back into Current on its own (that would undo
     // the delete). Resurrection is the explicit "Recently deleted" → Restore path.
     if (e.deletedAt) continue;
+    // Same for a memory derived from a reply the user threw away (s2lw). It is
+    // kept for the audit trail, not for recall — letting cold recall resurrect it
+    // would put the discarded text's facts back in front of the character, which
+    // is the whole bug.
+    if (e.discardedAt) continue;
     // Outline never resurfaces, cold or hot — see selectEntries.
     if (e.provenance === "unplayed") continue;
     const r = relevanceScore(e.summary, recentText, e.bodyTerms);

@@ -172,6 +172,8 @@ export interface CreateEntryInput {
   sourceChatId?: string; // tag for clean per-chat re-import
   threadId?: string;     // narrative thread membership, inherited from the beat
   turnStart?: number;    // where in the source chat the moment happened
+  sourceMessageId?: string;  // which message this came from (06pq) — see storage.ts
+  sourceSwipeIndex?: number; // which swipe OF that message; the pair is the identity
   // What the entry IS: an incident (a beat-bound moment) or a trait (a
   // standing pattern/fact about who someone is). Drives the character_topics
   // dedup matrix; omitted = legacy behavior (aggressive dedup).
@@ -185,8 +187,47 @@ type DedupVerdict =
   | { action: "skip"; against: IndexEntry }
   | { action: "create-correction"; against: IndexEntry };
 
+/**
+ * Are these two beats the SAME moment — the proof that licenses a skip?
+ *
+ * TWO KEYS, AND THE PREFERENCE ORDER MATTERS (06pq).
+ *
+ * 1. MESSAGE + SWIPE, when both sides carry it. This is exact. Crucially it is
+ *    the PAIR: a re-roll keeps the message id and moves only the swipe index, so
+ *    matching on the id alone would declare the re-rolled reply "the same
+ *    moment" as the one the user threw away — and the KEPT text would be skipped
+ *    as a duplicate while the DISCARDED text stayed. Silently inverted, and it
+ *    reads as an ordinary "skipped duplicate" in the log. A differing swipe is
+ *    therefore NOT the same moment; it is a supersession, which is s2lw's job.
+ *
+ * 2. CHAT + TURN NEIGHBOURHOOD, as the fallback. Correct for the IMPORT path and
+ *    for legacy rows written before the pair existed, where a real turn number
+ *    flows. It is what the live path used to rely on — and could not, because the
+ *    poller sends no turnNumber, so every live turn stamped turnStart 0 and
+ *    |0-0| <= window made this test vacuously true for any two beats in a chat.
+ *    That defeated the guard entirely on the path that matters most.
+ *
+ * Requiring the fallback's turnStart to be a real number is not enough to fix
+ * that on its own: 0 IS a real number, and a genuine first turn is 0 too. Only
+ * per-message identity separates them.
+ */
+function sameMoment(
+  input: { sourceChatId?: string; turnStart?: number; sourceMessageId?: string; sourceSwipeIndex?: number },
+  e: IndexEntry,
+): boolean {
+  if (input.sourceMessageId && e.sourceMessageId) {
+    return input.sourceMessageId === e.sourceMessageId &&
+           input.sourceSwipeIndex === e.sourceSwipeIndex;
+  }
+  return (
+    !!input.sourceChatId && input.sourceChatId === e.sourceChatId &&
+    typeof input.turnStart === "number" && typeof e.turnStart === "number" &&
+    Math.abs(input.turnStart - e.turnStart) <= SAME_MOMENT_TURN_WINDOW
+  );
+}
+
 function decide(
-  input: { lane: Lane; summary: string; content: string; kind?: EntryKind; sourceChatId?: string; turnStart?: number },
+  input: { lane: Lane; summary: string; content: string; kind?: EntryKind; sourceChatId?: string; turnStart?: number; sourceMessageId?: string; sourceSwipeIndex?: number },
   existing: IndexEntry[],
 ): DedupVerdict {
   const { lane, summary, content, kind } = input;
@@ -200,13 +241,8 @@ function decide(
       // A similar summary is NOT sufficient: the analyzer emits identical
       // genre boilerplate for genuinely distinct moments (measured: 37% of
       // Mari's vulnerability beats collapsed, 78 byte-identical summaries).
-      // A true recapture (swipe/regen) is the SAME moment — same source chat,
-      // same turn neighborhood. Without that proof, the moments both persist.
-      const sameMoment =
-        !!input.sourceChatId && input.sourceChatId === e.sourceChatId &&
-        typeof input.turnStart === "number" && typeof e.turnStart === "number" &&
-        Math.abs(input.turnStart - e.turnStart) <= SAME_MOMENT_TURN_WINDOW;
-      if (sameMoment) return { action: "skip", against: e };
+      // Without positive proof that two beats are the same moment, both persist.
+      if (sameMoment(input, e)) return { action: "skip", against: e };
     }
     return { action: "create" };
   }
@@ -259,6 +295,8 @@ export async function createEntry(
     ...(input.sourceChatId ? { sourceChatId: input.sourceChatId } : {}),
     ...(input.threadId ? { threadId: input.threadId } : {}),
     ...(typeof input.turnStart === "number" ? { turnStart: input.turnStart } : {}),
+    ...(input.sourceMessageId ? { sourceMessageId: input.sourceMessageId } : {}),
+    ...(typeof input.sourceSwipeIndex === "number" ? { sourceSwipeIndex: input.sourceSwipeIndex } : {}),
   };
 
   const relativePath = await writeEntry(scope, scopeId, entry);
@@ -274,6 +312,8 @@ export async function createEntry(
     ...(input.sourceChatId ? { sourceChatId: input.sourceChatId } : {}),
     ...(input.threadId ? { threadId: input.threadId } : {}),
     ...(typeof input.turnStart === "number" ? { turnStart: input.turnStart } : {}),
+    ...(input.sourceMessageId ? { sourceMessageId: input.sourceMessageId } : {}),
+    ...(typeof input.sourceSwipeIndex === "number" ? { sourceSwipeIndex: input.sourceSwipeIndex } : {}),
   });
   return entry;
 }
@@ -293,7 +333,11 @@ export async function createEntryIfUnique(
   const idx = await readIndex(scope, scopeId);
   const existingInLane = (idx?.entries ?? []).filter((e) => e.lane === input.lane);
   const verdict = decide(
-    { lane: input.lane, summary, content, kind: input.kind, sourceChatId: input.sourceChatId, turnStart: input.turnStart },
+    {
+      lane: input.lane, summary, content, kind: input.kind,
+      sourceChatId: input.sourceChatId, turnStart: input.turnStart,
+      sourceMessageId: input.sourceMessageId, sourceSwipeIndex: input.sourceSwipeIndex,
+    },
     existingInLane,
   );
   if (verdict.action === "skip") {

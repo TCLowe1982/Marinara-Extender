@@ -58,6 +58,53 @@ describe("character_topics matrix", () => {
     expect(recapture).toBeNull();
   });
 
+  // ── Message+swipe provenance (06pq / s2lw) ────────────────────────────────
+  // The live path sends no turnNumber, so turnStart is 0 on EVERY polled turn
+  // and the chat+turn proof above is vacuous there. These pin the real key.
+
+  const incidentAt = (summary: string, p: { msg?: string; swipe?: number; turn?: number }) =>
+    createEntryIfUnique("character", "mari", {
+      lane: "character_topics", summary, content: "", kind: "incident", sourceChatId: "chat-1",
+      ...(typeof p.turn === "number" ? { turnStart: p.turn } : {}),
+      ...(p.msg ? { sourceMessageId: p.msg } : {}),
+      ...(typeof p.swipe === "number" ? { sourceSwipeIndex: p.swipe } : {}),
+    });
+
+  const boiler = "[vulnerability] Dr. Mari Zielińska exposes her personal fear";
+
+  it("THE 06pq REGRESSION: distinct live turns both stamped turnStart 0 still persist", async () => {
+    // Measured in the live store: 462 rows at turnStart=0, 99 at -1, because the
+    // poller sends no turnNumber. Under chat+turn alone |0-0| <= window is always
+    // true, so the second of any two similar beats in a chat was skipped — the
+    // exact 37% collapse the guard exists to prevent. The message id separates them.
+    expect(await incidentAt(boiler, { msg: "msg-a", swipe: 0, turn: 0 })).not.toBeNull();
+    expect(await incidentAt(boiler, { msg: "msg-b", swipe: 0, turn: 0 })).not.toBeNull();
+  });
+
+  it("the SAME message at the SAME swipe is one moment — skipped", async () => {
+    // A re-read of a turn already ingested, or the two chunks of one turn
+    // colliding. This is the protection that must survive the fix.
+    expect(await incidentAt(boiler, { msg: "msg-a", swipe: 0, turn: 0 })).not.toBeNull();
+    expect(await incidentAt(boiler, { msg: "msg-a", swipe: 0, turn: 0 })).toBeNull();
+  });
+
+  it("the SAME message at a DIFFERENT swipe is NOT one moment — both persist", async () => {
+    // The inversion s2lw requires, and the reason the key is a PAIR. Matching on
+    // message id alone would skip the re-rolled reply as a duplicate of the one
+    // the user threw away — keeping the discarded text and dropping the kept
+    // text, while logging an ordinary "skipped duplicate". The old entry is
+    // retired by supersession, not by refusing to write the new one.
+    expect(await incidentAt(boiler, { msg: "msg-a", swipe: 0, turn: 0 })).not.toBeNull();
+    expect(await incidentAt(boiler, { msg: "msg-a", swipe: 1, turn: 0 })).not.toBeNull();
+  });
+
+  it("falls back to chat+turn when either side predates the pair", async () => {
+    // Legacy and import-path rows carry no sourceMessageId. They must keep the
+    // old behaviour rather than becoming un-dedupable.
+    expect(await incidentAt(boiler, { turn: 40 })).not.toBeNull();
+    expect(await incidentAt(boiler, { turn: 41 })).toBeNull();
+  });
+
   it("IDENTICAL boilerplate summaries from DIFFERENT moments both persist", async () => {
     // The measured failure: the analyzer emitted byte-identical genre labels
     // for distinct moments; similarity alone must never collapse them.

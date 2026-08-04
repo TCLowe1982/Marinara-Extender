@@ -21,7 +21,15 @@
 
 import { listCharacters, parseData } from "./engine-client.js";
 import { syncMemoryToLorebook } from "./lorebook-writer.js";
-import type { DetectedTurn } from "./poller.js";
+import { swipeIndexOf, type DetectedTurn } from "./poller.js";
+
+// The engine's message id. Reused from the raw record rather than added to
+// DetectedTurn, so there is exactly one notion of "which message" and it is the
+// same one the watermark and the regeneration check already use.
+function messageIdOf(message: Record<string, unknown>): string | undefined {
+  const id = message.id;
+  return typeof id === "string" && id ? id : undefined;
+}
 
 function sidecarPort(): number {
   return parseInt(process.env.MARINARA_EXTENDER_PORT ?? "3001", 10);
@@ -121,6 +129,14 @@ export async function handleDetectedTurn(turn: DetectedTurn): Promise<BridgeResu
       sceneTitle: turn.chatName,
       messageText,
       userMessageText: turn.precedingUserText,
+      // 06pq: which message, and which swipe of it. The poller sends no
+      // turnNumber (there is none to send — it reads a 10-message tail, not an
+      // absolute position), so without this every live turn stamps turnStart 0
+      // and the same-moment dedup proof goes vacuous. The PAIR is what makes a
+      // re-roll distinguishable from a re-read; see storage.ts.
+      sourceMessageId: messageIdOf(turn.message),
+      sourceSwipeIndex: swipeIndexOf(turn.message),
+      regenerated: turn.regenerated,
     });
   } catch (e) {
     console.error(`[ME:bridge] ingestion failed for chat ${turn.chatId} — ${String(e)}`);

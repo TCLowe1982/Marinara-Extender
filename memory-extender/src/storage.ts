@@ -56,6 +56,22 @@ export interface IndexEntry {
   sourceChatId?: string;    // chat this entry was imported/derived from (for clean re-import)
   threadId?: string;        // narrative thread membership (nthr-* — see threads.ts)
   turnStart?: number;       // where in the source chat the moment happened (same-moment dedup)
+  /**
+   * WHICH MESSAGE this entry came from, and WHICH SWIPE of it (06pq/s2lw).
+   *
+   * The pair is the identity of a moment, and it must stay a pair. A re-roll
+   * keeps the message id and changes only the swipe index — so the id alone
+   * cannot tell "the same turn read twice" from "the user threw that reply away
+   * and took another". The whole swipe path already models it this way
+   * (ChatWatermark carries lastMessageId + lastSwipeIndex); this mirrors it
+   * rather than introducing a competing notion of identity.
+   *
+   * Why it exists at all: the poller sends no turnNumber, so turnStart collapses
+   * to 0 on every live turn and the same-moment dedup proof goes vacuous (06pq).
+   * Absent means unknown, never "no message" — same rule as bodyTerms.
+   */
+  sourceMessageId?: string;
+  sourceSwipeIndex?: number;
   // Fact supersession (FR2): a newer fact replaced this one. Deliberately a
   // separate field, NOT an EntryStatus value — see the EntryStatus audit:
   // widening a serialized enum breaks empirical consumers silently.
@@ -104,6 +120,8 @@ export interface Entry {
   sourceChatId?: string;    // chat this entry was imported/derived from (for clean re-import)
   threadId?: string;        // narrative thread membership (nthr-* — see threads.ts)
   turnStart?: number;       // where in the source chat the moment happened (same-moment dedup)
+  sourceMessageId?: string; // 06pq/s2lw — see the IndexEntry note; the PAIR is the moment's identity
+  sourceSwipeIndex?: number;
   supersededBy?: string;    // FR2: id of the replacing entry (see IndexEntry note)
   supersededAt?: string;
   provenance?: EntryProvenance; // "unplayed" = outline; never recalled (see EntryProvenance)

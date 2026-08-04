@@ -519,9 +519,9 @@ export function registerApiRoutes(app: FastifyInstance): void {
   // Body: { characterId, chatId, turnNumber, messageText }
 
   app.post<{
-    Body: { characterId: string; characterName?: string; participantIds?: string[]; personaName?: string; sceneTitle?: string; chatId: string; turnNumber?: number; messageText?: string; userMessageText?: string };
+    Body: { characterId: string; characterName?: string; participantIds?: string[]; personaName?: string; sceneTitle?: string; chatId: string; turnNumber?: number; messageText?: string; userMessageText?: string; sourceMessageId?: string; sourceSwipeIndex?: number; regenerated?: boolean };
   }>("/api/process-turn", async (req, reply) => {
-    const { characterId, characterName, participantIds, personaName, sceneTitle, chatId, turnNumber = 0, messageText = "", userMessageText = "" } = req.body ?? {};
+    const { characterId, characterName, participantIds, personaName, sceneTitle, chatId, turnNumber = 0, messageText = "", userMessageText = "", sourceMessageId, sourceSwipeIndex } = req.body ?? {};
     if (!characterId || !chatId) {
       return reply.code(400).send({ error: "characterId and chatId are required" });
     }
@@ -734,6 +734,10 @@ export function registerApiRoutes(app: FastifyInstance): void {
             const entry = await createEntryIfUnique("character", targetKey, {
               lane: "character_topics", summary, content: capContent(rawContent), timeContext: timeCtx, kind: "incident",
               sourceChatId: chatId, turnStart: result.chunk.turnStart,
+              // 06pq: the real same-moment key on the live path. turnStart above
+              // is 0 for every polled turn, so it cannot separate two moments.
+              ...(sourceMessageId ? { sourceMessageId } : {}),
+              ...(typeof sourceSwipeIndex === "number" ? { sourceSwipeIndex } : {}),
               ...(threadId ? { threadId } : {}),
             });
             if (entry) {
@@ -783,6 +787,12 @@ export function registerApiRoutes(app: FastifyInstance): void {
               lane: fact.lane, summary, content: capContent(fact.text), timeContext: timeCtx,
               // Ambient facts describe who someone IS — the trait side of the matrix.
               ...(fact.lane === "character_topics" ? { kind: "trait" as const } : {}),
+              // 06pq/s2lw provenance. Traits do not use the same-moment test, but
+              // they DO need to be retirable when the reply they came from is
+              // thrown away — a re-roll invents identity claims as readily as beats.
+              sourceChatId: chatId,
+              ...(sourceMessageId ? { sourceMessageId } : {}),
+              ...(typeof sourceSwipeIndex === "number" ? { sourceSwipeIndex } : {}),
             });
             if (entry) saved++;
           }

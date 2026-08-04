@@ -172,6 +172,31 @@ export const PERSON_MIN_PRONOUN_RATE = 0.30;
 export const PERSON_MIN_INDEPENDENCE = 0.30;
 
 /**
+ * How many entities an alias may point at before it stops expanding.
+ *
+ * Independent use answers "does this part mean the whole". It does NOT answer
+ * "which whole" — and a surname is shared. Erica Cathmore and Gunnery Sergeant
+ * Cathmore are her and her FATHER, two people; Thomas Collier and Thomas Lowe
+ * are a character and the user. Linking through a shared surname is the
+ * one-name-two-entities half of 76aw's doctrine amendment, and it is the more
+ * dangerous half: collapsing two entities into one is referent bleed across the
+ * membrane, which is what produced the ctopic-4mke2qmh corruption.
+ *
+ * Measured on the live store, 23% of aliases point at more than one entity, and
+ * degree tracks the danger closely: "cathmore" collides 2 ways (a family),
+ * "thomas" collides 11 (a character, the user, and extraction noise).
+ *
+ * At 2 the recall win survives essentially intact — "tell me about Cathmore"
+ * reaches 91 of 108 versus 91 uncapped and 25 with no expansion at all — while
+ * the 11-way collision stops expanding entirely. One entry is the whole cost.
+ *
+ * This is a fail-closed bound, not a resolution: two people sharing a surname
+ * still link. Telling them apart needs the entity resolution in slice 2, which
+ * is also the only thing that can carry the world tag.
+ */
+export const ALIAS_MAX_AMBIGUITY = 2;
+
+/**
  * How often a token appears OUTSIDE any multi-word run.
  *
  * The subtraction is the whole point. Counting raw appearances makes every part
@@ -253,6 +278,13 @@ export async function writeEntityIndex(index: EntityIndex): Promise<void> {
 export function buildCueMap(index: EntityIndex | null): Map<string, string[]> {
   const map = new Map<string, string[]>();
   if (!index) return map;
+
+  // How many distinct entities each alias points at. An alias over the limit is
+  // dropped entirely rather than expanded to a guess — see ALIAS_MAX_AMBIGUITY.
+  const degree = new Map<string, number>();
+  for (const e of index.entities) {
+    for (const a of e.aliases) degree.set(a, (degree.get(a) ?? 0) + 1);
+  }
   const add = (from: string, to: string) => {
     if (from === to) return;
     const existing = map.get(from);
@@ -267,7 +299,10 @@ export function buildCueMap(index: EntityIndex | null): Map<string, string[]> {
     // place the links are actually consumed.
     if (!e.aliases.length) continue;
     const targets = [...new Set([...e.canonical.toLowerCase().split(" "), ...e.aliases])];
-    for (const from of e.aliases) for (const to of targets) add(from, to);
+    for (const from of e.aliases) {
+      if ((degree.get(from) ?? 0) > ALIAS_MAX_AMBIGUITY) continue;
+      for (const to of targets) add(from, to);
+    }
   }
   return map;
 }

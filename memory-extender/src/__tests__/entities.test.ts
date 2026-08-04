@@ -176,3 +176,43 @@ describe("cue expansion", () => {
     expect(expandCues("tell me about the Ring", compound).toLowerCase()).not.toContain("elden");
   });
 });
+
+describe("shared surnames — the one-name-two-entities half of the problem", () => {
+  // Erica Cathmore and Gunnery Sergeant Cathmore are her and her FATHER. Both
+  // legitimately earn "cathmore" as an alias, because both are called it. That
+  // is the limit of what independent use can tell us: it answers "does this part
+  // mean the whole", never "WHICH whole".
+  const family = [
+    "Erica Cathmore ran the survey.", "Erica Cathmore filed it.", "Erica Cathmore again.",
+    "Cathmore disagreed.", "Cathmore signed off.", "Cathmore left.",
+    "Erica was there.", "Erica objected.", "Erica wrote it up.",
+  ];
+  const crowd = (n: number) =>
+    Array.from({ length: n }, (_, i) => Array.from({ length: MIN_ENTITY_COUNT }, () =>
+      `Thomas Person${i} spoke. Thomas appeared alone. Thomas again.`)).flat();
+
+  it("stops expanding an alias that points at too many entities", () => {
+    // "thomas" collides 11 ways on the live store — a character, the user, and
+    // extraction noise. Expanding it merges all of them.
+    const cues = buildCueMap(buildIndex(observe(...crowd(6))));
+    expect(expandCues("what about Thomas", cues)).toBe("what about Thomas");
+  });
+
+  it("still expands a surname shared by only a couple of entities", () => {
+    // Costs one entry on the live store versus no cap at all, and is the whole
+    // reason the Cathmore recall win survives.
+    const cues = buildCueMap(buildIndex(observe(...family)));
+    expect(expandCues("what did Cathmore decide", cues).toLowerCase()).toContain("erica");
+  });
+
+  it("does not claim to have RESOLVED which entity a shared surname means", () => {
+    // Deliberately pinned: the cap is a fail-closed bound, not a disambiguator.
+    // Two people sharing a surname under the limit still link, and telling them
+    // apart needs entity resolution (76aw slice 2). If this ever starts passing
+    // for the wrong reason, the bound has been mistaken for a fix.
+    const index = buildIndex(observe(...family));
+    const cathmore = index.entities.find((e) => e.canonical === "Erica Cathmore");
+    expect(cathmore?.aliases).toContain("cathmore");
+    expect(cathmore).not.toHaveProperty("resolvedReferent");
+  });
+});

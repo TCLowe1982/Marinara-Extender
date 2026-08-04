@@ -17,6 +17,7 @@ import {
 } from "./storage.js";
 import { relevanceScore, RELEVANCE_STOPWORDS } from "./relevance.js";
 import { readEntityIndex, buildCueMap, expandCues } from "./entities.js";
+import { readUserIdentity } from "./user-identity.js";
 import { computeScore } from "./promotion.js";
 import { getSoftClock, formatClockContext, timesenseEnabled } from "./soft-clock.js";
 import { listActiveThreads } from "./threads.js";
@@ -597,12 +598,14 @@ export async function loadContext(
   // cue also means a corrected alias takes effect on the next turn with no
   // backfill. Failure is non-fatal: without the index this is the old behaviour.
   const rawRecentText = session.recentText ?? "";
-  const entityIndex = rawRecentText ? await readEntityIndex().catch(() => null) : null;
-  const recentText = entityIndex
-    ? expandCues(rawRecentText, buildCueMap(entityIndex))
+  const [entityIndex, userIdentity] = rawRecentText
+    ? await Promise.all([readEntityIndex().catch(() => null), readUserIdentity().catch(() => null)])
+    : [null, null];
+  const recentText = (entityIndex || userIdentity)
+    ? expandCues(rawRecentText, buildCueMap(entityIndex, userIdentity))
     : rawRecentText;
-  if (entityIndex && recentText !== rawRecentText) {
-    dbg(`cues expanded — +${recentText.length - rawRecentText.length} chars from ${entityIndex.entities.length} entities`);
+  if (recentText !== rawRecentText) {
+    dbg(`cues expanded — +${recentText.length - rawRecentText.length} chars from ${entityIndex?.entities.length ?? 0} entities${userIdentity ? " + declared identity" : ""}`);
   }
 
   // Thread label relevance for this chat's active threads — lets a beat be

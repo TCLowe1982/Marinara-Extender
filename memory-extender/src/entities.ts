@@ -40,6 +40,7 @@
 import { join } from "path";
 import { stringify } from "yaml";
 import { atomicWriteFile, getDataDir, readYamlFile } from "./storage.js";
+import { excludedForms, userCueLinks, type UserIdentity } from "./user-identity.js";
 
 // ── Extraction ───────────────────────────────────────────────────────────────
 
@@ -275,23 +276,35 @@ export async function writeEntityIndex(index: EntityIndex): Promise<void> {
  * has to reach entries that say "Erica", and a cue of "Erica" has to reach
  * entries that say "Cathmore".
  */
-export function buildCueMap(index: EntityIndex | null): Map<string, string[]> {
+export function buildCueMap(
+  index: EntityIndex | null,
+  identity?: UserIdentity | null,
+): Map<string, string[]> {
   const map = new Map<string, string[]>();
-  if (!index) return map;
+  if (!index && !identity) return map;
 
-  // How many distinct entities each alias points at. An alias over the limit is
-  // dropped entirely rather than expanded to a guess — see ALIAS_MAX_AMBIGUITY.
-  const degree = new Map<string, number>();
-  for (const e of index.entities) {
-    for (const a of e.aliases) degree.set(a, (degree.get(a) ?? 0) + 1);
-  }
   const add = (from: string, to: string) => {
     if (from === to) return;
     const existing = map.get(from);
     if (existing) { if (!existing.includes(to)) existing.push(to); }
     else map.set(from, [to]);
   };
-  for (const e of index.entities) {
+
+  // How many distinct entities each alias points at. An alias over the limit is
+  // dropped entirely rather than expanded to a guess — see ALIAS_MAX_AMBIGUITY.
+  const degree = new Map<string, number>();
+  for (const e of index?.entities ?? []) {
+    for (const a of e.aliases) degree.set(a, (degree.get(a) ?? 0) + 1);
+  }
+
+  // Forms the user has DISCLAIMED never carry an inferred link. Without this,
+  // a declared "thomas lowe" and an inferred "Thomas Collier" still meet through
+  // the token they share, and the exclusion the user just wrote down is undone
+  // by the corpus.
+  const disclaimed = excludedForms(identity ?? null);
+
+  for (const e of index?.entities ?? []) {
+    if (disclaimed.has(e.canonical.toLowerCase())) continue;
     // ONLY an alias may be a cue. Linking every canonical part to every other
     // would defeat the gate entirely — "Ring" would reach "Elden Ring", which is
     // precisely the false coreference the independence test exists to refuse.
@@ -303,6 +316,13 @@ export function buildCueMap(index: EntityIndex | null): Map<string, string[]> {
       if ((degree.get(from) ?? 0) > ALIAS_MAX_AMBIGUITY) continue;
       for (const to of targets) add(from, to);
     }
+  }
+
+  // The declaration goes LAST and is exempt from the ambiguity bound. That bound
+  // exists to stop a GUESS spreading; a declared identity is not a guess, and
+  // suppressing it is what left the user unreachable by their own name.
+  for (const [from, targets] of userCueLinks(identity ?? null)) {
+    for (const to of targets) add(from, to);
   }
   return map;
 }

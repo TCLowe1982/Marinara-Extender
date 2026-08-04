@@ -12,6 +12,7 @@
 
 import type { FastifyInstance } from "fastify";
 import { harvestBodyTerms } from "./relevance.js";
+import { readUserIdentity, writeUserIdentity } from "./user-identity.js";
 import {
   readIndex,
   readEntry,
@@ -1823,6 +1824,34 @@ export function registerApiRoutes(app: FastifyInstance): void {
   app.get("/api/identity", async (_req, reply) => {
     const entries = await getIdentityMap();
     return reply.send({ entries });
+  });
+
+  // ── GET/PUT /api/user-identity ────────────────────────────────────────────
+  // The user's DECLARED identity (egj3) — distinct from /api/identity above,
+  // which maps character CARD ids to stable keys. This is who the human is.
+  // Declared rather than inferred because the corpus cannot supply it: measured
+  // on the live store, the character's surname and the user's never once appear
+  // in the same entry, so nothing in the text separates them.
+
+  app.get("/api/user-identity", async (_req, reply) => {
+    return reply.send({ identity: await readUserIdentity() });
+  });
+
+  app.put<{
+    Body: { canonical?: string; aliases?: string[]; excludes?: string[] };
+  }>("/api/user-identity", async (req, reply) => {
+    const { canonical, aliases, excludes } = req.body ?? {};
+    if (!canonical?.trim()) {
+      return reply.code(400).send({ error: "canonical is required" });
+    }
+    for (const [field, value] of [["aliases", aliases], ["excludes", excludes]] as const) {
+      if (value !== undefined && !Array.isArray(value)) {
+        return reply.code(400).send({ error: `${field} must be an array of strings` });
+      }
+    }
+    const identity = await writeUserIdentity({ canonical, aliases, excludes });
+    console.info(`[ME:identity] user declared as "${identity.canonical}" — ${identity.aliases.length} form(s), ${identity.excludes.length} exclusion(s)`);
+    return reply.send({ identity });
   });
 
   // ── POST /api/identity/relink ─────────────────────────────────────────────

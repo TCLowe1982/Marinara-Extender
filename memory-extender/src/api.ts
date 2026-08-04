@@ -21,6 +21,7 @@ import {
   listDeleted,
   restoreDeletedEntry,
   discardLosingSwipe,
+  readColdIndex,
   purgeColdEntry,
   upsertIndexEntry,
   removeEntriesBySourceChat,
@@ -89,6 +90,7 @@ import { encodeBeat } from "./sentiment/encoder.js";
 import { classifyAmbient } from "./ambient.js";
 import { createEntryIfUnique, isDuplicate, readSupersessionCandidates } from "./dedup.js";
 import { Progress, progressEnabled } from "./progress.js";
+import { reviewDiscardedEntries } from "./discard-review.js";
 import { computeJobKey, loadJob, saveJob, deleteJob, clearJobs } from "./story-jobs.js";
 import type { Chunk } from "./sentiment/types.js";
 import mammoth from "mammoth";
@@ -547,14 +549,24 @@ export function registerApiRoutes(app: FastifyInstance): void {
         { scope: "chat", scopeId: chatId },
       ];
       let retired = 0;
+      let queued = 0;
       for (const t of targets) {
-        retired += (await discardLosingSwipe(t.scope, t.scopeId, sourceMessageId, sourceSwipeIndex).catch((e) => {
+        const rows = await discardLosingSwipe(t.scope, t.scopeId, sourceMessageId, sourceSwipeIndex).catch((e) => {
           console.warn(`[ME:discard] ${t.scope}:${t.scopeId} failed —`, e);
-          return [] as string[];
-        })).length;
+          return [] as import("./storage.js").IndexEntry[];
+        });
+        retired += rows.length;
+        // a90l: retirement settles a CLEAN discard. Where the fact had already
+        // propagated — recited, on a thread, or displacing an older fact —
+        // retracting the source does not unwind that, so it goes to the held
+        // review lane for a human. Read the cold index once, after the move.
+        if (rows.length > 0) {
+          const cold = await readColdIndex(t.scope, t.scopeId).catch(() => null);
+          queued += await reviewDiscardedEntries(t.scope, t.scopeId, rows, cold?.entries ?? []);
+        }
       }
       console.info(
-        `[ME:discard] re-roll of ${sourceMessageId} (kept swipe ${sourceSwipeIndex ?? "?"}) — retired ${retired} entr${retired === 1 ? "y" : "ies"}`,
+        `[ME:discard] re-roll of ${sourceMessageId} (kept swipe ${sourceSwipeIndex ?? "?"}) — retired ${retired} entr${retired === 1 ? "y" : "ies"}, ${queued} queued for review`,
       );
     }
 

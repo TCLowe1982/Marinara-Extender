@@ -533,15 +533,18 @@ export async function softDeleteEntry(scope: Scope, scopeId: string, id: string)
 // so an entry routed to an off-roster character is NOT retired. Logged, not
 // silently ignored; widening it needs a real reverse index, not a store scan
 // per turn.
+// Returns the retired ROWS, not just their ids: the caller has to look at what
+// each one had already become (recited? on a thread? superseding something?) to
+// decide whether retirement alone actually settles it — see a90l.
 export async function discardLosingSwipe(
   scope: Scope,
   scopeId: string,
   sourceMessageId: string,
   keptSwipeIndex: number | undefined,
-): Promise<string[]> {
+): Promise<IndexEntry[]> {
   if (!sourceMessageId) return [];
   const now = new Date().toISOString();
-  const hit: string[] = [];
+  const hit: IndexEntry[] = [];
   await mutateIndex(scope, scopeId, (index) => {
     for (const r of index.entries) {
       if (r.sourceMessageId !== sourceMessageId) continue;
@@ -551,11 +554,11 @@ export async function discardLosingSwipe(
       if (r.sourceSwipeIndex === keptSwipeIndex) continue;
       if (r.discardedAt) continue; // already retired by an earlier re-roll
       r.discardedAt = now;
-      hit.push(r.id);
+      hit.push({ ...r });
     }
   });
   if (hit.length === 0) return [];
-  await moveToCold(scope, scopeId, hit);
+  await moveToCold(scope, scopeId, hit.map((r) => r.id));
   console.info(
     `[ME:discard] ${scope}:${scopeId} — retired ${hit.length} entr${hit.length === 1 ? "y" : "ies"} from a discarded swipe of ${sourceMessageId}`,
   );

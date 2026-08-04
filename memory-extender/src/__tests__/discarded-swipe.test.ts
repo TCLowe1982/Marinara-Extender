@@ -54,7 +54,7 @@ describe("discardLosingSwipe", () => {
 
     const retired = await discardLosingSwipe("chat", "c1", "m1", 1);
 
-    expect(retired).toEqual([discarded!.id]);
+    expect(retired.map((r) => r.id)).toEqual([discarded!.id]);
     expect(await hotIds()).toEqual([kept!.id]);
     expect((await coldRow(discarded!.id))?.discardedAt).toBeTruthy();
   });
@@ -104,7 +104,7 @@ describe("discardLosingSwipe", () => {
     // text need not trip the same thresholds, so there may be no new entry at all.
     const discarded = await fromSwipe("From the discarded reply", "m1", 0);
     const retired = await discardLosingSwipe("chat", "c1", "m1", 1);
-    expect(retired).toEqual([discarded!.id]);
+    expect(retired.map((r) => r.id)).toEqual([discarded!.id]);
     expect(await hotIds()).toEqual([]);
   });
 

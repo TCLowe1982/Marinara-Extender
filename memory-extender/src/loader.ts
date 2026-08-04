@@ -438,9 +438,15 @@ Check existing entries first — don't duplicate. One [remember: ...] per distin
   [remember: lane="open_threads", content="User wants to plan Emma's birthday party."]
   [remember: lane="character_topics", content="I want to ask how the party went next time."]
   [remember: lane="open_threads", scope="chat", content="Mid-way through editing the cover letter."]
+  [remember: lane="user_topics", scope="global", content="User is a paramedic in Leeds."]
 
   lane  — user_topics | open_threads | character_topics
-  scope — character (default, persists everywhere) | chat (this conversation only)
+  scope — character (default) — you remember it in every conversation with this user
+          chat                — this conversation only; situational, ends with the scene
+          global              — EVERY character remembers it. Rare. Only for facts that
+                                stay true no matter who the user is talking to, like their
+                                job, their city, or a name they go by. Never use it for
+                                anything about you or about your scenes together.
 
 WHEN THE USER ASKS YOU TO REMEMBER:
 If the user directly tells you to remember or save something ("remember that…",
@@ -449,7 +455,8 @@ If the user directly tells you to remember or save something ("remember that…"
 genuinely matters" rule above — save it even if it seems minor. Put what they want
 kept in content, pick the fitting lane (a fact about them → user_topics, a task or
 plan → open_threads), and briefly confirm in your reply ("Got it — I'll remember
-that."). Keep character scope unless they say it's only for this conversation.
+that."). Keep character scope unless they say it's only for this conversation
+(scope="chat"), or that everyone should know it (scope="global").
 Distinguish a real request ("remember my sister's name is Mei") from incidental
 phrasing ("remember when we went to Rome?") — only the former is a save.
 
@@ -467,7 +474,7 @@ Commands are stripped from output. Use sparingly.
 
 // Assemble the injected instructions. The time-sense block is included only when
 // MARINARA_EXTENDER_TIMESENSE=1 (default off for v1.0).
-function memorySystemInstructions(): string {
+export function memorySystemInstructions(): string {
   return MEMORY_INSTRUCTIONS_HEAD
     + (timesenseEnabled() ? MEMORY_INSTRUCTIONS_TIMESENSE : "")
     + MEMORY_INSTRUCTIONS_BODY;

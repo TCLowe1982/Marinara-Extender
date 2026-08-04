@@ -5,8 +5,10 @@
 ## The moving parts
 
 1. **The sidecar process** — `npm run dev` / `npm start` / `Marinara_Extender_Start.bat`. Binds **`127.0.0.1:3001`**. If it isn't running, the extension's panel button never appears and the lorebook freezes on whatever was last injected.
-2. **`.env`** — optional, at `memory-extender/.env`. Loaded at startup; **`.env` always wins** over system env vars (so a stale var from a Python venv can't shadow it). Paths resolve relative to the install, not the launch cwd.
+2. **`.env`** — optional, at `memory-extender/.env`. Loaded at startup by `loadDotEnv` (`env.ts`). **The shell wins; `.env` fills in what the environment did not set** (`bkdz`, changed 2026-08-04). It used to be the other way round, which meant a value passed on the command line was read and then silently replaced — so a per-run override was impossible for tests, demos or reproductions, and the failure was invisible. Shadowed keys are now named on startup (`[ME:env] taken from the environment, overriding .env: …`), and a shadowed **credential** gets its own `console.warn`, because a shadowed flag announces itself in the banner two lines later while a shadowed key is invisible until an unrelated request fails. Paths resolve relative to the install, not the launch cwd.
 3. **The loader** — pasted once into Marinara → Settings → Extensions; fetches the live extension each Marinara load (see `extension.md`).
+4. **The memory browser** — `http://127.0.0.1:3001/` (or `/memory`). The user-facing way to read and manage memories; see `architecture.md`. Needs nothing but the sidecar.
+5. **The launcher/watchdog** — `Marinara_Extender_Start.bat` → `start.ps1`. **`[Q]` quits and stops the sidecar; `[D]` detaches and leaves it running.** Quit used to leave the server up, which made shutting down a two-window dance in a specific order — kill the sidecar first and the watchdog resurrects it. Ctrl+C also stops it now; a hard window kill notifies nothing by design and still leaves it running.
 
 Config can also be saved from the **`/setup` page** form or `POST /api/config`, which writes `.env` and applies immediately (no restart).
 
@@ -53,7 +55,7 @@ Config can also be saved from the **`/setup` page** form or `POST /api/config`, 
 
 | Var | Default | Notes |
 |---|---|---|
-| `MARINARA_EXTENDER_POLLER` | `0` | `1` starts the pull detector. Off by default: it nuke-and-recreates real lorebooks, so double-writing with the extension must be a decision, not a surprise. |
+| `MARINARA_EXTENDER_POLLER` | `0` | `1` starts the pull detector. Off by default: it nuke-and-recreates real lorebooks, so double-writing with the extension must be a decision, not a surprise. **Always set `0` when starting a SECOND sidecar** — see the hazard below. |
 | `MARINARA_EXTENDER_POLLER_INTERVAL_MS` | `5000` | Poll period. Detection latency ≈ one interval. |
 | `MARINARA_EXTENDER_TURN_HOOK` | `0` | `1` enables `POST /api/engine/turn-complete`, the push detector. **Also needs the engine to be sending** — `TURN_NOTIFY_URL=http://127.0.0.1:3001/api/engine/turn-complete` on the `feat/turn-complete-notification` branch. Stock Marinara never calls it, so the flag alone does nothing. |
 
@@ -80,6 +82,16 @@ Independent flags — either detector alone, or both. They share one watermark b
 | `ME_HTTP_LOG` | off | `1` enables Fastify's pino-pretty HTTP request/response logs (otherwise log level is `warn`; the app's own `console.info` carries the meaningful context). A debug toggle, not a convention. |
 
 > The long-form story trip point (a user message long enough to route through the windowed pipeline) is a constant in `api.ts` (~1500 chars). Check `api.ts` before quoting it as configurable.
+
+## Hazard: a second sidecar is not isolated by its data dir
+
+Spinning up a second instance on a scratch `MARINARA_EXTENDER_DATA` is the normal way to demo, test or reproduce a bug — and it looks isolated. It is not. **The data dir isolates the STORE, not the ENGINE CONNECTION**, and the poller defaults to on, so the second instance polls the *live* engine, ingests real turns into the scratch store, and **rewrites real character lorebooks from it** on every ingest (`1akw`, observed live 2026-08-03).
+
+`lorebook-writer`'s serialization (`_lorebookWriteChain`) is **per process**, so two sidecars against one engine are two uncoordinated writers, and each write nukes and recreates both entries by design — last writer wins outright.
+
+Always: `MARINARA_EXTENDER_POLLER=0` on any second instance. **Verify it took effect** — read the banner, which must say `Engine poller: off`. Before the `bkdz` env fix, `.env` silently overrode the flag and the banner was the only way to notice.
+
+To detect after the fact: compare `updatedAt` on the `Marinara Extender — *` lorebooks' *Active Context* entry; a timestamp inside the second instance's lifetime names the affected character. It self-heals on the next real turn (turn-bridge is the only caller of `syncMemoryToLorebook`).
 
 ## Choosing a model
 

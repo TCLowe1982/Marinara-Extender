@@ -13,6 +13,10 @@ type EntryProvenance = "played" | "unplayed";
 ```
 
 - **Scope** — *global* (rules everywhere) · *character* (per stable identity, persists across all that character's chats) · *chat* (this conversation only).
+
+  **On a `[remember:]` tag, an unrecognised scope falls back to `character`** — the same default as an omitted one (`c0b7`, fixed 2026-08-04; case and whitespace are normalised first, and a bad value is warned once per distinct value). It used to fall to `chat`, the *narrowest* scope, so invalid and absent disagreed in the damaging direction: a typo'd `scope="charcter"` buried the memory in the conversation that produced it, silently, where it died with that chat. The value is emitted by a **model**, so casing and near-miss synonyms are exactly what arrives. Two things worth knowing: `lane` has the same shape but its fallback *is* its default, so a lane typo is harmless — scope was the only field where the two disagreed; and the parser accepts `global` while the prompt never teaches it, so a model can reach the broadest scope by guessing the word (`t6ox`, open — a policy call, not a code one).
+
+  A fourth **persona** tier is designed but blocked (`0qx6`): facts about the persona known to all characters who interact with them. It must not ship flat — without the epistemic layer (`1m9`) underneath it leaks every secret to every character on first contact, which is worse than today.
 - **Lane** — *open_threads* (tasks/promises/follow-ups, status-tracked) · *user_topics* (facts about the human player) · *character_topics* (lore, emotional moments, callbacks).
 - **EntryStatus** — *done* is filtered out of the Current working set by default; *deferred* is parked but tracked.
 - **MemoryTier** — the durability ladder (below).
@@ -22,12 +26,16 @@ type EntryProvenance = "played" | "unplayed";
 
 Each record exists in two forms, deliberately:
 
-- **`IndexEntry`** (`storage.ts:42`) — lightweight metadata row kept in the per-scope `index.yaml`. The loader scans **only these** every turn, so the hot path stays bounded. Holds: `id`, `path`, `summary` (≤120 chars), `tokens`, `lane`, `status`, `lastAccessed`, the tier fields, `sourceChatId`, `threadId`, `turnStart`, `provenance`, and the supersede/delete markers.
+- **`IndexEntry`** (`storage.ts:42`) — lightweight metadata row kept in the per-scope `index.yaml`. The loader scans **only these** every turn, so the hot path stays bounded. Holds: `id`, `path`, `summary` (≤120 chars), `tokens`, `lane`, `status`, `lastAccessed`, the tier fields, `sourceChatId`, `threadId`, `turnStart`, `provenance`, `bodyTerms`, and the supersede/delete markers.
+
+  **`bodyTerms`** (`tp5`, 2026-08-04) — up to 12 lowercase names harvested from the entry's **body**, so a subject mentioned only there is still matchable without the loader opening the file. Written by `harvestBodyTerms` (`relevance.ts`) at entry creation; existing rows are populated by `scripts/backfill-body-terms.mjs`. **Absent means "not yet harvested", never "this entry has no names"** — the backfill deliberately skips unreadable entry files rather than recording an empty list. Costs ~23% index growth, which is the price of the hot path staying index-only.
 - **`Entry`** (`storage.ts:75`) — the full record (adds `content`, `created`, `timeContext`), stored in its own file and loaded **on demand** only when the entry is selected for injection.
 
 Tier fields **and `provenance`** are **mirrored** onto both so the loader never has to open entry files to rank or to filter.
 
-> **The index has no `content`.** This is the single most consequential shape fact. Retrieval can only score what is on the index row, which is why a subject named solely in an entry's body is unreachable by topic (`MarinaraExtender-tp5`). Measured on the live stores: of 80 entries whose bodies named one person, only 21 named her in a summary — 74% retrieval-invisible. Any "just also search the content" fix means either opening ~6800 files per turn or tripling a 2.4 MB index that is re-read every turn and rewritten on every upsert. Neither is viable; the fix is an entity field populated at ingest.
+> **The index still has no `content`, and never will.** This remains the most consequential shape fact: retrieval can only score what is on the index row. "Just also search the content" means either opening thousands of entry files per turn or carrying whole bodies in a multi-megabyte index that is re-read every turn and rewritten on every upsert. Neither is viable.
+>
+> What shipped instead (`tp5`, 2026-08-04) is the **searchable residue**: `bodyTerms`, the names a body mentions, harvested at ingest. Reachability on the measured corpus went 43% → 84% for ~23% index growth. So the rule for anyone adding a new signal is unchanged — **put a bounded, derived field on the row; never the source text.**
 
 - **`Bookmark`** (`storage.ts:100`) — a decaying soft signal: `topic`, `summary`, `weight` (0.0–1.0), `why` (unresolved|important|emotional|promised|curious|follow-up), `createdTurn`, `lastSeenTurn`, `decayRate` (default **0.97**). Weight ×= decayRate each turn; surfaced into the block by a weighted random roll.
 

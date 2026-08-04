@@ -37,6 +37,13 @@ $script:LastNodePid = $null
 $script:LastNodeWorkingSetMB = $null
 $script:LastNodeSampleAt = $null
 $script:SidecarStartedAt = $null
+
+# Set by [D] detach, which leaves the server running on purpose. Every other way
+# out of this script - [Q], Ctrl+C, closing the window - takes the sidecar with
+# it, so "close everything for the night" is one action instead of two windows
+# killed in a specific order.
+$script:LeaveSidecarRunning = $false
+$script:ShutdownDone = $false
 # Opt-in auto-start: a launcher dropped in the user's Startup folder.
 $startupDir    = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup"
 $autostartFile = Join-Path $startupDir "Marinara Extender.cmd"
@@ -524,7 +531,8 @@ if ($sidecarOk) {
 
 $autoState = if (Test-Path $autostartFile) { "ON" } else { "off" }
 $logPath = Join-Path $sidecarDir "logs\sidecar.log"
-Write-Host "  Commands:  [R] Restart   [L] View log   [A] Auto-start ($autoState)   [Q] Quit (services keep running)" -ForegroundColor Cyan
+Write-Host "  Commands:  [R] Restart   [L] View log   [A] Auto-start ($autoState)" -ForegroundColor Cyan
+Write-Host "             [Q] Quit - stops the Memory Extender too   [D] Detach - leave it running" -ForegroundColor Cyan
 Write-Host ""
 if ($firstRun) {
     Write-Host "  A watchdog re-launches the server within ~15s if it dies, so a crash no" -ForegroundColor DarkGray
@@ -553,8 +561,52 @@ $lastCheck = Get-Date
 $portDown = 0      # consecutive checks with no listener on 3001 -> true death
 $healthDown = 0    # consecutive failed probes while the port IS bound -> wedge
 
+# ── Shutdown ──────────────────────────────────────────────────────────────────
+# Quitting the watchdog used to leave the sidecar running, which meant closing
+# down for the night was two windows killed in the RIGHT ORDER: watchdog first,
+# then the server. Do it the other way and the watchdog dutifully resurrects the
+# thing you were trying to stop. Correct behaviour, wrong ergonomics.
+#
+# Now every exit path takes the sidecar with it unless [D] detach asked
+# otherwise. Guarded by a flag because the Ctrl+C and engine-exit handlers can
+# both fire alongside a normal [Q], and Stop-Sidecar taskkills whatever holds
+# the port - running it twice would kill a server someone had already restarted.
+
+function Stop-Everything {
+    if ($script:ShutdownDone) { return }
+    $script:ShutdownDone = $true
+    if ($script:LeaveSidecarRunning) {
+        Write-Host ""
+        Write-Host "  [OK] Watchdog closed. Memory Extender is STILL RUNNING on port $SIDECAR_PORT." -ForegroundColor Yellow
+        Write-Host "       Run this launcher again to re-attach, or press Q in it to stop everything." -ForegroundColor DarkGray
+        return
+    }
+    Write-Host ""
+    Write-Host "  [..] Stopping Memory Extender..." -ForegroundColor Yellow
+    Stop-Sidecar
+    # Confirm rather than assume: Stop-Sidecar is best-effort, and "I pressed Q
+    # and it stayed up" is exactly the complaint this is meant to end.
+    $stillUp = $false
+    for ($i = 0; $i -lt 10; $i++) {
+        Start-Sleep -Milliseconds 200
+        $stillUp = [bool](Get-NetTCPConnection -LocalPort $SIDECAR_PORT -State Listen -ErrorAction SilentlyContinue)
+        if (-not $stillUp) { break }
+    }
+    if ($stillUp) {
+        Write-Host "  [!!] Something is STILL listening on port $SIDECAR_PORT." -ForegroundColor Red
+        Write-Host "       Another launcher or a manually started server may own it." -ForegroundColor DarkGray
+    } else {
+        Write-Host "  [OK] Memory Extender stopped. Ollama was left running (other apps may use it)." -ForegroundColor Green
+    }
+}
+
 function Write-Prompt { Write-Host -NoNewline "  extender> " -ForegroundColor Cyan }
 Write-Prompt
+
+# try/finally so Ctrl+C and any unhandled error shut the sidecar down too,
+# not just [Q]. A hard window kill (taskkill /F) notifies nothing by design and
+# is the one case that still leaves the server up.
+try {
 
 while ($true) {
     if ([Console]::KeyAvailable) {
@@ -562,6 +614,13 @@ while ($true) {
         $cmd = $key.KeyChar.ToString().ToLower()
         Write-Host $cmd
         if ($cmd -eq 'q') {
+            break
+        } elseif ($cmd -eq 'd') {
+            # Detach: what Q used to do. Kept as its own key rather than dropped,
+            # because leaving the server up while closing the console is a real
+            # workflow - it just isn't what "quit" means when you are shutting
+            # down for the night.
+            $script:LeaveSidecarRunning = $true
             break
         } elseif ($cmd -eq 'r') {
             Restart-Sidecar
@@ -590,7 +649,7 @@ while ($true) {
                 }
             }
         } else {
-            Write-Host "  Unknown command. [R] restart  [L] view log  [A] auto-start  [Q] quit." -ForegroundColor DarkGray
+            Write-Host "  Unknown command. [R] restart  [L] view log  [A] auto-start  [Q] quit (stops server)  [D] detach." -ForegroundColor DarkGray
         }
         Write-Prompt
     }
@@ -641,4 +700,8 @@ while ($true) {
     }
 
     Start-Sleep -Milliseconds 200
+}
+
+} finally {
+    Stop-Everything
 }

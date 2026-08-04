@@ -22,6 +22,21 @@ $script:SidecarProc = $null
 # How to launch the sidecar: "start" runs the built output (node dist); falls
 # back to "run dev" (tsx) only if the build fails.
 $script:RunCmd = "start"
+
+# --- Crash post-mortem state (MarinaraExtender-073) ---------------------------
+# The sidecar dies silently every 4-12h and leaves NOTHING behind: no npm error,
+# no exit code, no Node fatal line, and -- the tell -- not even the worker
+# PowerShell's own "Sidecar stopped." message, which it prints whenever the npm
+# pipeline returns for any reason. Its absence across a 13MB log means the whole
+# process tree is being terminated at once, so nothing INSIDE the tree can ever
+# record why. Only this watchdog survives to look.
+#
+# So it samples the live process while it is healthy, and reads the corpse
+# before Stop-Sidecar taskkills the evidence.
+$script:LastNodePid = $null
+$script:LastNodeWorkingSetMB = $null
+$script:LastNodeSampleAt = $null
+$script:SidecarStartedAt = $null
 # Opt-in auto-start: a launcher dropped in the user's Startup folder.
 $startupDir    = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup"
 $autostartFile = Join-Path $startupDir "Marinara Extender.cmd"
@@ -134,6 +149,10 @@ function Start-Sidecar {
         -ArgumentList "-NoLogo","-ExecutionPolicy","Bypass","-EncodedCommand",$enc `
         -WorkingDirectory $sidecarDir `
         -WindowStyle Normal -PassThru
+    $script:SidecarStartedAt = Get-Date
+    $script:LastNodePid = $null
+    $script:LastNodeWorkingSetMB = $null
+    $script:LastNodeSampleAt = $null
 }
 
 function Update-SidecarBuild {
@@ -163,6 +182,95 @@ function Update-SidecarBuild {
     }
     Write-Host "  [!!] Build failed (see output above)." -ForegroundColor Red
     return $false
+}
+
+function Measure-SidecarProcess {
+    # Called on every healthy check. Records who is actually listening and how
+    # much memory it holds, so the moment before a death is described rather
+    # than guessed at. Cheap: two lookups every 5s. Never throws -- a diagnostic
+    # that can take down the watchdog is worse than no diagnostic.
+    try {
+        $conn = Get-NetTCPConnection -LocalPort $SIDECAR_PORT -State Listen -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+        if (-not $conn) { return }
+        $p = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+        if (-not $p) { return }
+        $script:LastNodePid = $p.Id
+        $script:LastNodeWorkingSetMB = [math]::Round($p.WorkingSet64 / 1MB)
+        $script:LastNodeSampleAt = Get-Date
+    } catch {}
+}
+
+function Write-SidecarPostMortem {
+    # Read the corpse BEFORE Stop-Sidecar taskkills it -- after that the exit
+    # code is ours, not the crash's, and the evidence is gone.
+    #
+    # The one value that matters is the worker PowerShell's exit code, because
+    # that process is INSIDE the tree that vanishes and yet is the only member
+    # whose handle we still hold. It discriminates the remaining candidates in a
+    # single number: 0xC0000005 access violation, 0xC000013A close/CTRL event
+    # (something signalling the console), 1 for an ordinary npm failure, or a
+    # kill-shaped code pointing at an external terminator.
+    param([string]$Reason)
+    $lines = @()
+    $lines += "[watchdog:postmortem] $Reason"
+    try {
+        if ($script:SidecarStartedAt) {
+            $ageMin = [math]::Round(((Get-Date) - $script:SidecarStartedAt).TotalMinutes, 1)
+            $lines += "[watchdog:postmortem]   uptime: $ageMin min (launched $($script:SidecarStartedAt.ToString('yyyy-MM-dd HH:mm:ss')))"
+        }
+        if ($script:SidecarProc) {
+            $exited = $false
+            try { $exited = $script:SidecarProc.HasExited } catch { $lines += "[watchdog:postmortem]   HasExited: unreadable ($($_.Exception.Message))" }
+            $lines += "[watchdog:postmortem]   worker pid $($script:SidecarProc.Id) HasExited=$exited"
+            if ($exited) {
+                try {
+                    $code = $script:SidecarProc.ExitCode
+                    # Hex is the readable form for Windows status codes; decimal
+                    # for the ordinary small ones. Print both, always.
+                    #
+                    # The L suffix is load-bearing: in PS 5.1 the literal
+                    # 0xFFFFFFFF parses as Int32 -1, so the mask becomes a no-op
+                    # and the cast then overflows on precisely the NEGATIVE codes
+                    # this exists to decode (0xC0000005 access violation,
+                    # 0xC000013A close event). Caught by testing it.
+                    $hex = "0x{0:X8}" -f ([int64]$code -band 0xFFFFFFFFL)
+                    $lines += "[watchdog:postmortem]   worker EXIT CODE: $code ($hex)"
+                } catch {
+                    $lines += "[watchdog:postmortem]   worker exit code unreadable: $($_.Exception.Message)"
+                }
+                try { $lines += "[watchdog:postmortem]   worker exited at: $($script:SidecarProc.ExitTime)" } catch {}
+            } else {
+                # Port gone but the worker is alive = node died under a surviving
+                # shell. A completely different failure from the tree vanishing,
+                # and worth telling apart on sight.
+                $lines += "[watchdog:postmortem]   worker STILL ALIVE - node died beneath it, not a tree termination"
+            }
+        } else {
+            $lines += "[watchdog:postmortem]   no worker handle (attached to a pre-existing server, or start.ps1 restarted)"
+        }
+        if ($script:LastNodePid) {
+            $still = Get-Process -Id $script:LastNodePid -ErrorAction SilentlyContinue
+            $agoSec = if ($script:LastNodeSampleAt) { [math]::Round(((Get-Date) - $script:LastNodeSampleAt).TotalSeconds) } else { "?" }
+            $lines += "[watchdog:postmortem]   last healthy sample ${agoSec}s ago: node pid $($script:LastNodePid) at $($script:LastNodeWorkingSetMB) MB; that pid is now $(if ($still) { 'STILL PRESENT' } else { 'gone' })"
+        }
+        # A native fault or an external kill usually leaves a Windows record even
+        # when the process itself writes nothing. Absence here is informative too.
+        $ev = Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=(Get-Date).AddMinutes(-10)} -ErrorAction SilentlyContinue |
+              Where-Object { $_.Message -match 'node\.exe|powershell\.exe' } | Select-Object -First 2
+        if ($ev) {
+            foreach ($e in $ev) { $lines += "[watchdog:postmortem]   Application log: $($e.TimeCreated) Id=$($e.Id) $($e.ProviderName)" }
+        } else {
+            $lines += "[watchdog:postmortem]   Application log: no node/powershell events in the last 10 min"
+        }
+    } catch {
+        $lines += "[watchdog:postmortem]   (post-mortem itself failed: $($_.Exception.Message))"
+    }
+    $stamp = "[" + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + "] "
+    foreach ($l in $lines) {
+        Write-Host "  $l" -ForegroundColor DarkYellow
+        Add-Content -Path $logPath -Value ($stamp + $l) -Encoding UTF8 -ErrorAction SilentlyContinue
+    }
 }
 
 function Stop-Sidecar {
@@ -505,6 +613,7 @@ while ($true) {
             # at a 6s timeout is ~75s+ of continuous unresponsiveness, far beyond
             # any normal heavy turn.
             $portDown = 0
+            Measure-SidecarProcess   # 073: describe the last healthy moment, not just the corpse
             if (Test-Sidecar) { $healthDown = 0 }
             else { $healthDown++; if ($healthDown -ge 12) { $dead = $true; $why = "wedged (port bound but /api/health failed $healthDown times)" } }
         }
@@ -514,6 +623,7 @@ while ($true) {
             Write-Host ""
             Write-Host "  [watchdog] Memory Extender down - $why - relaunching..." -ForegroundColor Red
             Add-Content -Path $logPath -Value ("[" + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + "] [watchdog] $why - relaunching") -Encoding UTF8 -ErrorAction SilentlyContinue
+            Write-SidecarPostMortem -Reason $why   # 073: MUST precede Stop-Sidecar, which overwrites the exit code
             Stop-Sidecar          # frees the port whether the process died or just wedged
             Start-Sleep -Milliseconds 500
             Start-Sidecar

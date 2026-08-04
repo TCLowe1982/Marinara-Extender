@@ -33,6 +33,22 @@ Everything below is kicked off as `void (async () => …)()` **after** the block
 6. **Thread** — `resolveOrMintThread` matches the analyzer's label against the chat's active threads (fuzzy; labels drift), minting only when genuinely new.
 7. `encodeBeat` → store the beat, **and** `createEntryIfUnique` a companion entry (`lane: character_topics`, `kind: "incident"`, summary `[emotion] motivation`).
 
+### ⚠️ Prompt examples get returned verbatim (`pifl`)
+
+The analyzer's `SHARED_RULES` illustrated *"two different moments can never produce the same sentence"* with a concrete example — and that example became **the most repeated sentence in the store**: 669 beats, across 4 characters, 37 chats and 35 days, with 542 ledger entries carrying it as their summary. In total **792 of 8,703 beats (9%) echoed a prompt example**, and *both* sides leaked — 107 beats opened with a paraphrase of the "too vague" example the rule was warning against.
+
+How the alternatives were ruled out, because two plausible theories were wrong first:
+
+- **Not a recall/injection loop** — only 1% of the source chunks that produced it mention anything like it, so the analyzer was not reading it back out of the text.
+- **Not the model** — **zero** story-imported beats echo it, and the import path runs the same analyzer with a different context assembly.
+- **One field collapses, the rest is fine** — an `[anger]` beat carrying a vulnerability motivation while `relationalDynamics` tracks the real text. The trigger is a huge chunk (6–8KB, sometimes not emotional at all — one was a discussion of `pipeline.ts`). Given nothing specific to say, the model returns the nearest phrasing it has been shown, and the prompt is nearest.
+
+**The rule to carry forward: never write a prompt example that could plausibly be real output for this domain.** Illustrate the *shape* from an unrelated one. And back it with a deterministic guard — `echoesAnExample()` rejects an analysis whose motivation matches any example (returning `null`, the existing unusable-analysis path). Rewording is necessary and is not sufficient.
+
+`PROMPT_EXAMPLE_ECHOES` deliberately **keeps retired examples**. The old wording is what the stored beats echo, so deleting a line silently re-opens the hole it closed.
+
+This also poisoned two other investigations before it was found: it manufactured apparent subject misrouting (when motivation collapses, the subject is assigned loosely, so beats scatter across ledgers — see `bwgh`) and it inflated the written-vs-played confound by an order of magnitude (`7pcm`, where aurora's 129 chat beats turned out to be 112 echoes + 17 real). **Measure the echo rate before trusting any beat-level statistic.**
+
 ### Tier 3 — Ambient facts (`api.ts:734`)
 `classifyAmbient` extracts durable identity/preference/history facts from throwaway lines. Same subject routing, with one difference: facts have **no holding-pool lane**, so an unknown subject is **demoted to chat scope** tagged `[about: subject]` rather than parked. Character-scope facts get `kind: "trait"` (the trait side of the dedup matrix vs. beats' `kind: "incident"`).
 

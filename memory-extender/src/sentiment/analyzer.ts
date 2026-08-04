@@ -53,6 +53,13 @@ function parseAnalysisJson(raw: string): BeatAnalysis | null {
       if (typeof parsed.motivation !== "string") continue;
       if (typeof parsed.relational_dynamics !== "string") continue;
       if (typeof parsed.outcome !== "string") continue;
+      // pifl: the model copies the prompt's own example when it cannot be specific.
+      // Measured before the fix: 792 beats (9% of the store) echoed one, 669 of them
+      // the single sentence used to ILLUSTRATE "two different moments can never
+      // produce the same sentence". Rewording the examples is necessary but is not a
+      // guarantee — a model under-instructed by a long chunk reaches for whatever
+      // phrasing is nearest, and the prompt is nearest. This is the guarantee.
+      if (echoesAnExample(parsed.motivation)) return null;
       return {
         motivation:        parsed.motivation.trim(),
         relationalDynamics: parsed.relational_dynamics.trim(),
@@ -151,6 +158,36 @@ async function callLlm(systemPrompt: string, userPrompt: string): Promise<string
 
 const EMOTIONS_FORMAT = `[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}]`;
 
+// ── Example echo guard (pifl) ────────────────────────────────────────────────
+// Every phrase the prompt puts in front of the model as an illustration, good or
+// bad. A motivation matching one is not an analysis of the chunk; it is the model
+// returning what it was shown.
+//
+// THE LIST MUST INCLUDE THE RETIRED EXAMPLES, not just the current ones. The old
+// wording is what 669 stored beats echo, so a store that is still being written to
+// by an older build — or re-analysed — has to keep being caught. Deleting a line
+// from here silently re-opens the hole it was closing.
+const PROMPT_EXAMPLE_ECHOES = [
+  // retired 2026-08-04, but the cause of the entire finding
+  "admits she's afraid the memory loss means she was never real",
+  "asks thomas to stay through the night for the first time",
+  // current illustrations
+  "insists the boat was green, not blue, and will not let it go",
+  "asks whether the locksmith ever called back",
+  // the "too vague" side — the model copies these too (measured: 107 beats opened
+  // with a paraphrase of the first one)
+  "exposes her personal fear",
+  "reveals her vulnerability and desire for connection",
+  "the speaker is exposing their openness",
+];
+
+/** Is this motivation the prompt's own words rather than the chunk's? */
+export function echoesAnExample(motivation: string): boolean {
+  const m = motivation.toLowerCase().replace(/\s+/g, " ").trim();
+  if (!m) return false;
+  return PROMPT_EXAMPLE_ECHOES.some((ex) => m.includes(ex));
+}
+
 const SUBTEXT_INSTRUCTION = `
 - subtext: If this chunk contains sexual or physically intimate content, analyze the EMOTIONAL FUNCTION of that content — what is it doing beyond arousal? Consider: trust-building, vulnerability, power exchange, marking/claiming, first-time significance, comfort-seeking, validation, grief, or avoidance. If no sexual/intimate content is present, omit this field or set it to null.`.trim();
 
@@ -158,8 +195,14 @@ const SHARED_RULES = `
 Rules:
 - Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
-  BAD:  "exposes her personal fear" / "reveals her vulnerability and desire for connection"
-  GOOD: "admits she's afraid the memory loss means she was never real" / "asks Thomas to stay through the night for the first time"
+  TOO VAGUE, because it could describe a hundred different moments:
+    "exposes her personal fear" / "reveals her vulnerability and desire for connection"
+  SPECIFIC ENOUGH, because only one moment could have produced it:
+    "insists the boat was green, not blue, and will not let it go"
+    "asks whether the locksmith ever called back"
+  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
+  words. If you cannot name what happened in THIS chunk that specifically, the chunk
+  has no beat — say so rather than reaching for a remembered phrase.
 - Be specific to the text provided — do not generalize.
 - 1–3 sentences per field.
 - salience: 0.0 = barely present, 1.0 = defining or pivotal moment.

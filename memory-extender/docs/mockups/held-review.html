@@ -1,0 +1,313 @@
+<title>Held for review — Marinara Extender (mockup)</title>
+<style>
+  /* Tokens lifted verbatim from memory-extender/src/ui.ts so this ports in
+     without a restyle. Two additions, both derived from the existing palette:
+     --stripe-* map the entanglement signals onto the semantic colours already
+     in use, by severity rather than by category. */
+  :root {
+    --bg: #14121a; --panel: #1c1926; --edge: #2e2a3d; --text: #e8e4f0;
+    --muted: #9a92b0; --accent: #c9a4ff; --good: #6ee7a8; --warn: #ffb86b; --bad: #ff8095;
+    --thread: #6ba8ff; --user: #c58bff; --char: #5fd6a4;
+    --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+
+  /* The product UI is dark-only. A mockup of a product page should look like the
+     product, so this commits to one theme on purpose rather than following the
+     viewer's. */
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.55 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; }
+
+  .mockbar { background: repeating-linear-gradient(135deg, rgba(201,164,255,.10) 0 12px, transparent 12px 24px);
+    border-bottom: 1px solid var(--edge); color: var(--accent);
+    padding: 7px 20px; font-size: 12px; letter-spacing: .05em; text-transform: uppercase; }
+  .mockbar b { color: var(--text); font-weight: 600; letter-spacing: 0; text-transform: none; }
+
+  header { padding: 14px 20px; border-bottom: 1px solid var(--edge);
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .01em; }
+  header .sub { color: var(--muted); font-size: 12px; }
+
+  .wrap { display: grid; grid-template-columns: 260px 1fr; min-height: 70vh; }
+  @media (max-width: 760px) { .wrap { grid-template-columns: 1fr; }
+    aside { border-right: 0; border-bottom: 1px solid var(--edge); } }
+  aside { border-right: 1px solid var(--edge); padding: 14px; }
+  main { padding: 18px 22px; min-width: 0; }
+
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em;
+    color: var(--muted); margin: 18px 0 8px; font-weight: 600; }
+  aside h2:first-child { margin-top: 0; }
+
+  .item { padding: 7px 9px; border-radius: 7px; cursor: pointer; color: var(--text);
+    display: flex; gap: 8px; align-items: baseline; width: 100%; text-align: left;
+    background: none; border: 0; font: inherit; }
+  .item:hover { background: var(--panel); }
+  .item.sel { background: var(--panel); box-shadow: inset 2px 0 0 var(--accent); }
+  .item .n { margin-left: auto; color: var(--muted); font-size: 11px;
+    font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .item .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .item:focus-visible, .act:focus-visible, .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* Summary before detail: what needs attention has to read at a glance, before
+     any single card is opened. */
+  .tally { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+  .stat { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px;
+    padding: 9px 13px; display: grid; gap: 1px; min-width: 104px; }
+  .stat .v { font-size: 19px; font-weight: 600; font-family: var(--mono);
+    font-variant-numeric: tabular-nums; line-height: 1.2; }
+  .stat .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .07em; }
+  .stat.recited .v { color: var(--bad); }
+  .stat.orphan .v { color: var(--warn); }
+  .stat.thread .v { color: var(--thread); }
+  .stat.clean .v { color: var(--good); }
+
+  .note { color: var(--muted); font-size: 12px; margin: 14px 0 18px; max-width: 68ch; }
+  .note code { background: var(--panel); padding: 1px 5px; border-radius: 4px;
+    font-family: var(--mono); font-size: 11.5px; }
+
+  /* State is carried in form as well as words: the left stripe is the strongest
+     signal on the card, so severity is legible without reading. */
+  .card { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px;
+    padding: 13px 15px 13px 17px; margin-bottom: 10px; border-left-width: 3px; }
+  .card.s-recited { border-left-color: var(--bad); }
+  .card.s-orphan { border-left-color: var(--warn); }
+  .card.s-thread { border-left-color: var(--thread); }
+  .card.s-retrieved { border-left-color: var(--muted); }
+  .card .sum { font-weight: 600; margin-bottom: 6px; text-wrap: balance; }
+
+  .meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+    color: var(--muted); font-size: 12px; }
+  .pill { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--edge); font-size: 11px; }
+  .lane-user_topics { color: var(--user); border-color: var(--user); }
+  .lane-character_topics { color: var(--char); border-color: var(--char); }
+  .pill.recited { color: var(--bad); border-color: var(--bad); }
+  .pill.orphan { color: var(--warn); border-color: var(--warn); }
+  .pill.thread { color: var(--thread); border-color: var(--thread); }
+
+  /* Reasons in plain language, never identifiers — the correction TC made on the
+     recall panel (hwlj): the vocabulary stays closed underneath so it is still
+     countable, the surface stays readable. */
+  .why { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--edge);
+    display: grid; gap: 7px; font-size: 13px; color: var(--muted); line-height: 1.6; }
+  .why .r { display: grid; grid-template-columns: 8px 1fr; gap: 10px; align-items: start; }
+  .why .dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 7px; }
+  .why .r.recited .dot { background: var(--bad); }
+  .why .r.orphan .dot { background: var(--warn); }
+  .why .r.thread .dot { background: var(--thread); }
+  .why .r.retrieved .dot { background: var(--muted); }
+  .why b { color: var(--text); font-weight: 600; }
+
+  .prov { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--edge);
+    display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 11.5px;
+    font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  .acts { display: flex; gap: 6px; margin-top: 11px; flex-wrap: wrap; }
+  .act { padding: 3px 12px; border-radius: 999px; cursor: pointer; background: none;
+    border: 1px solid var(--edge); color: var(--muted); font: inherit; font-size: 11px; }
+  .act:hover { background: var(--bg); color: var(--text); }
+  .act.go { border-color: var(--good); color: var(--good); }
+  .act.warn { border-color: var(--warn); color: var(--warn); }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 16px; }
+  .tab { padding: 4px 13px; border-radius: 999px; cursor: pointer; background: none;
+    border: 1px solid var(--edge); color: var(--muted); font: inherit; font-size: 12px; }
+  .tab[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+
+  .empty { border: 1px dashed var(--edge); border-radius: 10px; padding: 34px 26px;
+    text-align: center; color: var(--muted); }
+  .empty .big { color: var(--good); font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+  .empty p { margin: 0 auto; max-width: 56ch; font-size: 13px; }
+  [hidden] { display: none !important; }
+
+  footer { border-top: 1px solid var(--edge); padding: 16px 22px; color: var(--muted);
+    font-size: 12px; }
+  footer h3 { color: var(--text); font-size: 12px; margin: 0 0 6px; text-transform: uppercase;
+    letter-spacing: .08em; }
+  footer ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; max-width: 80ch; }
+  footer code { background: var(--panel); padding: 1px 5px; border-radius: 4px;
+    font-family: var(--mono); font-size: 11.5px; }
+</style>
+
+<div class="mockbar">Mockup — every entry below is invented &nbsp;·&nbsp; <b>no live memory was read to build this page</b></div>
+
+<header>
+  <h1>Marinara Extender</h1>
+  <span class="sub">Held for review &nbsp;·&nbsp; discarded re-rolls that left something behind</span>
+</header>
+
+<div class="wrap">
+  <aside>
+    <h2>Scopes</h2>
+    <button class="item sel"><span class="lbl">All scopes</span><span class="n">4</span></button>
+    <button class="item"><span class="lbl">Dr. Mari Zielińska</span><span class="n">2</span></button>
+    <button class="item"><span class="lbl">Priya</span><span class="n">1</span></button>
+    <button class="item"><span class="lbl">Chat · Sapper stakes</span><span class="n">1</span></button>
+
+    <h2>Settled without review</h2>
+    <button class="item"><span class="lbl">Retired cleanly</span><span class="n">11</span></button>
+  </aside>
+
+  <main>
+    <div class="tabs">
+      <button class="tab" id="t-held" aria-pressed="true">4 held</button>
+      <button class="tab" id="t-empty" aria-pressed="false">Empty state</button>
+    </div>
+
+    <section id="view-held">
+      <div class="tally">
+        <div class="stat recited"><span class="v">1</span><span class="k">Recited</span></div>
+        <div class="stat orphan"><span class="v">2</span><span class="k">Orphaned</span></div>
+        <div class="stat thread"><span class="v">1</span><span class="k">On a thread</span></div>
+        <div class="stat clean"><span class="v">11</span><span class="k">Retired cleanly</span></div>
+      </div>
+
+      <p class="note">
+        A re-roll retires whatever the discarded reply taught. These four are the ones
+        retirement did not settle — the memory had already gone somewhere before it was
+        thrown away. Nothing here is urgent, and nothing is blocking a chat.
+      </p>
+
+      <article class="card s-recited">
+        <div class="sum">Mari's father died when she was nineteen, not eleven</div>
+        <div class="meta">
+          <span class="pill lane-character_topics">character_topics</span>
+          <span class="pill recited">Said out loud</span>
+          <span class="pill orphan">Orphaned a memory</span>
+          <span>Dr. Mari Zielińska</span>
+        </div>
+        <div class="why">
+          <div class="r recited"><span class="dot"></span><span>
+            Mari has <b>said this in a reply, twice</b>, since it was captured. Retiring the
+            memory does not retract what she already said — the conversation still contains it.
+          </span></div>
+          <div class="r orphan"><span class="dot"></span><span>
+            It replaced an older memory (<b>“Mari's father died when she was eleven”</b>).
+            Now that this one is retired, the older memory is left behind something that no
+            longer exists. Restoring it would put the original age back in play.
+          </span></div>
+        </div>
+        <div class="prov">
+          <span>msg cm4a72kq</span><span>swipe 0 → 2</span><span>discarded 12:36</span>
+        </div>
+        <div class="acts">
+          <button class="act go">Restore the older memory</button>
+          <button class="act">Bring this one back</button>
+          <button class="act">Leave it retired</button>
+        </div>
+      </article>
+
+      <article class="card s-orphan">
+        <div class="sum">TC's callsign during the Baghdad tour was “Ladder Six”</div>
+        <div class="meta">
+          <span class="pill lane-user_topics">user_topics</span>
+          <span class="pill orphan">Orphaned a memory</span>
+          <span>Dr. Mari Zielińska</span>
+        </div>
+        <div class="why">
+          <div class="r orphan"><span class="dot"></span><span>
+            It replaced an older memory (<b>“TC's callsign was Ladder Nine”</b>). With this one
+            retired, nothing live is standing in its place — the older memory stays retired too,
+            behind a memory that is gone. One of the two probably wants to be active.
+          </span></div>
+        </div>
+        <div class="prov">
+          <span>msg cm4a8p11</span><span>swipe 1 → 2</span><span>discarded 12:36</span>
+        </div>
+        <div class="acts">
+          <button class="act go">Restore the older memory</button>
+          <button class="act">Bring this one back</button>
+          <button class="act">Leave it retired</button>
+        </div>
+      </article>
+
+      <article class="card s-thread">
+        <div class="sum">[resolve] Priya admits she engineered the second trial to fail</div>
+        <div class="meta">
+          <span class="pill lane-character_topics">character_topics</span>
+          <span class="pill thread">On a thread</span>
+          <span>Priya</span>
+        </div>
+        <div class="why">
+          <div class="r thread"><span class="dot"></span><span>
+            This moment belongs to the thread <b>“Priya-as-co-experimenter”</b>, which runs
+            across scenes and outlives the turn it came from. Removing a moment quietly changes
+            the shape of a storyline you can see elsewhere.
+          </span></div>
+        </div>
+        <div class="prov">
+          <span>msg cm4b03zx</span><span>swipe 0 → 1</span><span>discarded 11:58</span>
+        </div>
+        <div class="acts">
+          <button class="act warn">Open the thread</button>
+          <button class="act">Bring this one back</button>
+          <button class="act">Leave it retired</button>
+        </div>
+      </article>
+
+      <article class="card s-retrieved">
+        <div class="sum">TC prefers the sapper stakes told in order, not as flashback</div>
+        <div class="meta">
+          <span class="pill lane-user_topics">user_topics</span>
+          <span class="pill">Reached the prompt</span>
+          <span>Chat · Sapper stakes</span>
+        </div>
+        <div class="why">
+          <div class="r retrieved"><span class="dot"></span><span>
+            It was put in front of the character <b>three times</b> but never repeated back, so
+            it may have steered a reply without ever being quoted. The weakest of the four
+            signals — usually safe to leave retired.
+          </span></div>
+        </div>
+        <div class="prov">
+          <span>msg cm4b1w07</span><span>swipe 0 → 1</span><span>discarded 11:41</span>
+        </div>
+        <div class="acts">
+          <button class="act">Bring this one back</button>
+          <button class="act">Leave it retired</button>
+        </div>
+      </article>
+    </section>
+
+    <section id="view-empty" hidden>
+      <div class="empty">
+        <div class="big">Nothing held</div>
+        <p>
+          Re-rolls are retiring cleanly. A memory only lands here when the reply it came from
+          was thrown away <em>after</em> the memory had already been used — said out loud, put
+          on a thread, or standing in for an older memory.
+        </p>
+      </div>
+      <p class="note" style="margin-top:18px">
+        This is the normal state. At the measured re-roll rate this page is empty far more often
+        than not, which is why it is a lane you visit rather than a prompt that interrupts you.
+      </p>
+    </section>
+  </main>
+</div>
+
+<footer>
+  <h3>Notes for the build</h3>
+  <ul>
+    <li>Reads <code>reconcile-queue/held.jsonl</code>, filtered to records whose <code>reasons</code> include <code>discarded-swipe</code>. No new storage.</li>
+    <li>Plain-language reasons are rendered from the closed vocabulary (<code>recited:N</code>, <code>retrieved:N</code>, <code>thread:ID</code>, <code>orphans:ID</code>) — the surface is readable, the underlying values stay countable.</li>
+    <li><b>“Restore the older memory”</b> is <code>restoreSupersededEntry</code>, which already exists.</li>
+    <li><b>“Bring this one back”</b> needs a <code>restoreDiscardedEntry</code> — the one piece of storage still missing. Mirror <code>restoreDeletedEntry</code>, guarded to <code>discardedAt</code> rows so it can never resurrect a superseded or user-deleted entry.</li>
+    <li><b>“Leave it retired”</b> only clears the record from the lane. The memory is already retired; this is an acknowledgement, not a mutation.</li>
+    <li>Held records have no removal path yet — <code>held.jsonl</code> is append-only. Dismissing needs one.</li>
+  </ul>
+</footer>
+
+<script>
+  const held = document.getElementById("view-held");
+  const empty = document.getElementById("view-empty");
+  const tHeld = document.getElementById("t-held");
+  const tEmpty = document.getElementById("t-empty");
+  function show(isHeld) {
+    held.hidden = !isHeld;
+    empty.hidden = isHeld;
+    tHeld.setAttribute("aria-pressed", String(isHeld));
+    tEmpty.setAttribute("aria-pressed", String(!isHeld));
+  }
+  tHeld.addEventListener("click", () => show(true));
+  tEmpty.addEventListener("click", () => show(false));
+</script>

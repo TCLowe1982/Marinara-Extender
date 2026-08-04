@@ -16,6 +16,7 @@ import {
   type Bookmark,
 } from "./storage.js";
 import { relevanceScore, RELEVANCE_STOPWORDS } from "./relevance.js";
+import { readEntityIndex, buildCueMap, expandCues } from "./entities.js";
 import { computeScore } from "./promotion.js";
 import { getSoftClock, formatClockContext, timesenseEnabled } from "./soft-clock.js";
 import { listActiveThreads } from "./threads.js";
@@ -588,7 +589,21 @@ export async function loadContext(
   dbg(`indexes loaded — chat:${indexes.chat?.entries.length ?? 0} entries | char:${indexes.character?.entries.length ?? 0} entries | global:${indexes.global?.entries.length ?? 0} entries`);
 
   // Pass 2 — build the Current working cache per scope (relevance + recency)
-  const recentText = session.recentText ?? "";
+  //
+  // Cue expansion (76aw): a mention of "Cathmore" also searches for "Erica", and
+  // vice versa. Done ONCE here, to the conversation text, rather than to every
+  // index row — expanding rows would mean rewriting the index whenever an alias
+  // is learned, and growing it again after tp5 already cost 23%. Expanding the
+  // cue also means a corrected alias takes effect on the next turn with no
+  // backfill. Failure is non-fatal: without the index this is the old behaviour.
+  const rawRecentText = session.recentText ?? "";
+  const entityIndex = rawRecentText ? await readEntityIndex().catch(() => null) : null;
+  const recentText = entityIndex
+    ? expandCues(rawRecentText, buildCueMap(entityIndex))
+    : rawRecentText;
+  if (entityIndex && recentText !== rawRecentText) {
+    dbg(`cues expanded — +${recentText.length - rawRecentText.length} chars from ${entityIndex.entities.length} entities`);
+  }
 
   // Thread label relevance for this chat's active threads — lets a beat be
   // recalled because the conversation returned to its ARC, not just its words.

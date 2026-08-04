@@ -11,6 +11,7 @@
 
 import type { Lane } from "./storage.js";
 import { localUrl, localEnabled, localModel, externalUpstream, externalModel } from "./llm-config.js";
+import { keepUserClause, userSpokenLines } from "./user-clause.js";
 
 // ── Candidate extraction ──────────────────────────────────────────────────────
 
@@ -63,6 +64,15 @@ Examples:
 - "I'm working on the ledger logic today" → chat scope, user_topics, subject "user"
 - "She always deflects with humor when nervous" (about Priya) → character scope, character_topics, subject "Priya"
 - "Mari grew up in Kraków" (in any block) → character scope, character_topics, subject "Mari"
+
+ONE SENTENCE CAN CARRY TWO FACTS ABOUT DIFFERENT PEOPLE. Return BOTH — and never
+drop the user's half to keep someone else's. "I was in the Army, and Mari is
+Polish." is two facts, not one:
+  {"text":"I was in the Army, and Mari is Polish.","fact":"The user served in the Army","lane":"user_topics","scope":"character","subject":"user"}
+  {"text":"I was in the Army, and Mari is Polish.","fact":"Mari is Polish","lane":"character_topics","scope":"character","subject":"Mari"}
+The same applies when the user's clause sits beside several third-party ones:
+"It was my fourth sapper stakes, and Sgt Roger's 6th?" contains the USER's fourth
+as well as Sgt Roger's sixth. Both survive.
 
 SKIP examples — these are NOT facts, return nothing for them:
 - "She adds an item to the list" → SKIP (in-scene action, no information about who anyone IS)
@@ -174,6 +184,19 @@ function looksLikeJson(s: string): boolean {
   return t.startsWith("[") || t.startsWith("{");
 }
 
+// Declared user forms (egj3), so a fact phrased "TC served in the Army" is
+// recognised as already carrying the user. Dynamically imported — same reason as
+// auth-cache above, and it keeps the pure clause logic free of storage I/O.
+// Never throws: a missing or unreadable declaration just means no extra forms.
+async function declaredUserForms(): Promise<string[]> {
+  try {
+    const { readUserIdentity } = await import("./user-identity.js");
+    return (await readUserIdentity())?.aliases ?? [];
+  } catch {
+    return [];
+  }
+}
+
 export async function classifyAmbient(input: AmbientInput): Promise<AmbientFact[]> {
   const userCandidates = extractCandidates(input.userText);
   const charCandidates = extractCandidates(input.characterText);
@@ -196,7 +219,12 @@ export async function classifyAmbient(input: AmbientInput): Promise<AmbientFact[
   }
   if (raw === null) raw = await callExternal(prompt);
 
-  const facts = parseFactsJson(raw);
+  // 2tro: restore the user's clause if the model kept only the third-person half.
+  const facts = keepUserClause(parseFactsJson(raw), {
+    userText: input.userText,
+    userForms: await declaredUserForms(),
+    thirdParties: input.roster ?? [],
+  });
 
   if (facts.length > 0) {
     console.info(`[ME:ambient] found ${facts.length} ambient fact(s) from ${lines.length} candidate(s)`);
@@ -228,6 +256,14 @@ the speaker's D&D class is a Pact of the Tome Warlock whose patron is the Narrat
 Be EXHAUSTIVE. A passage usually contains several durable facts, about different
 people and topics. List every one — do not stop at the most prominent; a quiet
 identity fact (a class, a hometown, a job) matters as much as a vivid one.
+
+A SINGLE SENTENCE can carry two facts about DIFFERENT people. Split it and return
+both; never drop the user's half to keep someone else's. "I was in the Army, and
+Mari is Polish." is two facts: {subject "user", user_topics, "The user served in
+the Army"} AND {subject "Mari", character_topics, "Mari is Polish"}. A first-person
+clause standing next to third-person ones ("It was my fourth sapper stakes, and Sgt
+Roger's 6th?") is the case most often lost — the user's fact matters as much as the
+sergeant's.
 
 DO NOT extract anything that is merely what is happening right now. LITMUS TEST:
 "would this still be true next week, in a completely different scene?" If no, SKIP it.
@@ -278,9 +314,14 @@ export async function classifySceneFacts(sceneText: string, roster: string[] = [
   const loc = () => callLocal(prompt, SCENE_FACTS_SYSTEM_PROMPT);
   const order = factsPreferExternal() ? [ext, loc] : [loc, ext];
 
+  // 2tro: same net as the live path. Only the "User:" lines count as the user's
+  // own words — a first-person clause in the "Scene:" lines is a character's.
+  const userText = userSpokenLines(sceneText);
+  const userForms = await declaredUserForms();
+
   for (const call of order) {
     const facts = parseFactsJson(await call());
-    if (facts.length > 0) return facts;
+    if (facts.length > 0) return keepUserClause(facts, { userText, userForms, thirdParties: roster });
   }
   return [];
 }

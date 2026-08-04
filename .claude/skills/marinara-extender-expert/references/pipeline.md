@@ -36,6 +36,13 @@ Everything below is kicked off as `void (async () => …)()` **after** the block
 ### Tier 3 — Ambient facts (`api.ts:734`)
 `classifyAmbient` extracts durable identity/preference/history facts from throwaway lines. Same subject routing, with one difference: facts have **no holding-pool lane**, so an unknown subject is **demoted to chat scope** tagged `[about: subject]` rather than parked. Character-scope facts get `kind: "trait"` (the trait side of the dedup matrix vs. beats' `kind: "incident"`).
 
+**A sentence can carry two facts about different people** (2tro). Given *"I was in the Army, and Mari is Polish."* the extractor kept `"Mari is Polish"` and dropped the user's clause outright — fact loss, not phrasing, because **retrieval scores the summary** and tp5's `bodyTerms` only rescues body-only *names* (`"my fourth sapper stakes"` has none). Both prompts (`SYSTEM_PROMPT`, `SCENE_FACTS_SYSTEM_PROMPT`) now teach the split explicitly; `user-clause.ts` is the deterministic net under them, applied in `classifyAmbient` and `classifySceneFacts`, restoring the clause as a verbatim `[user: …]` **prefix** (prefix, because the summary is truncated at 120 chars downstream).
+
+Its trigger conditions are all narrow on purpose — it writes an *attribution* into permanent memory. Two are worth knowing before you loosen anything:
+
+- **Only the user's own words count.** A character's dialogue is first-person too; the clause is claimed only when every content word in it appears in what the *user* said (`userSpokenLines` splits the `User:`/`Scene:` labels in the scene path).
+- **The survivor must be positively about someone else** — an explicit non-user `subject`, or a summary that *opens with* a roster name. Measured, not assumed: without this test a live-store scan produced 169 hits, nearly all summaries that carried the user perfectly well and simply never named them (*"Speaks three languages"*, *"Was medicated through high school"*). Accepting a third-party *mention* anywhere still left 39. Subject position only → 4, two of which are the issue's verified cases. `scripts/user-clause-scan.mjs` re-runs that measurement read-only.
+
 ### Long-form story (`api.ts:787`)
 When `userMessageText.length > LONG_USER_MSG_CHARS` (default 1500), the single user chunk is **skipped by Tier 2** and instead routed through the full `runSentimentPipeline` (windowed, every passing window analyzed, subject-routed) — so a multi-page memory told in one message lands with import-parity richness instead of collapsing to ~1 beat.
 

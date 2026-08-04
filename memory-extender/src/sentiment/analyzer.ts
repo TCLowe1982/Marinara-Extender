@@ -375,7 +375,12 @@ function buildUserPrompt(result: ClassificationResult, context?: AnalysisContext
     : "";
 
   const sceneLine = sceneTitle?.trim()
-    ? `Scene title: "${sceneTitle.trim()}" — when a beat starts a NEW thread and the scene title describes what is happening, prefer it as the thread label.\n\n`
+    // oknn: the caller now suppresses a title that names a person, so anything
+    // reaching here describes a scene. The "never a person" clause stays as the
+    // backstop — this line and the "never name the participants" rule above used
+    // to contradict each other whenever the chat kept its default name, and the
+    // later, more specific instruction won.
+    ? `Scene name: "${sceneTitle.trim()}" — this names the SCENE, not a person. When a beat starts a NEW thread and this describes what is happening, prefer it as the thread label. If it is somebody's name, ignore it entirely and label the EVENT instead.\n\n`
     : "";
 
   const threadsBlock = threads && threads.length > 0

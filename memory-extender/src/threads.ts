@@ -193,6 +193,56 @@ export async function threadRegistryHealth(knownNames: string[]): Promise<Regist
 // unbounded and lets the promotion pass eventually archive the arc as a unit.
 // (A scene-conclude hook from the engine would close threads sooner — tracked
 // in rfx — this is the floor that works without any engine integration.)
+// Honorifics carry no scene information, so a label made only of these plus an
+// initial ("Dr Z", "Dr. Z") is naming a person however short it is.
+const HONORIFICS = new Set([
+  "dr", "dr.", "mr", "mr.", "mrs", "mrs.", "ms", "ms.", "miss", "prof", "prof.",
+  "professor", "sgt", "sgt.", "capt", "capt.", "lt", "lt.", "sir", "lady", "doctor",
+]);
+
+/**
+ * Does this label name a PERSON rather than describe a scene? (oknn)
+ *
+ * The chat title is a legitimate thread label when the user named the chat after
+ * the scene — "Porsche test drive" appears four times in the live registry and is
+ * exactly right. It is NOT legitimate when the chat kept Marinara's default, which
+ * is the character's name, because then every beat in the chat lands on a "thread"
+ * that is really just the chat.
+ *
+ * looksCastList alone is not enough: it drops tokens shorter than 3 characters, so
+ * "Dr Z" reduces to an EMPTY token list and comes back false — precisely the label
+ * that put 290 beats on a non-thread. Hence the two extra tests below.
+ */
+export function titleNamesAPerson(title: string, knownNames: string[]): boolean {
+  const t = normalizeLabel(title);
+  if (!t) return false;
+
+  // 1. Every meaningful token belongs to a known name.
+  if (looksCastList(title, knownNames)) return true;
+
+  // 2. Honorific + initial, which carries no scene information at any length.
+  const tokens = t.split(/\s+/).filter(Boolean);
+  if (tokens.length > 0 && tokens.every((tk) => HONORIFICS.has(tk) || tk.length <= 2)) return true;
+
+  // 3. The WHOLE label is a variant of one known name — near-spellings and
+  //    diacritic differences ("Zielinska" / "Zielińska") that the token test can
+  //    miss.
+  //
+  //    Whole-string similarity only. tokenContainment was tried here and is the
+  //    wrong direction: it matches whenever a name's tokens appear ANYWHERE in the
+  //    label, so "Priya confesses the trial was rigged" — a perfectly good thread
+  //    label — was suppressed for containing "Priya". Naming a participant is fine;
+  //    being nothing BUT a participant is not. Caught by the negative tests, which
+  //    is what they are for: over-suppressing here deletes the feature rather than
+  //    fixing it.
+  for (const n of knownNames) {
+    const b = normalizeLabel(n);
+    if (!b) continue;
+    if (t === b || jaroWinkler(t, b) >= 0.9) return true;
+  }
+  return false;
+}
+
 export const THREAD_AUTO_CLOSE_DAYS = 14;
 
 export async function autoCloseStaleThreads(

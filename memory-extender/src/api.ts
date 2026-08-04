@@ -80,7 +80,7 @@ import {
   relabelThread,
   closeThread,
   threadRegistryHealth,
-  looksCastList,
+  titleNamesAPerson,
 } from "./threads.js";
 import { csrfRejection, csrfToken, CSRF_HEADER } from "./csrf.js";
 import { ingestSceneRecap, readArcs, readArcMemberships } from "./arcs.js";
@@ -702,7 +702,14 @@ export function registerApiRoutes(app: FastifyInstance): void {
 
           // Analyze with the full classified list as context so each beat sees
           // its true neighbor (e.g. the user line before the character's reply).
-          for (const { result, analysis } of await analyzeChunks(passing, classified, undefined, undefined, { roster, threads: threadLabels, sceneTitle })) {
+          // oknn: the chat's NAME is not a scene name. Marinara defaults a chat to
+          // the character's name, so passing it through told the analyzer to label
+          // every new thread after a person — measured, that put 721 beats on
+          // threads that were really just their chat. A chat the user named after
+          // the scene ("Porsche test drive") is exactly what this field is for, so
+          // the title is kept unless it names a person.
+          const threadTitle = sceneTitle && !titleNamesAPerson(sceneTitle, roster) ? sceneTitle : undefined;
+          for (const { result, analysis } of await analyzeChunks(passing, classified, undefined, undefined, { roster, threads: threadLabels, sceneTitle: threadTitle })) {
             // Attribution: chunk.speaker is the SESSION label (the whole AI
             // message is one chunk), so in multi-character RP it names the
             // session character even when the beat belongs to a co-star. The
@@ -741,16 +748,18 @@ export function registerApiRoutes(app: FastifyInstance): void {
             // active threads (fuzzy — labels drift), minting when genuinely new.
             // No label = the beat rides no thread; never guessed.
             let threadId: string | undefined;
-            if (analysis.thread) {
+            // oknn: REFUSE a person-named label instead of warning about it. The
+            // old code minted it and logged a suggestion to a console nobody reads,
+            // which is how "Dr Z" ended up holding 79% of a chat's beats. A beat
+            // with no thread is honest — absent means unknown — and no thread is
+            // better than one that is really just the chat wearing a name.
+            if (analysis.thread && titleNamesAPerson(analysis.thread, roster)) {
+              console.warn(`[ME:threads] refused thread label "${analysis.thread}" — it names a person, not a scene`);
+            } else if (analysis.thread) {
               const resolved = await resolveOrMintThread(chatId, analysis.thread, targetKey).catch(() => null);
               if (resolved) {
                 threadId = resolved.id;
-                if (resolved.isNew) {
-                  console.info(`[ME:tier2] new thread "${resolved.label}" (${resolved.id})`);
-                  if (looksCastList(resolved.label, roster)) {
-                    console.warn(`[ME:threads] new thread label looks like a CAST LIST, not an event: "${resolved.label}" — consider PATCH /api/threads/${resolved.id}`);
-                  }
-                }
+                if (resolved.isNew) console.info(`[ME:tier2] new thread "${resolved.label}" (${resolved.id})`);
               }
             }
             console.info(`[ME:tier2] subject="${subject ?? "(none)"}" → ${targetKey}${threadId ? ` | thread=${threadId}` : ""}`);

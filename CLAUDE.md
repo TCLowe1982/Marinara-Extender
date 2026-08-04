@@ -51,7 +51,9 @@ bd close <id>         # Complete work
 
 ## Session Completion — Project Addendum
 
-**Before the mandatory `git push` above, ALSO complete this step.** (Kept here, *outside* the beads-managed block, so a `bd` regen can't drop it.)
+**These amend the mandatory workflow above.** (Kept here, *outside* the beads-managed block, so a `bd` regen can't drop them.)
+
+- **SKIP `bd dolt push`.** This project does not use Dolt and never has — `bd dolt remote list` reports "No remotes configured", so the command in step 4 always fails. It is boilerplate from the beads-managed block, not a step anyone dropped. Beads data travels in `.beads/issues.jsonl` via git, so a plain `git push` is the whole job. Do not "fix" this by adding a remote.
 
 - **Update the expert skill.** If code or behavior changed this session, update the corresponding expert skill so it never drifts from the code:
   - Marinara **Extender** changes → `marinara-extender-expert` (`.claude/skills/marinara-extender-expert/` — `SKILL.md` + the affected `references/*`).

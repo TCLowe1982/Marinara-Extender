@@ -92,10 +92,17 @@ export async function reviewDiscardedEntries(
         reasons: ["discarded-swipe", ...reasons],
         detail: {
           entryId: row.id,
+          // The memory's OWN words, not the wrapped sentence above. A reader has
+          // to judge the memory, and re-parsing it out of the summary prose is
+          // the kind of coupling that breaks the first time the prose changes.
+          entrySummary: row.summary,
           lane: row.lane,
           sourceMessageId: row.sourceMessageId,
           sourceSwipeIndex: row.sourceSwipeIndex,
           discardedAt: row.discardedAt,
+          // Which older memory this one displaced, if any — the action on an
+          // orphan is to restore THAT, so the id has to travel with the record.
+          orphaned: reasons.filter((r) => r.startsWith("orphans:")).map((r) => r.slice("orphans:".length)),
         },
         at: new Date().toISOString(),
       });

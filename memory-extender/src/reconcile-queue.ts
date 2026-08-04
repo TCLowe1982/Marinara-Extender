@@ -17,7 +17,7 @@
 // import it without dragging the curator into the live bundle.
 
 import { join } from "node:path";
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import type { Scope, Lane } from "./storage.js";
 import { getDataDir, mutateYamlFile, readYamlFile } from "./storage.js";
 
@@ -144,11 +144,84 @@ export interface HeldRecord {
   reasons: string[];     // why held — e.g. ["domain:trauma", "confidence:medium"]
   detail?: unknown;      // ids etc., enough to act on if a human promotes it
   at: string;
+  /**
+   * Stable handle, so a reader can act on one record (4z0h). Assigned on append
+   * when the caller does not supply one; records written before this existed
+   * have none and are addressed by their `at` timestamp instead.
+   */
+  id?: string;
+  /**
+   * ISO datetime the human settled it. The lane holds what is OUTSTANDING, so a
+   * resolved record drops out of readHeld — but it is stamped rather than
+   * deleted, because this file is also the only record that the withholding
+   * happened at all.
+   */
+  resolvedAt?: string;
 }
 
 export async function appendHeld(rec: HeldRecord): Promise<void> {
   await mkdir(QUEUE_DIR(), { recursive: true });
-  await appendFile(heldPath(), JSON.stringify(rec) + "\n", "utf8");
+  const withId: HeldRecord = { ...rec, id: rec.id ?? `hl-${Date.now().toString(36)}-${(seq++).toString(36)}` };
+  await appendFile(heldPath(), JSON.stringify(withId) + "\n", "utf8");
+}
+
+/**
+ * Outstanding held records, newest first. Unparseable lines are skipped rather
+ * than throwing: this is an append-only log written by several producers, and one
+ * torn line must not take down the whole lane.
+ */
+export async function readHeld(): Promise<HeldRecord[]> {
+  let raw: string;
+  try {
+    raw = await readFile(heldPath(), "utf8");
+  } catch {
+    return [];
+  }
+  const out: HeldRecord[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const rec = JSON.parse(line) as HeldRecord;
+      if (!rec.resolvedAt) out.push(rec);
+    } catch { /* torn line — skip it, keep the lane */ }
+  }
+  return out.sort((a, b) => (b.at ?? "").localeCompare(a.at ?? ""));
+}
+
+/**
+ * Mark held records settled. Returns how many were stamped.
+ *
+ * Rewrites the file rather than appending a tombstone: the lane is small by
+ * design (only entangled cases reach it) and a single pass keeps "what is
+ * outstanding" a property of the file itself rather than of a replay.
+ */
+export async function resolveHeld(ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  const want = new Set(ids);
+  const now = new Date().toISOString();
+  let raw: string;
+  try {
+    raw = await readFile(heldPath(), "utf8");
+  } catch {
+    return 0;
+  }
+  let stamped = 0;
+  const lines: string[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const rec = JSON.parse(line) as HeldRecord;
+      if (rec.id && want.has(rec.id) && !rec.resolvedAt) {
+        rec.resolvedAt = now;
+        stamped++;
+      }
+      lines.push(JSON.stringify(rec));
+    } catch {
+      lines.push(line); // preserve what we could not parse
+    }
+  }
+  if (stamped > 0) await writeFile(heldPath(), lines.join("\n") + "\n", "utf8");
+  return stamped;
 }
 
 export function heldFilePath(): string {

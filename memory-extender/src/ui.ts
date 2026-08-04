@@ -135,6 +135,39 @@ const PAGE = String.raw`<!DOCTYPE html>
   .toast.bad { border-color: var(--bad); color: var(--bad); }
   .card.gone { opacity: .55; }
   .viewbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+
+  /* Held for review (4z0h). Severity is carried by the left stripe so what needs
+     attention reads before any of the words do. */
+  .tally { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+  .stat { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px;
+    padding: 9px 13px; display: grid; gap: 1px; min-width: 104px; }
+  .stat .v { font-size: 19px; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
+  .stat .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .07em; }
+  .stat.recited .v { color: var(--bad); }
+  .stat.orphan .v { color: var(--warn); }
+  .stat.thread .v { color: var(--thread); }
+  .stat.retrieved .v { color: var(--muted); }
+  .card[class*="s-"] { border-left-width: 3px; padding-left: 17px; }
+  .card.s-recited { border-left-color: var(--bad); }
+  .card.s-orphan { border-left-color: var(--warn); }
+  .card.s-thread { border-left-color: var(--thread); }
+  .card.s-retrieved { border-left-color: var(--muted); }
+  /* NOT ".why" — that is already a pill modifier (colour only) and a block-level
+     rule of the same name would silently restyle every <span class="pill why">. */
+  .hl-why { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--edge);
+    display: grid; gap: 7px; font-size: 13px; color: var(--muted); line-height: 1.6; }
+  .hl-why .r { display: grid; grid-template-columns: 8px 1fr; gap: 10px; align-items: start; }
+  .hl-why .dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 7px; }
+  .hl-why .r.recited .dot { background: var(--bad); }
+  .hl-why .r.orphan .dot { background: var(--warn); }
+  .hl-why .r.thread .dot { background: var(--thread); }
+  .hl-why .r.retrieved .dot { background: var(--muted); }
+  .hl-why b { color: var(--text); font-weight: 600; }
+  .acts { margin-top: 11px; }
+  .prov { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--edge);
+    display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 11.5px;
+    font-variant-numeric: tabular-nums; }
+  .acts .act[disabled] { opacity: .5; cursor: default; }
 </style>
 </head>
 <body>
@@ -150,6 +183,8 @@ const PAGE = String.raw`<!DOCTYPE html>
     <div id="chars"></div>
     <h2>Recent recall</h2>
     <div id="receipts"></div>
+    <h2>Needs you</h2>
+    <div id="held-nav"></div>
   </aside>
   <main>
     <div id="view"></div>
@@ -269,6 +304,7 @@ async function boot() {
 
   await buildVerdicts(rs.slice(0, 8));
   $("hdr").textContent = chars.length + " character(s) · " + rs.length + " recorded turn(s)";
+  await loadHeldCount().catch(() => {});
   render();
 }
 
@@ -293,7 +329,147 @@ function select(scope, scopeId, label) {
   render();
 }
 
-const VIEWS = { entries: renderEntries, turn: renderReceipt, deleted: renderDeleted };
+const VIEWS = { entries: renderEntries, turn: renderReceipt, deleted: renderDeleted, held: renderHeld };
+
+// ── Held for review (4z0h) ───────────────────────────────────────────────────
+// Its OWN sidebar entry, deliberately not folded under "Recently deleted". These
+// memories were retired because a re-roll threw away the reply they came from —
+// the user deleted nothing, and filing them under deletes would reassert exactly
+// the conflation that discardedAt exists to prevent. (No backticks in here —
+// this whole block lives inside the String.raw page template.)
+
+// Same discipline as the recall panel above: a closed vocabulary underneath so
+// the signals stay countable, plain language on the surface. A reader is judging
+// a memory, not reading a log line.
+function heldReason(raw) {
+  const [kind, rest] = String(raw).split(":");
+  if (kind === "recited") {
+    const n = Number(rest) || 1;
+    return { cls: "recited", text: "The character has <b>said this in a reply" +
+      (n > 1 ? ", " + n + " times" : "") + "</b> since it was captured. Retiring the memory " +
+      "does not retract what was already said." };
+  }
+  if (kind === "retrieved") {
+    const n = Number(rest) || 1;
+    return { cls: "retrieved", text: "It was put in front of the character <b>" + n +
+      (n === 1 ? " time" : " times") + "</b> but never repeated back, so it may have steered a " +
+      "reply without being quoted. The weakest signal — usually safe to leave retired." };
+  }
+  if (kind === "thread") {
+    return { cls: "thread", text: "It belongs to a <b>thread</b> that runs across scenes and " +
+      "outlives the turn it came from. Removing it quietly changes the shape of a storyline." };
+  }
+  if (kind === "orphans") {
+    return { cls: "orphan", text: "It <b>replaced an older memory</b>. With this one retired, " +
+      "nothing live stands in its place — the older memory stays retired too, behind a memory " +
+      "that is gone. One of the two probably wants to be active." };
+  }
+  return null;
+}
+
+// The strongest signal present, which drives the card's stripe. Order is the same
+// one discard-review.ts ranks by, so the UI cannot disagree with the detector.
+function heldSeverity(reasons) {
+  for (const k of ["recited", "orphans", "thread", "retrieved"]) {
+    if (reasons.some((r) => r.startsWith(k + ":"))) return k === "orphans" ? "orphan" : k;
+  }
+  return "retrieved";
+}
+
+async function renderHeld(el) {
+  const { held } = await get("/api/held");
+  if (!held.length) {
+    el.innerHTML =
+      '<div class="empty" style="border:1px dashed var(--edge);border-radius:10px;padding:34px 26px;text-align:center">' +
+      '<div style="color:var(--good);font-size:15px;font-weight:600;margin-bottom:6px">Nothing held</div>' +
+      "<p style=\"margin:0 auto;max-width:56ch;font-size:13px\">Re-rolls are retiring cleanly. A memory only " +
+      "lands here when the reply it came from was thrown away <em>after</em> the memory had already been " +
+      "used — said out loud, put on a thread, or standing in for an older memory.</p></div>";
+    return;
+  }
+
+  const tally = {};
+  for (const h of held) tally[heldSeverity(h.reasons || [])] = (tally[heldSeverity(h.reasons || [])] || 0) + 1;
+  const stat = (k, label) => tally[k]
+    ? '<div class="stat ' + k + '"><span class="v">' + tally[k] + '</span><span class="k">' + label + "</span></div>"
+    : "";
+
+  el.innerHTML =
+    '<div class="tally">' + stat("recited", "Recited") + stat("orphan", "Orphaned") +
+      stat("thread", "On a thread") + stat("retrieved", "Reached the prompt") + "</div>" +
+    '<p class="note">A re-roll retires whatever the discarded reply taught. These are the ones ' +
+      "retirement did not settle — the memory had already gone somewhere before it was thrown away. " +
+      "Nothing here is urgent, and nothing is blocking a chat.</p>" +
+    held.map(heldCard).join("");
+
+  for (const btn of el.querySelectorAll("[data-held]")) {
+    btn.addEventListener("click", () => resolveHeldRecord(btn));
+  }
+}
+
+function heldCard(h) {
+  const d = h.detail || {};
+  const reasons = (h.reasons || []).filter((r) => r !== "discarded-swipe");
+  const sev = heldSeverity(reasons);
+  const lines = reasons.map(heldReason).filter(Boolean)
+    .map((r) => '<div class="r ' + r.cls + '"><span class="dot"></span><span>' + r.text + "</span></div>").join("");
+  const orphaned = (d.orphaned || [])[0];
+  const arg = (a) => "data-held='" + esc(JSON.stringify({
+    id: h.id, action: a, scope: h.scope, scopeId: h.scopeId, entryId: d.entryId, displacedId: orphaned,
+  })) + "'";
+
+  return '<article class="card s-' + sev + '" data-card="' + esc(h.id) + '">' +
+    '<div class="sum">' + esc(d.entrySummary || h.summary) + "</div>" +
+    '<div class="meta">' +
+      (d.lane ? '<span class="pill lane-' + esc(d.lane) + '">' + esc(d.lane) + "</span>" : "") +
+      "<span>" + esc(h.scopeId) + "</span>" +
+    "</div>" +
+    '<div class="hl-why">' + lines + "</div>" +
+    '<div class="prov">' +
+      (d.sourceMessageId ? "<span>msg " + esc(d.sourceMessageId) + "</span>" : "") +
+      (d.sourceSwipeIndex !== undefined ? "<span>swipe " + esc(d.sourceSwipeIndex) + " discarded</span>" : "") +
+      (d.discardedAt ? "<span>" + esc(String(d.discardedAt).replace("T", " ").slice(0, 16)) + "</span>" : "") +
+    "</div>" +
+    '<div class="acts">' +
+      (orphaned ? '<button class="act go" ' + arg("restore-displaced") + ">Restore the older memory</button>" : "") +
+      '<button class="act" ' + arg("restore-entry") + ">Bring this one back</button>" +
+      '<button class="act" ' + arg("dismiss") + ">Leave it retired</button>" +
+    "</div></article>";
+}
+
+async function resolveHeldRecord(btn) {
+  const body = JSON.parse(btn.getAttribute("data-held"));
+  for (const b of btn.parentElement.querySelectorAll("button")) b.disabled = true;
+  try {
+    await send("POST", "/api/held/resolve", body);
+    toast(body.action === "dismiss" ? "Left retired" : "Restored");
+    await loadHeldCount();
+    await render();
+  } catch (err) {
+    for (const b of btn.parentElement.querySelectorAll("button")) b.disabled = false;
+    toast(err.message, true);
+  }
+}
+
+// The sidebar entry only appears when there is something in it. An always-visible
+// "0" trains the eye to skip the row, which is the opposite of what a lane is for.
+async function loadHeldCount() {
+  const nav = $("held-nav");
+  if (!nav) return;
+  let n = 0;
+  try { n = (await get("/api/held")).held.length; } catch { return; }
+  const heading = nav.previousElementSibling;
+  if (!n) {
+    nav.innerHTML = "";
+    if (heading) heading.style.display = "none";
+    if (state.mode === "held") { state.mode = "entries"; }
+    return;
+  }
+  if (heading) heading.style.display = "";
+  nav.innerHTML = '<button class="item' + (state.mode === "held" ? " sel" : "") + '" id="go-held">' +
+    '<span class="lbl">Held for review</span><span class="n" style="margin-left:auto;color:var(--warn)">' + n + "</span></button>";
+  $("go-held").addEventListener("click", () => { state.mode = "held"; render(); loadHeldCount(); });
+}
 
 async function render() {
   const el = $("view");

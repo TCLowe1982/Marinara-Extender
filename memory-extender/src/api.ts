@@ -20,6 +20,8 @@ import {
   softDeleteEntry,
   listDeleted,
   restoreDeletedEntry,
+  restoreDiscardedEntry,
+  restoreSupersededEntry,
   discardLosingSwipe,
   readColdIndex,
   purgeColdEntry,
@@ -91,6 +93,7 @@ import { classifyAmbient } from "./ambient.js";
 import { createEntryIfUnique, isDuplicate, readSupersessionCandidates } from "./dedup.js";
 import { Progress, progressEnabled } from "./progress.js";
 import { reviewDiscardedEntries } from "./discard-review.js";
+import { readHeld, resolveHeld } from "./reconcile-queue.js";
 import { computeJobKey, loadJob, saveJob, deleteJob, clearJobs } from "./story-jobs.js";
 import type { Chunk } from "./sentiment/types.js";
 import mammoth from "mammoth";
@@ -1711,6 +1714,74 @@ export function registerApiRoutes(app: FastifyInstance): void {
     const receipt = await readReceipt(req.params.chatId).catch(() => null);
     if (!receipt) return reply.code(404).send({ error: "no receipt for this chat yet" });
     return reply.send(receipt);
+  });
+
+  // ── Held for review (4z0h) ────────────────────────────────────────────────
+  // The lane a90l writes to: re-rolls whose retirement did NOT settle the matter,
+  // because the memory had already been used before the reply was thrown away.
+  // Read-only, so no CSRF token.
+
+  app.get("/api/held", async (_req, reply) => {
+    const held = await readHeld().catch(() => []);
+    // Only the discarded-swipe records. The same file also carries the curator's
+    // withheld verdicts (mjp), which are a different lane with different actions
+    // — filter here rather than teaching the view to ignore what it cannot act on.
+    return reply.send({ held: held.filter((h) => h.reasons?.includes("discarded-swipe")) });
+  });
+
+  // Settle one: optionally restore the discarded memory, or the older memory it
+  // displaced, then stamp the record so it leaves the lane.
+  //
+  // "dismiss" mutates NOTHING — the memory is already retired and this only
+  // acknowledges it. Kept as an explicit action rather than an implicit read
+  // receipt, because a lane that empties itself when you look at it cannot be
+  // used as a to-do list.
+  app.post<{
+    Body: { id?: string; action?: "dismiss" | "restore-entry" | "restore-displaced";
+            scope?: string; scopeId?: string; entryId?: string; displacedId?: string };
+  }>("/api/held/resolve", async (req, reply) => {
+    const { id, action = "dismiss", scope, scopeId, entryId, displacedId } = req.body ?? {};
+    if (!id) return reply.code(400).send({ error: "id is required" });
+
+    const validScopes = ["global", "character", "chat"] as const;
+    const needsScope = action === "restore-entry" || action === "restore-displaced";
+    if (needsScope && (!scope || !scopeId || !validScopes.includes(scope as Scope))) {
+      return reply.code(400).send({ error: "scope and scopeId are required to restore" });
+    }
+
+    // Confirm the record is outstanding BEFORE acting. Without this a replay —
+    // a tab left open on a card someone already settled — attempts the restore
+    // first and reports whatever that failure was ("not a superseded entry"),
+    // which is true but answers a question nobody asked. The honest answer is
+    // that the record is already gone.
+    const outstanding = (await readHeld().catch(() => [])).find((h) => h.id === id);
+    if (!outstanding) {
+      return reply.code(404).send({ error: "that item has already been settled — reload to see the current list" });
+    }
+
+    let restored: string | null = null;
+    try {
+      if (action === "restore-entry") {
+        if (!entryId) return reply.code(400).send({ error: "entryId is required" });
+        const ok = await restoreDiscardedEntry(scope as Scope, scopeId!, entryId);
+        if (!ok) return reply.code(409).send({ error: "that entry is not a discarded one — nothing restored" });
+        restored = entryId;
+      } else if (action === "restore-displaced") {
+        if (!displacedId) return reply.code(400).send({ error: "displacedId is required" });
+        const res = await restoreSupersededEntry(scope as Scope, scopeId!, displacedId);
+        if (!res) return reply.code(409).send({ error: "that entry is not a superseded one — nothing restored" });
+        restored = displacedId;
+      }
+    } catch (err) {
+      console.error("[ME:held] restore failed:", err);
+      return reply.code(500).send({ error: "restore failed" });
+    }
+
+    // Stamp last: if the restore failed the record stays in the lane, so a
+    // half-finished action is visible rather than silently swallowed.
+    const stamped = await resolveHeld([id]).catch(() => 0);
+    if (stamped === 0) return reply.code(404).send({ error: "no outstanding held record with that id" });
+    return reply.send({ ok: true, restored });
   });
 
   // ── One-click update (uo4) ────────────────────────────────────────────────

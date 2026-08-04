@@ -577,6 +577,28 @@ export async function listDeleted(
     .sort((a, b) => (b.deletedAt ?? "").localeCompare(a.deletedAt ?? ""));
 }
 
+// Bring a DISCARDED entry back to active (4z0h) — the user looked at a held
+// review record and decided the thrown-away reply had it right after all.
+//
+// A third restore rather than a flag on the other two, for the same reason
+// discardedAt is a third field: each restore is guarded to exactly one
+// retirement reason, so no path can resurrect a row that a different mechanism
+// retired for a different cause. Widening either of the existing guards would
+// quietly make "restore a delete" capable of undoing a supersession.
+export async function restoreDiscardedEntry(scope: Scope, scopeId: string, id: string): Promise<boolean> {
+  const cold = await readColdIndex(scope, scopeId);
+  const target = cold?.entries.find((e) => e.id === id);
+  if (!target || !target.discardedAt) return false;
+  const row = await promoteFromCold(scope, scopeId, id);
+  if (!row) return false;
+  await mutateIndex(scope, scopeId, (index) => {
+    const r = index.entries.find((e) => e.id === id);
+    if (r) delete r.discardedAt;
+  });
+  console.info(`[ME:restore] ${scope}:${scopeId} — ${id} restored from a discarded swipe`);
+  return true;
+}
+
 // Bring a user-deleted entry back to active. Guarded to deletedAt rows so it can
 // never resurrect a SUPERSEDED entry (that path is restoreSupersededEntry).
 export async function restoreDeletedEntry(scope: Scope, scopeId: string, id: string): Promise<boolean> {

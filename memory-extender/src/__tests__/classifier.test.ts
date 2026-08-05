@@ -146,11 +146,13 @@ describe("compound amplification", () => {
 
 describe("dysregulation compound rule", () => {
   it("deflection alone scores weakly and fails threshold", () => {
-    // "nevermind" → 1 deflection match
+    // "never mind" → 1 deflection match (the single-token "nevermind" spelling
+    // is below the content floor now, so it never reaches scoring — same math,
+    // two tokens, so this still exercises the compound rule)
     // dysregScore = 0 + 1 * 0.15 = 0.15
-    // totalMatches=1, no compound; 1 word → short: 0.15 * 1.20 = 0.18
+    // totalMatches=1, no compound; 2 words → short: 0.15 * 1.20 = 0.18
     // 0.18 < 0.40 → fails threshold
-    const result = classifyChunk(chunk("nevermind"));
+    const result = classifyChunk(chunk("never mind"));
     expect(result.scores.dysregulation).toBeCloseTo(0.18, 2);
     expect(result.passesThreshold).toBe(false);
   });
@@ -255,8 +257,9 @@ describe("threshold (salience_threshold: 0.40)", () => {
   });
 
   it("passesThreshold=false when salience < 0.40", () => {
-    // "nevermind" → dysregulation 0.18 → fails
-    const result = classifyChunk(chunk("nevermind"));
+    // "never mind" → dysregulation 0.18 → fails on salience, not on the floor
+    const result = classifyChunk(chunk("never mind"));
+    expect(result.salience).toBeCloseTo(0.18, 2);
     expect(result.passesThreshold).toBe(false);
   });
 });

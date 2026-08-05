@@ -27,6 +27,39 @@ chunking:
 salience_threshold: 0.40
 story_salience_threshold: 0.25
 
+# ── Content floor (s8qe) ──────────────────────────────────────────────────────
+# Minimum raw word tokens a chunk must contain before it is eligible to become a
+# beat at all. Below this the chunk is not scored and not analyzed — no beat,
+# rather than an invented one.
+#
+# WHY A FLOOR EXISTS. The salience gate is emotion-keyed, not content-keyed: the
+# bare token "open" matches a vulnerability keyword and sails through it. Asked
+# to name what happened in a moment that contains nothing, an 8B model reaches
+# for the nearest concrete sentence it has been shown — which is the prompt's own
+# example. That is the whole echo mechanism (pifl), and the floor removes its
+# precondition rather than blocklisting its output.
+#
+# WHY 2, AND WHY RAW TOKENS. Measured over 8,841 beats
+# (`node scripts/chunk-floor-scan.mjs`):
+#
+#   raw tokens      n     echo%    distinct-motivation%
+#   1             513    89.1%       15.6%     <- the entire pathology
+#   2-3             5    20.0%      100.0%
+#   3+           8323     ~5%        ~95%
+#
+# The cliff is at ONE token and nowhere else. Two rejected alternatives, both
+# measured before being discarded:
+#   - CHARACTERS. The prior sweep's 0-500 bucket implied a ~500-char floor; that
+#     bucket turned out to be one spike at 0-10 chars. A 500 floor would have
+#     discarded 2,099 unique real beats to catch 93 further echoes.
+#   - CONTENT WORDS (skeleton tokens). Looks equivalent, and is wrong at exactly
+#     the sizes that matter: for a short utterance the function words ARE the
+#     content. "I love you," has one content word, same as the junk token
+#     "open" — but three raw tokens against one. Beats it would have silently
+#     discarded include "I love you," at salience 1.0, "All of me," and
+#     "You are a LIAR,".
+min_chunk_tokens: 2
+
 # ── Per-emotion weights ───────────────────────────────────────────────────────
 # Scales the raw keyword match score for each emotion category.
 # Higher = more sensitive. Dysregulation and vulnerability are intentionally

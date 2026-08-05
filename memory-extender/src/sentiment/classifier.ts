@@ -33,6 +33,46 @@ function countMatches(text: string, keywords: string[]): number {
   return keywords.filter((kw) => wordBoundaryRegex(kw).test(text)).length;
 }
 
+// ── Content floor ─────────────────────────────────────────────────────────────
+
+const DEFAULT_MIN_CHUNK_TOKENS = 2;
+
+/**
+ * Raw word tokens — every word, function words KEPT.
+ *
+ * Deliberately NOT the analyzer's skeletonTokens. That strips pronouns and
+ * copulas, which is right for detecting a copied sentence and wrong for
+ * measuring whether a short line is a sentence at all: "I love you," has one
+ * content word, exactly like the junk token "open". Three raw tokens against
+ * one is the distinction that survives.
+ */
+export function rawTokenCount(text: string): number {
+  return (String(text ?? "").match(/[\p{L}\p{N}]+/gu) ?? []).length;
+}
+
+/**
+ * Is there enough here to be specific about?
+ *
+ * THE GATE THIS BACKS UP IS EMOTION-KEYED, NOT CONTENT-KEYED. `salience_threshold`
+ * asks "does this look emotional?", and a single word can answer yes: the bare
+ * token "open" matches a vulnerability keyword, scores 0.59, and passes. 513 such
+ * chunks reached the analyzer, and 89.1% of them came back carrying the prompt's
+ * own example as their motivation — because a model asked to name what happened
+ * in a moment containing nothing reaches for the nearest concrete sentence it has
+ * been shown.
+ *
+ * So this is not a salience refinement, it is a different question asked first,
+ * and it removes the echo mechanism's precondition instead of blocklisting its
+ * output. rejectAsEcho() in the analyzer catches the sentences we have already
+ * seen; this catches the next one, which no blocklist can know.
+ *
+ * Calibration and the two rejected axes are in config/sentiment-config.yaml;
+ * re-run `node scripts/chunk-floor-scan.mjs` to reproduce the numbers.
+ */
+export function meetsContentFloor(text: string, minTokens: number): boolean {
+  return rawTokenCount(text) >= minTokens;
+}
+
 // ── Core scoring ──────────────────────────────────────────────────────────────
 
 export function classifyChunk(
@@ -44,6 +84,22 @@ export function classifyChunk(
   const threshold = sourceType === "story"
     ? (cfg.story_salience_threshold ?? 0.25)
     : cfg.salience_threshold;
+
+  // Content floor first — cheaper than scoring, and a chunk with nothing in it
+  // is not a low-salience beat, it is not a beat. Returning zeroed scores rather
+  // than a suppressed-but-scored result keeps the "no beat" answer unambiguous
+  // for every caller that reads primaryEmotion.
+  const minTokens = cfg.min_chunk_tokens ?? DEFAULT_MIN_CHUNK_TOKENS;
+  if (!meetsContentFloor(chunk.text, minTokens)) {
+    return {
+      chunk,
+      scores: {},
+      primaryEmotion: null,
+      salience: 0,
+      structuralMatches: [],
+      passesThreshold: false,
+    };
+  }
 
   const text = chunk.text.toLowerCase();
   const scores: Partial<Record<Emotion, number>> = {};

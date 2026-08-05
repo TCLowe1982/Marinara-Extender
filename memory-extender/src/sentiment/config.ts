@@ -36,6 +36,10 @@ export interface SentimentConfig {
   chunking: ChunkingConfig;
   salience_threshold: number;
   story_salience_threshold: number;
+  // Minimum raw word tokens for a chunk to be eligible to become a beat (s8qe).
+  // Optional so an older config file on disk still parses; classifier.ts supplies
+  // the default.
+  min_chunk_tokens?: number;
   emotion_weights: Record<Emotion, number>;
   match_score_per_hit: number;
   compound_boost: { two_matches: number; three_plus: number };

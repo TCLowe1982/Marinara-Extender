@@ -16,7 +16,7 @@
 // nothing specific, and the nearest phrasing is the prompt.
 
 import { describe, it, expect } from "vitest";
-import { echoesAnExample, rejectAsEcho } from "../sentiment/analyzer.js";
+import { echoesAnExample, rejectAsEcho, skeleton } from "../sentiment/analyzer.js";
 
 describe("echoesAnExample", () => {
   it("catches the sentence that caused this — 669 stored beats", () => {
@@ -96,5 +96,46 @@ describe("rejectAsEcho — the escape hatch", () => {
 
   it("never rejects a motivation that is not an echo at all", () => {
     expect(rejectAsEcho("admits she deleted the Hargrove draft", "")).toBe(false);
+  });
+});
+
+describe("skeleton matching — the guard that died on one word", () => {
+  it("catches the beat that escaped into production 90 minutes after shipping", () => {
+    // Real, from professor_mari's ledger, created 2026-08-05. The prompt said
+    // "insists the boat was green"; the model wrote "insists THAT the boat was
+    // green" and substring matching let it straight through.
+    expect(echoesAnExample("Dr. Mari Zielińska insists that the boat was green, not blue, and will not let it go.")).toBe(true);
+  });
+
+  it("survives the grammatical dressing a mimicry engine actually applies", () => {
+    for (const dressed of [
+      "insists the boat was green and not blue",
+      "she insists that the boat had been green, not blue",
+      "Mari is insisting the boat was green rather than blue",
+    ]) {
+      expect(echoesAnExample(dressed), dressed).toBe(true);
+    }
+  });
+
+  it("still passes a genuinely different motivation about a boat", () => {
+    // The skeleton has to be evidence, not a topic detector.
+    expect(echoesAnExample("wants the boat repainted before her father sees it")).toBe(false);
+  });
+
+  it("skeletons strip the joints and keep the content, in order", () => {
+    expect(skeleton("insists the boat was green, not blue, and will not let it go"))
+      .toBe("insist boat green blue");
+    expect(skeleton("Dr. Mari insists that the boat was green, not blue"))
+      .toBe("dr mari insist boat green blue");
+  });
+
+  it("refuses to match on a skeleton too short to be evidence", () => {
+    // Guards against a two-word example turning into a topic ban.
+    expect(skeleton("of the it").split(" ").filter(Boolean).length).toBeLessThan(3);
+  });
+
+  it("the escape hatch still keeps a corroborated utterance", () => {
+    const src = "i keep thinking the memory loss means she was never real";
+    expect(rejectAsEcho("admits she's afraid the memory loss means she was never real", src)).toBe(false);
   });
 });

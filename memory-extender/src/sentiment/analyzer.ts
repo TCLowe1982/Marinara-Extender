@@ -194,11 +194,76 @@ const PROMPT_EXAMPLE_ECHOES: { phrase: string; probe?: RegExp }[] = [
   { phrase: "the speaker is exposing their openness" },
 ];
 
+// Function words carry the grammar an imitator redresses freely. The SKELETON is
+// what survives that: content words, in order, with the joints removed.
+const FUNCTION_WORDS = new Set([
+  "a", "an", "the", "that", "this", "these", "those", "and", "or", "but", "not", "no",
+  "is", "was", "were", "are", "am", "be", "been", "being", "will", "would", "shall",
+  "should", "can", "could", "may", "might", "must", "do", "does", "did", "done",
+  "have", "has", "had", "to", "of", "in", "on", "at", "by", "for", "with", "from",
+  "as", "it", "its", "he", "she", "they", "them", "his", "her", "their", "him",
+  "i", "me", "my", "we", "us", "our", "you", "your", "s", "t", "up", "out", "so",
+  "let", "go", "about", "into", "over", "than", "then", "there", "here", "if",
+]);
+
+/**
+ * The imitable core of a phrase: content words, in order, joints stripped.
+ *
+ * WHY THIS AND NOT SUBSTRING MATCHING. The first guard compared strings and died on
+ * a single inserted word: the prompt said "insists the boat was green", the model
+ * wrote "insists THAT the boat was green", and the beat sailed through into
+ * professor_mari's ledger 90 minutes after the guard shipped. A mimicry engine
+ * reproduces SHAPE, not characters, so a character-level test was always going to
+ * lose to ordinary grammatical dressing.
+ *
+ *   "insists the boat was green, not blue, and will not let it go"  ->  insists boat green blue
+ *   "Dr. Mari insists that the boat was green, not blue"            ->  mari insists boat green blue
+ *
+ * The second contains the first, so it is caught.
+ */
+export function skeleton(s: string): string {
+  return skeletonTokens(s).join(" ");
+}
+
+// Crude, deliberately. A real stemmer is a dependency and a behaviour change on
+// every call; all this needs is to survive the inflections an imitator reaches for
+// (insists / insisting / insisted).
+function stem(w: string): string {
+  if (w.length < 5) return w;
+  return w.replace(/(ings?|edly|ed|es|s)$/, "") || w;
+}
+
+export function skeletonTokens(s: string): string[] {
+  return (String(s ?? "").toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
+    .filter((w) => !FUNCTION_WORDS.has(w))
+    .map(stem)
+    .filter(Boolean);
+}
+
+/**
+ * Does `hay` contain `needle`'s content words, IN ORDER, allowing gaps?
+ *
+ * Substring matching lost to one inserted "that". Contiguous skeleton matching then
+ * lost to "insisting" and to an inserted "rather". Order is the last thing an
+ * imitation preserves and the first thing an unrelated sentence fails, so it is the
+ * right amount of strictness: an ordered subsequence of >= 3 content stems is
+ * evidence of copying; anything looser becomes a topic detector.
+ */
+function containsInOrder(hay: string[], needle: string[]): boolean {
+  if (needle.length < MIN_SKELETON_WORDS) return false;
+  let i = 0;
+  for (const w of hay) if (w === needle[i] && ++i === needle.length) return true;
+  return false;
+}
+
+// Below this a skeleton is too generic to be evidence of anything.
+const MIN_SKELETON_WORDS = 3;
+
 /** Is this motivation the prompt's own words rather than the chunk's? */
 export function echoesAnExample(motivation: string): boolean {
-  const m = motivation.toLowerCase().replace(/\s+/g, " ").trim();
-  if (!m) return false;
-  return PROMPT_EXAMPLE_ECHOES.some((ex) => m.includes(ex.phrase));
+  const m = skeletonTokens(motivation);
+  if (m.length === 0) return false;
+  return PROMPT_EXAMPLE_ECHOES.some((ex) => containsInOrder(m, skeletonTokens(ex.phrase)));
 }
 
 /**
@@ -223,9 +288,9 @@ export function echoesAnExample(motivation: string): boolean {
  * conversation on the subject, which is most of them in this store.
  */
 export function rejectAsEcho(motivation: string, sourceText: string): boolean {
-  const m = motivation.toLowerCase().replace(/\s+/g, " ").trim();
-  if (!m) return false;
-  const hit = PROMPT_EXAMPLE_ECHOES.find((ex) => m.includes(ex.phrase));
+  const m = skeletonTokens(motivation);
+  if (m.length === 0) return false;
+  const hit = PROMPT_EXAMPLE_ECHOES.find((ex) => containsInOrder(m, skeletonTokens(ex.phrase)));
   if (!hit) return false;
   // Corroborated: the speaker actually said it. Keep the beat.
   const src = (sourceText ?? "").toLowerCase().replace(/\s+/g, " ");

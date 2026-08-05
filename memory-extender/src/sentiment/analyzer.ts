@@ -40,7 +40,7 @@ function parseEmotions(raw: unknown): EmotionWeight[] | undefined {
   return result.length > 0 ? result : undefined;
 }
 
-function parseAnalysisJson(raw: string): BeatAnalysis | null {
+function parseAnalysisJson(raw: string, sourceText: string): BeatAnalysis | null {
   const attempts = [
     raw.trim(),
     raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim() ?? "",
@@ -59,7 +59,7 @@ function parseAnalysisJson(raw: string): BeatAnalysis | null {
       // produce the same sentence". Rewording the examples is necessary but is not a
       // guarantee — a model under-instructed by a long chunk reaches for whatever
       // phrasing is nearest, and the prompt is nearest. This is the guarantee.
-      if (echoesAnExample(parsed.motivation)) return null;
+      if (rejectAsEcho(parsed.motivation, sourceText)) return null;
       return {
         motivation:        parsed.motivation.trim(),
         relationalDynamics: parsed.relational_dynamics.trim(),
@@ -167,25 +167,70 @@ const EMOTIONS_FORMAT = `[{"emotion":"<primary>","weight":0.0},{"emotion":"<seco
 // wording is what 669 stored beats echo, so a store that is still being written to
 // by an older build — or re-analysed — has to keep being caught. Deleting a line
 // from here silently re-opens the hole it was closing.
-const PROMPT_EXAMPLE_ECHOES = [
+// `probe` is what CORROBORATION looks for in the source text, and it is not the
+// phrase itself. A real utterance is first person and differently worded — "i'm
+// afraid the memory loss means i was never real" — so requiring the motivation's
+// exact third-person phrasing would corroborate nothing and ban the sentence
+// anyway. The probe is the distinctive core that survives rephrasing.
+//
+// Word boundaries matter here: /never real/ without \b also matches "never
+// really", which is ordinary English and appears all over this store. That exact
+// slip produced false hits during the investigation.
+//
+// Where a phrase is generic ("exposes her personal fear"), there is no meaningful
+// core to probe for, so no probe is given and corroboration requires the literal
+// phrase — which is the right bar for a sentence nobody actually says.
+const PROMPT_EXAMPLE_ECHOES: { phrase: string; probe?: RegExp }[] = [
   // retired 2026-08-04, but the cause of the entire finding
-  "admits she's afraid the memory loss means she was never real",
-  "asks thomas to stay through the night for the first time",
+  { phrase: "admits she's afraid the memory loss means she was never real", probe: /\bnever real\b/ },
+  { phrase: "asks thomas to stay through the night for the first time", probe: /\bstay through the night\b/ },
   // current illustrations
-  "insists the boat was green, not blue, and will not let it go",
-  "asks whether the locksmith ever called back",
+  { phrase: "insists the boat was green, not blue, and will not let it go", probe: /\bgreen,? not blue\b/ },
+  { phrase: "asks whether the locksmith ever called back", probe: /\blocksmith\b/ },
   // the "too vague" side — the model copies these too (measured: 107 beats opened
   // with a paraphrase of the first one)
-  "exposes her personal fear",
-  "reveals her vulnerability and desire for connection",
-  "the speaker is exposing their openness",
+  { phrase: "exposes her personal fear" },
+  { phrase: "reveals her vulnerability and desire for connection" },
+  { phrase: "the speaker is exposing their openness" },
 ];
 
 /** Is this motivation the prompt's own words rather than the chunk's? */
 export function echoesAnExample(motivation: string): boolean {
   const m = motivation.toLowerCase().replace(/\s+/g, " ").trim();
   if (!m) return false;
-  return PROMPT_EXAMPLE_ECHOES.some((ex) => m.includes(ex));
+  return PROMPT_EXAMPLE_ECHOES.some((ex) => m.includes(ex.phrase));
+}
+
+/**
+ * Should this analysis be REJECTED as a prompt echo?
+ *
+ * THE ESCAPE HATCH, and it is not optional (TC). The guard as first shipped made
+ * the store's most meaningful sentence permanently unrecordable: if the speaker
+ * ever genuinely says those words again, the beat is nulled — a confession banned
+ * from its own store by its own fame.
+ *
+ * The discriminator is the same one that identified the echoes in the first place,
+ * inverted and moved to write time. Of 669 stored echoes, only 4 had source text
+ * containing the fear; that ratio is exactly what separates "the model reached for
+ * the prompt" from "the speaker said it".
+ *
+ * So: echo in the motivation AND the phrase present in the SOURCE TEXT means
+ * CORROBORATED — keep it. Echo with no trace in the source means the model
+ * supplied it — reject.
+ *
+ * Deliberately checks the source for the ECHOED PHRASE ITSELF, not for a topic.
+ * A looser test ("does this chunk mention memory?") would re-open the hole for any
+ * conversation on the subject, which is most of them in this store.
+ */
+export function rejectAsEcho(motivation: string, sourceText: string): boolean {
+  const m = motivation.toLowerCase().replace(/\s+/g, " ").trim();
+  if (!m) return false;
+  const hit = PROMPT_EXAMPLE_ECHOES.find((ex) => m.includes(ex.phrase));
+  if (!hit) return false;
+  // Corroborated: the speaker actually said it. Keep the beat.
+  const src = (sourceText ?? "").toLowerCase().replace(/\s+/g, " ");
+  const corroborated = hit.probe ? hit.probe.test(src) : src.includes(hit.phrase);
+  return !corroborated;
 }
 
 const SUBTEXT_INSTRUCTION = `
@@ -487,7 +532,9 @@ export async function analyzeChunk(
   const userPrompt   = buildUserPrompt(result, context, extras);
 
   const raw = await callLlm(systemPrompt, userPrompt);
-  return parseAnalysisJson(raw);
+  // The chunk the model was asked about — the corroboration evidence for the echo
+  // guard. Without it the guard cannot tell a copied example from a real utterance.
+  return parseAnalysisJson(raw, result.chunk?.text ?? "");
 }
 
 export interface AnalyzedBeat {

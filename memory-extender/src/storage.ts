@@ -72,6 +72,17 @@ export interface IndexEntry {
    */
   sourceMessageId?: string;
   sourceSwipeIndex?: number;
+  /**
+   * Why an entry was retired, when the reason is not a re-roll (0y2i).
+   *
+   * discardedAt began as "the swipe this came from lost". The tier move it
+   * performs — cold, full fidelity, out of recall, not the user's doing and not a
+   * 1:1 replacement — is the right shape for other machine-driven retirements
+   * too, and the pifl cleanup is the first. Rather than mint a fourth retirement
+   * reason with identical mechanics, discardedAt carries an optional reason and
+   * the swipe path simply leaves it unset.
+   */
+  retiredReason?: string;
   // Fact supersession (FR2): a newer fact replaced this one. Deliberately a
   // separate field, NOT an EntryStatus value — see the EntryStatus audit:
   // widening a serialized enum breaks empirical consumers silently.
@@ -562,6 +573,38 @@ export async function discardLosingSwipe(
   console.info(
     `[ME:discard] ${scope}:${scopeId} — retired ${hit.length} entr${hit.length === 1 ? "y" : "ies"} from a discarded swipe of ${sourceMessageId}`,
   );
+  return hit;
+}
+
+/**
+ * Retire specific entries for a stated machine reason (0y2i).
+ *
+ * Same tier move as a discarded swipe — cold, full fidelity, excluded from recall,
+ * never in "Recently deleted" — but with the reason recorded, because "why did this
+ * leave" is the first question anyone will ask of a bulk retirement. Returns the ids
+ * actually retired; already-retired rows are skipped so a re-run is a no-op.
+ */
+export async function retireEntries(
+  scope: Scope,
+  scopeId: string,
+  ids: string[],
+  reason: string,
+): Promise<string[]> {
+  if (ids.length === 0) return [];
+  const want = new Set(ids);
+  const now = new Date().toISOString();
+  const hit: string[] = [];
+  await mutateIndex(scope, scopeId, (index) => {
+    for (const r of index.entries) {
+      if (!want.has(r.id) || r.discardedAt) continue;
+      r.discardedAt = now;
+      r.retiredReason = reason;
+      hit.push(r.id);
+    }
+  });
+  if (hit.length === 0) return [];
+  await moveToCold(scope, scopeId, hit);
+  console.info(`[ME:retire] ${scope}:${scopeId} — retired ${hit.length} entr${hit.length === 1 ? "y" : "ies"} (${reason})`);
   return hit;
 }
 

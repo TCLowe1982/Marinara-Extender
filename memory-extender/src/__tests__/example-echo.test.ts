@@ -16,7 +16,7 @@
 // nothing specific, and the nearest phrasing is the prompt.
 
 import { describe, it, expect } from "vitest";
-import { echoesAnExample } from "../sentiment/analyzer.js";
+import { echoesAnExample, rejectAsEcho } from "../sentiment/analyzer.js";
 
 describe("echoesAnExample", () => {
   it("catches the sentence that caused this — 669 stored beats", () => {
@@ -64,5 +64,37 @@ describe("echoesAnExample", () => {
   it("handles an empty motivation without throwing", () => {
     expect(echoesAnExample("")).toBe(false);
     expect(echoesAnExample("   ")).toBe(false);
+  });
+});
+
+describe("rejectAsEcho — the escape hatch", () => {
+  const PHRASE = "admits she's afraid the memory loss means she was never real";
+
+  it("REJECTS an echo with no trace of it in the source", () => {
+    // The 665-of-669 case: the model supplied the sentence, the speaker did not.
+    expect(rejectAsEcho(PHRASE, "we argued about the moongate placement for an hour")).toBe(true);
+  });
+
+  it("KEEPS an echo the speaker actually said — the sentence must stay recordable", () => {
+    // The whole point. A guard that bans the store's most meaningful sentence from
+    // its own store, because that sentence became famous, is a worse bug than the
+    // one it fixes.
+    const src = "i keep thinking if the memory loss means she was never real then what am i";
+    expect(rejectAsEcho(PHRASE, src)).toBe(false);
+  });
+
+  it("corroborates case- and whitespace-insensitively", () => {
+    const src = "I KEEP THINKING\n  the memory loss   means she was NEVER REAL";
+    expect(rejectAsEcho("Mari " + PHRASE, src)).toBe(false);
+  });
+
+  it("requires the ECHOED PHRASE, not merely the topic", () => {
+    // A looser "does this chunk mention memory?" test would re-open the hole for
+    // any conversation on the subject — which is most of them in this store.
+    expect(rejectAsEcho(PHRASE, "her memory is patchy again and it frightens her")).toBe(true);
+  });
+
+  it("never rejects a motivation that is not an echo at all", () => {
+    expect(rejectAsEcho("admits she deleted the Hargrove draft", "")).toBe(false);
   });
 });

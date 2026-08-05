@@ -95,6 +95,10 @@ export interface BeatIndexEntry {
   turnStart: number;
   turnEnd: number;
   tokens: number;
+  // Machine-driven retirement (s8qe) — mirrored from the beat so a consumer
+  // reading only the index can honour it without opening 8,000 files.
+  retiredAt?: string;
+  retiredReason?: string;
 }
 
 export interface BeatIndex {
@@ -155,13 +159,70 @@ export async function readBeat(
   return readYaml<EmotionalBeat>(beatFilePath(characterId, beatId));
 }
 
-export async function readAllBeats(characterId: string): Promise<EmotionalBeat[]> {
+/**
+ * Every live beat for a character.
+ *
+ * EXCLUDES RETIRED BEATS BY DEFAULT, and that default is load-bearing rather
+ * than tidy: /api/beats-to-entries rebuilds companion ledger entries FROM this
+ * list, so a retired beat that leaked through here would silently resurrect the
+ * entry its retirement just removed. Pass includeRetired for evidence reads —
+ * audits, historical curves, anything that must see what was taken out.
+ */
+export async function readAllBeats(
+  characterId: string,
+  opts: { includeRetired?: boolean } = {},
+): Promise<EmotionalBeat[]> {
   const index = await readBeatIndex(characterId);
   if (!index) return [];
-  const beats = await Promise.all(
-    index.entries.map((e) => readBeat(characterId, e.id)),
-  );
-  return beats.filter((b): b is EmotionalBeat => b !== null);
+  const rows = opts.includeRetired
+    ? index.entries
+    : index.entries.filter((e) => !e.retiredAt);
+  const beats = await Promise.all(rows.map((e) => readBeat(characterId, e.id)));
+  return beats
+    .filter((b): b is EmotionalBeat => b !== null)
+    .filter((b) => opts.includeRetired || !b.retiredAt);
+}
+
+/**
+ * Retire beats: mark, never delete (s8qe).
+ *
+ * Writes the mark to BOTH the beat file and its index row — the file so the
+ * record is self-describing if the index is ever rebuilt, the row so consumers
+ * can honour it without opening every file. Takes the same per-character write
+ * lock as encodeBeat, so a live Tier-2 write cannot interleave and clobber it.
+ *
+ * Returns the ids actually marked: already-retired beats are skipped rather than
+ * re-stamped, so a re-run cannot rewrite history with a later date.
+ */
+export async function retireBeats(
+  characterId: string,
+  beatIds: string[],
+  reason: string,
+): Promise<string[]> {
+  const targets = new Set(beatIds);
+  const marked: string[] = [];
+  const retiredAt = new Date().toISOString();
+
+  await serializeBeatWrite(characterId, async () => {
+    const index = await readBeatIndex(characterId);
+    if (!index) return;
+    for (const row of index.entries) {
+      if (!targets.has(row.id) || row.retiredAt) continue;
+      row.retiredAt = retiredAt;
+      row.retiredReason = reason;
+      marked.push(row.id);
+
+      const beat = await readBeat(characterId, row.id);
+      if (beat) {
+        await writeYaml(beatFilePath(characterId, row.id), { ...beat, retiredAt, retiredReason: reason });
+      }
+    }
+    if (marked.length === 0) return;
+    index.lastUpdated = retiredAt;
+    await writeYaml(beatIndexPath(characterId), index);
+  });
+
+  return marked;
 }
 
 // ── Beat write ─────────────────────────────────────────────────────────────

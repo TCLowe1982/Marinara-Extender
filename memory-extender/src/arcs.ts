@@ -145,8 +145,11 @@ export async function ingestSceneRecap(input: SceneRecapInput): Promise<SceneRec
   const sceneThreads = input.sceneChatId ? await listActiveThreads(input.sceneChatId) : [];
   const threadIds = new Set(sceneThreads.map((t) => t.id));
   const members = (beatIndex?.entries ?? []).filter((b) =>
-    (input.sceneChatId && b.sourceChatId === input.sceneChatId) ||
-    (b.threadId && threadIds.has(b.threadId)),
+    // Retired beats (s8qe) are evidence, not membership — an arc built from them
+    // would re-narrate exactly what was taken out of recall.
+    !b.retiredAt &&
+    ((input.sceneChatId && b.sourceChatId === input.sceneChatId) ||
+     (b.threadId && threadIds.has(b.threadId))),
   );
 
   const now = new Date().toISOString();

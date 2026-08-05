@@ -39,10 +39,15 @@ import { join } from "path";
 const { getDataDir } = await import("../dist/storage.js");
 const { readAllBeats } = await import("../dist/sentiment/encoder.js");
 const { echoesAnExample, skeleton, skeletonTokens } = await import("../dist/sentiment/analyzer.js");
+const { readStatsEvents } = await import("../dist/stats-events.js");
 
 const args = process.argv.slice(2);
 const JSON_OUT = args.includes("--json");
 const ONLY = (args.find((a) => a.startsWith("--character=")) ?? "").split("=")[1] ?? null;
+// Retired beats are excluded by default — the curve should describe the corpus as
+// it now stands. --include-retired reproduces a pre-retirement measurement, which
+// is the only honest way to compare against a number taken before one happened.
+const INCLUDE_RETIRED = args.includes("--include-retired");
 
 const numList = (flag, fallback) => {
   const raw = (args.find((a) => a.startsWith(`--${flag}=`)) ?? "").split("=")[1];
@@ -74,7 +79,7 @@ const beats = [];
 for (const characterId of characterIds) {
   let rows = [];
   try {
-    rows = await readAllBeats(characterId);
+    rows = await readAllBeats(characterId, { includeRetired: INCLUDE_RETIRED });
   } catch (err) {
     console.error(`[skip] ${characterId}: ${err?.message ?? err}`);
     continue;
@@ -200,14 +205,34 @@ const tokenCurve = costCurve("tokens", TOKEN_CANDIDATES);
 
 // ── Report ────────────────────────────────────────────────────────────────────
 
+const statsEvents = await readStatsEvents();
+
 if (JSON_OUT) {
-  console.log(JSON.stringify({ total: beats.length, totalEchoes, buckets, curve, wordBuckets, wordCurve, tokenBuckets, tokenCurve }, null, 2));
+  console.log(JSON.stringify({ total: beats.length, totalEchoes, includeRetired: INCLUDE_RETIRED, statsEvents, buckets, curve, wordBuckets, wordCurve, tokenBuckets, tokenCurve }, null, 2));
 } else {
   const pct = (x) => `${(x * 100).toFixed(1)}%`;
   const label = (lo, hi) => (hi === Infinity ? `${lo}+` : `${lo}-${hi}`);
 
-  console.log(`beats scanned: ${beats.length} across ${characterIds.length} character store(s)`);
-  console.log(`prompt-example echoes: ${totalEchoes} (${pct(totalEchoes / beats.length)})\n`);
+  console.log(`beats scanned: ${beats.length} across ${characterIds.length} character store(s)` +
+              `${INCLUDE_RETIRED ? "  [INCLUDING RETIRED]" : ""}`);
+  console.log(`prompt-example echoes: ${totalEchoes} (${pct(totalEchoes / beats.length)})`);
+
+  // A bulk retirement changes every curve measured over this store, silently.
+  // Declaring it is the difference between "echo declined" and "we removed it".
+  const retirements = statsEvents.filter((e) => e.affectsHistoricalCurves);
+  if (retirements.length > 0) {
+    console.log("\n  ⚠ THIS CORPUS HAS BEEN DELIBERATELY ALTERED — do not compare these");
+    console.log("    numbers against a pre-event measurement without accounting for it.");
+    for (const e of retirements) {
+      const counts = Object.entries(e.counts ?? {}).map(([k, v]) => `${v} ${k}`).join(", ");
+      console.log(`      ${e.at.slice(0, 10)}  ${e.kind}${e.issue ? ` (${e.issue})` : ""}${counts ? ` — ${counts}` : ""}`);
+      if (e.selector) console.log(`        selector: ${e.selector}`);
+    }
+    console.log(`    ${INCLUDE_RETIRED
+      ? "Currently showing the PRE-retirement corpus (--include-retired)."
+      : "Re-run with --include-retired to reproduce the pre-retirement curve."}`);
+  }
+  console.log("");
 
   console.log("CHUNK LENGTH HISTOGRAM");
   console.log("  chunk chars        n     echo%   repeats   distinct-motivation%");

@@ -197,7 +197,7 @@ export async function runArcPromotion(
 
   // Promotion-eligible candidates: salient, unbound, newest first, capped.
   const candidates = beatIndex.entries
-    .filter((b) => b.salience >= CANDIDATE_SALIENCE_MIN && !boundBeatIds.has(b.id))
+    .filter((b) => !b.retiredAt && b.salience >= CANDIDATE_SALIENCE_MIN && !boundBeatIds.has(b.id))
     .sort((a, b) => (b.seq ?? 0) - (a.seq ?? 0))
     .slice(0, CANDIDATE_CAP);
   result.candidates = candidates.length;

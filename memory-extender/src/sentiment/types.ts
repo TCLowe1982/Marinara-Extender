@@ -116,4 +116,17 @@ export interface EmotionalBeat {
   sourceType: "chat" | "story";  // came from live chat or story import
   sourceChatId?: string;         // provenance: the chat this beat was imported from
   threadId?: string;             // narrative thread membership (nthr-* — see threads.ts)
+  /**
+   * Machine-driven retirement (s8qe). Mark-don't-delete: the beat stays on disk
+   * at full fidelity, but is excluded from recall-adjacent reads (readAllBeats,
+   * arc promotion, scene arcs) and from statistics.
+   *
+   * MIRRORS discardedAt/retiredReason ON IndexEntry rather than inventing a new
+   * vocabulary — same tier move, same honesty requirement: say WHY, and never
+   * claim the user deleted it or that something replaced it.
+   *
+   * Absent means live. Never means "not retired yet" — there is no pending state.
+   */
+  retiredAt?: string;            // ISO datetime
+  retiredReason?: string;
 }

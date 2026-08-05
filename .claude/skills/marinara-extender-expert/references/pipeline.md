@@ -51,6 +51,37 @@ Three things about this are worth carrying, because two plausible answers were m
 - **The axis is RAW tokens, not content words.** `skeletonTokens` looks like the principled choice and fails exactly where it matters: **for a short utterance the function words are the content**. `"I love you,"` has one content word — same as the junk token `open` — but three raw tokens against one. A content-word floor would have silently destroyed `"I love you,"` at salience 1.0, `"All of me,"`, `"You are a LIAR,"`.
 - **It's a cause fix, not a symptom fix.** `rejectAsEcho` is a blocklist of sentences already seen; the floor removes the *condition*, so the next invented sentence — which no blocklist can know — is never generated. It sits beneath `4ghy` (the chunker minting `speaker: "status", text: "open"` from a `status: open` line), which is the actual root cause and still open.
 
+**The sub-floor stratum was retired 2026-08-05** (517 beats + 12 live entries; 439 companions had already gone in the 0y2i pass and are invisible to a live-index scan because `retireEntries` moves rows to **cold**). Mark-don't-delete throughout: `retiredAt`/`retiredReason` on the beat and its index row, and **`readAllBeats` excludes retired by default** — load-bearing, because `/api/beats-to-entries` rebuilds companion entries from that list and a leak would resurrect them. Arc promotion and scene arcs filter too. Store-wide echo went **9.8% → 4.9%**.
+
+Any bulk corpus change now files its own footnote in `stats-events.yaml` (`stats-events.ts`), and `chunk-floor-scan` prints a banner refusing to let pre- and post-event numbers be compared naively (`--include-retired` reproduces the old curve). A retirement that removes one stratum changes every curve ever measured, silently — without the event, a later scan reads "echo declined on its own."
+
+### The prompt bench verdict (`s6cu`, 2026-08-05) — **SHORT + off-planet ships**
+
+n=60/arm, quarantined (poller off, sidecar stopped, 0 leaked verified), scored with the shipped guard's own `echoesPhrases`.
+
+| arm | sysTok | no-beat | echo | boilerplate | distinct |
+|---|---|---|---|---|---|
+| LONG+in-domain | 820 | 3% | 3% | 7% | 100% |
+| LONG+off-planet | 909 | 2% | 2% | 10% | 100% |
+| SHORT+no-example | 195 | 2% | 0% | 15% | 100% |
+| **SHORT+off-planet** | **303** | **0%** | **3%** | **5%** | **97%** |
+| SHORT+in-domain | 214 | 0% | 7% | 2% | 95% |
+
+The pre-registered rule (`bd memories pre-registered`) decides it mechanically: `LONG+in-domain` fails the validity floor; off-planet is carried (beats baseline by 10 on boilerplate, ≥5 needed); in-domain fails **twice** (3 points where 10 required, 7% echo where <2% required — "disqualified at any specificity"); ties go **down** the ladder.
+
+Three things worth carrying:
+- **The ladder is real in both directions.** Echo rises monotonically with bait (0% → 3% → 7%) while boilerplate falls (15% → 5% → 2%). Bait genuinely buys specificity; the rule's integers are where it stops being worth the price.
+- **Compression is free.** SHORT+off-planet matches or beats the LONG arm on every axis at **a third of the tokens**. Nobody pre-registered this.
+- **The referee change was not academic.** That arm returned *"The subject insists **that** the boat was green"* — the exact inserted-word dressing that beat the substring guard in production. A substring referee would have flattered it. Never grade echo with anything weaker than `echoesPhrases`.
+
+`SHORT+in-domain` returned *"admits she's afraid the memory loss means she was never real"* three times verbatim — the original disease, reproduced live under controlled conditions.
+
+### Contamination routing (`hjt9`) — built, measured, **not wired**
+
+Two kinds, two instruments, and conflating them is the trap: `code-filter.ts` scores **code-shaped** content structurally (1.0% of the store, 8/8 hand-read genuine) but caught 3 echoes against 864 — it is *not* an echo fix. `paste-prior.ts` handles **prose-shaped** contamination by provenance, because "insists the boat was green" has no braces to find.
+
+Two hard-won rules live there: **size is a prior, never a verdict** (all 116 chunks ≥6000 chars are spared by structure — the largest are 40KB RP scenes; a naive 6KB rule would have taken every one), and **route the partition, not the chunk** (a fence marks *those lines*, not the message around them — the same line-vs-chunk error was made twice, one file apart). Disposition is always route-and-mark, never drop.
+
 The **cap** is the other arm and is now split out as `dkib`: monotonic degradation above 2000 chars (8% → 12.3% → 14.7%), but only ~42 echoes against the floor's 457. Split or window it — never truncate. Re-measure with `scripts/chunk-floor-scan.mjs` (read-only; scores echo with the shipped skeleton matcher, so reuse it as the referee rather than writing a second scorer).
 
 **Guards must match shape, not characters.** The first echo guard held `"insists the boat was green"`; the model wrote `"insists **that** the boat was green"` and it sailed through into a real ledger 90 minutes after shipping. Use `skeletonTokens` + ordered-subsequence matching (`analyzer.ts`) — strip function words, stem, require ≥3 content stems in order. Any scorer or bench that grades echo must use the **same** matcher, or the referee undercounts exactly the way the guard did.

@@ -6,7 +6,7 @@ The prompts live as template literals across six files and are stitched together
 call time. This file is the assembled truth, committed so that a prompt change shows
 up in review as readable prose rather than as a diff of string fragments.
 
-Build: `1.2.0+2d13321`
+Build: `1.2.0+9f38278`
 
 | Prompt | Fires |
 |---|---|

@@ -33,6 +33,20 @@ Everything below is kicked off as `void (async () => …)()` **after** the block
 6. **Thread** — `resolveOrMintThread` matches the analyzer's label against the chat's active threads (fuzzy; labels drift), minting only when genuinely new.
 7. `encodeBeat` → store the beat, **and** `createEntryIfUnique` a companion entry (`lane: character_topics`, `kind: "incident"`, summary `[emotion] motivation`).
 
+### ⚠️ The substrate is an 8B local model — write for mimicry, not obedience
+
+`callLlm` in the analyzer tries **local first** and only falls back, so `dolphin3:8b` performs every beat analysis. Small models do not follow instructions, they follow **examples**: compliance degrades with prompt length, imitation does not. Every failure prosecuted on 2026-08-04/05 is that signature — example-copying, later-instruction-wins, advisory guards ignored. The prompt suite was written for a frontier model's obedience and deployed on hardware that runs on proximity.
+
+**House law: PROMPT ASKS, CODE ENFORCES.** Strip every rule from a prompt that a validator can hold instead. Measured on the tier-2 prompts: 13 bullet rules, of which **8 are validator-shaped** (sentence count, weight normalisation, subject-in-roster, genre/echo rejection, salience clamp, JSON-only, and the whole thread rule). Five remain — which is the rule budget, arrived at from the audit rather than imposed on it.
+
+**The attention tax is measurable, so measure it before adding a line.** ~880 tokens of system prompt, **80% identical across all ten emotion prompts**. `subtext` fires on **78 of 8,836 beats (1%)** and rides unconditionally on the other 99%. Thread rules waste ~198 tokens on the 73% of calls that produce no thread. Expected waste: **240 of 880 tokens per call**. Conditional assembly is not tidiness at this scale — an 8B pays for every irrelevant line.
+
+**Echo rate is U-shaped in chunk length** (`s8qe`): 21% under 500 chars, 3–4% in the middle, 14% over 6000. The short end dominates by volume (~567 echoes vs ~16). A chunk **floor** matters more than a cap — a model asked to name what happened in a moment containing nothing reaches for the nearest concrete thing, and the prompt is nearest.
+
+**Guards must match shape, not characters.** The first echo guard held `"insists the boat was green"`; the model wrote `"insists **that** the boat was green"` and it sailed through into a real ledger 90 minutes after shipping. Use `skeletonTokens` + ordered-subsequence matching (`analyzer.ts`) — strip function words, stem, require ≥3 content stems in order. Any scorer or bench that grades echo must use the **same** matcher, or the referee undercounts exactly the way the guard did.
+
+**Never bench a prompt without quiescing capture.** The live poller ingests the session's own working notes: 141 beat files in 90 minutes during one run, 14 carrying prompt artifacts, one filed under `speaker: BAD`. Set `MARINARA_EXTENDER_POLLER=0`, and verify afterwards by grepping the store for the arms' own example skeletons.
+
 ### ⚠️ Prompt examples get returned verbatim (`pifl`)
 
 The analyzer's `SHARED_RULES` illustrated *"two different moments can never produce the same sentence"* with a concrete example — and that example became **the most repeated sentence in the store**: 669 beats, across 4 characters, 37 chats and 35 days, with 542 ledger entries carrying it as their summary. In total **792 of 8,703 beats (9%) echoed a prompt example**, and *both* sides leaked — 107 beats opened with a paraphrase of the "too vague" example the rule was warning against.

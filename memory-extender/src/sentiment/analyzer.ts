@@ -249,7 +249,7 @@ export function skeletonTokens(s: string): string[] {
  * right amount of strictness: an ordered subsequence of >= 3 content stems is
  * evidence of copying; anything looser becomes a topic detector.
  */
-function containsInOrder(hay: string[], needle: string[]): boolean {
+export function containsInOrder(hay: string[], needle: string[]): boolean {
   if (needle.length < MIN_SKELETON_WORDS) return false;
   let i = 0;
   for (const w of hay) if (w === needle[i] && ++i === needle.length) return true;
@@ -259,11 +259,28 @@ function containsInOrder(hay: string[], needle: string[]): boolean {
 // Below this a skeleton is too generic to be evidence of anything.
 const MIN_SKELETON_WORDS = 3;
 
+/**
+ * Does `text` echo any of `phrases`, by skeleton rather than by characters?
+ *
+ * EXPORTED SO THE BENCH SCORES WITH THIS EXACT FUNCTION. The prompt bench must
+ * grade candidate arms against each arm's OWN examples, which PROMPT_EXAMPLE_ECHOES
+ * does not contain — so without this it would need its own copy of the matcher, and
+ * the pilot's copy was `motivation.includes(example)`. That substring referee
+ * undercounts in precisely the direction the shipped guard already proved fatal:
+ * it misses "insists THAT the boat was green". A referee weaker than the guard
+ * reports a prompt as clean when production would reject its output.
+ *
+ * One instrument, shared. Any new scorer calls this or it does not ship.
+ */
+export function echoesPhrases(text: string, phrases: string[]): boolean {
+  const m = skeletonTokens(text);
+  if (m.length === 0) return false;
+  return phrases.some((p) => containsInOrder(m, skeletonTokens(p)));
+}
+
 /** Is this motivation the prompt's own words rather than the chunk's? */
 export function echoesAnExample(motivation: string): boolean {
-  const m = skeletonTokens(motivation);
-  if (m.length === 0) return false;
-  return PROMPT_EXAMPLE_ECHOES.some((ex) => containsInOrder(m, skeletonTokens(ex.phrase)));
+  return echoesPhrases(motivation, PROMPT_EXAMPLE_ECHOES.map((ex) => ex.phrase));
 }
 
 /**

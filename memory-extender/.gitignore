@@ -3,3 +3,5 @@ dist/
 data/
 logs/
 *.env
+bench-v2-run.log
+bench-v2-*.json

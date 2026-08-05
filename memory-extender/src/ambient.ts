@@ -44,7 +44,7 @@ export interface AmbientFact {
   subject?: string;
 }
 
-const SYSTEM_PROMPT = `You are extracting facts from conversation sentences and deciding how long they matter.
+export const SYSTEM_PROMPT = `You are extracting facts from conversation sentences and deciding how long they matter.
 
 SCOPE RULES:
 - "character" scope = permanent facts about who someone IS. Save these.
@@ -240,7 +240,7 @@ export async function classifyAmbient(input: AmbientInput): Promise<AmbientFact[
 // candidate filter drops the load-bearing pieces. This reads the prose directly
 // and assembles facts, reusing the same output shape, routing, and dedup.
 
-const SCENE_FACTS_SYSTEM_PROMPT = `You are reading a roleplay scene transcript and extracting DURABLE FACTS — things that stay true after the scene ends and are worth remembering long-term.
+export const SCENE_FACTS_SYSTEM_PROMPT = `You are reading a roleplay scene transcript and extracting DURABLE FACTS — things that stay true after the scene ends and are worth remembering long-term.
 
 EXTRACT facts about:
 - identity & self-concept (a class/archetype a character claims, their role, what they call themselves)
@@ -340,7 +340,7 @@ export async function classifySceneFacts(sceneText: string, roster: string[] = [
 // CS department", where the misleading "in this moment" wraps a durable fact) —
 // is NOT yet handled here and should KEEP. It's left out of 967's scope on
 // purpose; see __tests__/judge-calibration.test.ts for that case as a fixture.
-const JUDGE_SYSTEM_PROMPT = `You audit candidate facts pulled from a roleplay scene and keep ONLY the durable ones for long-term memory. Permanent memory must stay clean, so when in doubt, DROP.
+export const JUDGE_SYSTEM_PROMPT = `You audit candidate facts pulled from a roleplay scene and keep ONLY the durable ones for long-term memory. Permanent memory must stay clean, so when in doubt, DROP.
 
 KEEP only a fact that would still be true next week, in a completely different scene:
 - identity / self-concept (a class, role, or archetype someone claims; what they are)

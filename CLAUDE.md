@@ -55,6 +55,10 @@ bd close <id>         # Complete work
 
 - **SKIP `bd dolt push`.** This project does not use Dolt and never has — `bd dolt remote list` reports "No remotes configured", so the command in step 4 always fails. It is boilerplate from the beads-managed block, not a step anyone dropped. Beads data travels in `.beads/issues.jsonl` via git, so a plain `git push` is the whole job. Do not "fix" this by adding a remote.
 
+- **Restart the sidecar whenever you need to** (TC, 2026-08-04, standing). Do not ask, and do not leave work sitting behind a stale process. Kill the listener on 3001; `start.ps1`'s watchdog relaunches it within ~10s onto the current `dist`. Verify by process start time vs `dist/index.js` mtime — **the version string is not proof**, since `buildVersion()` shells out to `git rev-parse` at runtime and a stale process reports the current HEAD.
+
+- **Show prompt text before shipping a prompt change.** TC reviews prompts; models are unreliable at prompting models. The assembled text is at `/prompts` on the running sidecar and in `memory-extender/docs/PROMPTS.md`. **Regenerate that file (`node scripts/dump-prompts.mjs`) in the same commit as any prompt edit**, so the review diff shows readable prose rather than template-literal fragments.
+
 - **Update the expert skill.** If code or behavior changed this session, update the corresponding expert skill so it never drifts from the code:
   - Marinara **Extender** changes → `marinara-extender-expert` (`.claude/skills/marinara-extender-expert/` — `SKILL.md` + the affected `references/*`).
   - Marinara **Engine** changes → `marinara-engine-expert`.

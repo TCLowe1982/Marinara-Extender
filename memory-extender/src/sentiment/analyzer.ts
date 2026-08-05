@@ -424,7 +424,7 @@ Format: ${JSON_FORMAT_WITH_SUBPATTERN}`;
 
 // ── Prompt dispatcher ──────────────────────────────────────────────────────
 
-function buildSystemPrompt(emotion: Emotion, structuralSubpatterns: string[]): string {
+export function buildSystemPrompt(emotion: Emotion, structuralSubpatterns: string[]): string {
   switch (emotion) {
     case "fear":          return fearPrompt();
     case "shame":         return shamePrompt();

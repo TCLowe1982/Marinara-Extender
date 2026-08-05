@@ -40,7 +40,7 @@ export interface RenderResult {
   members: Array<{ beatId: string; role: string; keep: boolean }>;
 }
 
-const SYSTEM_PROMPT = `You maintain a character's long-term narrative memory. You are given dated emotional beats that may form one THROUGH-LINE ARC — a named storyline spanning scenes (e.g. "Priya-as-co-experimenter").
+export const SYSTEM_PROMPT = `You maintain a character's long-term narrative memory. You are given dated emotional beats that may form one THROUGH-LINE ARC — a named storyline spanning scenes (e.g. "Priya-as-co-experimenter").
 
 Your three jobs, returned as one JSON object:
 1. CONFIRM: for each CANDIDATE beat, decide keep=true only if it genuinely belongs to this arc (causally or thematically continuous with the others). Reject coincidental overlaps.

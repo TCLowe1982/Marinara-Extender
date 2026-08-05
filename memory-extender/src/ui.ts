@@ -774,4 +774,50 @@ export function registerUiRoutes(app: FastifyInstance): void {
     reply.type("text/html; charset=utf-8").send(PAGE);
   app.get("/", send);
   app.get("/memory", send);
+
+  // ── /prompts (pifl) ────────────────────────────────────────────────────────
+  // Every prompt the sidecar sends a model, ASSEMBLED, read from the running
+  // build so it can never drift from what is actually being sent. The prompts
+  // live as template literals across six files and are stitched together at call
+  // time; reading one meant assembling it by hand, so in practice nobody did —
+  // which is how a prompt EXAMPLE became 9% of the beat store.
+  //
+  // docs/PROMPTS.md is the same content, committed, so a prompt change also shows
+  // up in a review diff. This route is the copy that cannot go stale.
+  app.get("/prompts", async (_req, reply) => {
+    const { collectPrompts } = await import("./prompt-catalog.js");
+    const { buildVersion } = await import("./update.js");
+    const docs = await collectPrompts();
+    const esc = (t: string) => String(t ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string));
+    const body = docs.map((d) => `
+      <section id="${esc(d.id)}">
+        <h2>${esc(d.title)}</h2>
+        <p class="src"><code>${esc(d.source)}</code></p>
+        <p class="when">${esc(d.when)}</p>
+        <pre>${esc(d.text)}</pre>
+      </section>`).join("");
+    const toc = docs.map((d) => `<a href="#${esc(d.id)}">${esc(d.title)}</a>`).join("");
+    return reply.type("text/html; charset=utf-8").send(`<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marinara Extender — Prompts</title><style>
+  :root { --bg:#14121a; --panel:#1c1926; --edge:#2e2a3d; --text:#e8e4f0; --muted:#9a92b0; --accent:#c9a4ff; }
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.6 ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif}
+  header{padding:14px 20px;border-bottom:1px solid var(--edge);display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+  header h1{font-size:16px;margin:0;font-weight:600} header .sub{color:var(--muted);font-size:12px}
+  header a{color:var(--accent);font-size:12px;text-decoration:none;margin-left:auto}
+  main{padding:18px 22px;max-width:100ch}
+  nav{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:22px}
+  nav a{color:var(--muted);border:1px solid var(--edge);border-radius:999px;padding:3px 11px;
+    font-size:11px;text-decoration:none} nav a:hover{color:var(--text);border-color:var(--accent)}
+  section{margin-bottom:26px} h2{font-size:14px;margin:0 0 4px;color:var(--accent)}
+  .src{margin:0;color:var(--muted);font-size:12px} .when{margin:2px 0 8px;color:var(--muted);font-size:12.5px}
+  code{background:var(--panel);padding:1px 5px;border-radius:4px;font-size:12px}
+  pre{background:var(--panel);border:1px solid var(--edge);border-radius:10px;padding:14px 16px;
+    overflow-x:auto;white-space:pre-wrap;word-break:break-word;font-size:12.5px;line-height:1.65;margin:0}
+</style></head><body>
+<header><h1>Prompts</h1><span class="sub">assembled from the running build &middot; ${esc(buildVersion())}</span>
+<a href="/memory">&larr; memory</a></header>
+<main><nav>${toc}</nav>${body}</main></body></html>`);
+  });
 }

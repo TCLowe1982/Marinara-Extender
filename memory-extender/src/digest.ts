@@ -45,7 +45,7 @@ export interface DigestResult {
 
 // ── Extraction prompt ─────────────────────────────────────────────────────────
 
-function buildSystemPrompt(characterName: string): string {
+export function buildSystemPrompt(characterName: string): string {
   return `You are a memory archivist. Extract insights from the chat log and respond ONLY with valid JSON matching the schema below. No commentary, no analysis, no markdown, no prose — JSON only.
 
 SCHEMA:
@@ -216,7 +216,7 @@ async function createEntry(
 
 // ── Snapshot prompt (session summary — different framing from full import) ────
 
-function buildSnapshotSystemPrompt(characterName: string): string {
+export function buildSnapshotSystemPrompt(characterName: string): string {
   return `You are capturing a session memory snapshot. Focus ONLY on what was actively happening in these recent messages — not a full archive. Respond ONLY with valid JSON matching the schema below. No commentary, no analysis, no markdown, no prose — JSON only.
 
 SCHEMA:

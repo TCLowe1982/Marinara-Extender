@@ -74,7 +74,7 @@ export function loginHint(): string {
     + "or set ANTHROPIC_API_KEY. The rest of the extender is unaffected.";
 }
 
-const SYSTEM_PROMPT = `You are a memory curator for a roleplay companion. Your ONE job: decide how a
+export const SYSTEM_PROMPT = `You are a memory curator for a roleplay companion. Your ONE job: decide how a
 candidate fact relates to the facts already stored about the same subject, then
 record exactly one verdict.
 
@@ -305,7 +305,7 @@ export interface ClusterVerdict {
   confidence?: "high" | "medium" | "low";
 }
 
-const CLUSTER_SYSTEM_PROMPT = `You are a memory curator. You are given a small CLUSTER of stored facts about the same subject that a similarity check flagged as possible duplicates. Judge the whole cluster at once.
+export const CLUSTER_SYSTEM_PROMPT = `You are a memory curator. You are given a small CLUSTER of stored facts about the same subject that a similarity check flagged as possible duplicates. Judge the whole cluster at once.
 
 Decide ONE outcome:
 - merge — they describe ONE underlying fact (restatements/near-duplicates). Pick the single most complete, canonical entry to KEEP (canonicalId), and list every other cluster member as redundant (redundantIds) to be retired.

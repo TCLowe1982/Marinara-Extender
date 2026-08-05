@@ -113,21 +113,34 @@ parser moves to the next attempt; if both fail it returns `null`.
   Companion entries are written with `lane: "character_topics"`, `kind: "incident"`
   hardcoded at the call sites (`pipeline.ts:187`). Nothing you write affects lane.
 
-**`no_beat`: there is no such shape, and this is a real contradiction.**
+**`no_beat` — RULED AND SHIPPED 2026-08-05.**
 
-The only ways to produce "no beat" are (a) fail the parse, or (b) trip the echo
-guard. There is no field, sentinel, or enum value by which the model can decline.
-The current prompt tells it to — *"the chunk has no beat — say so rather than
-reaching for a remembered phrase"* — and the schema gives it nowhere to say so, so
-the instruction can only be obeyed by emitting malformed JSON.
+There used to be no such shape. The only ways to produce "no beat" were to fail the
+parse or trip the echo guard, so the instruction *"the chunk has no beat — say so
+rather than reaching for a remembered phrase"* could only be obeyed by emitting
+malformed JSON. Compliance was indistinguishable from failure: an advisory guard
+doing no work.
 
-That is a decision for this rewrite, not a detail. Either:
-1. give it a real shape (e.g. `{"no_beat": true, "reason": "..."}`) and I wire the
-   parser to honour it, or
-2. drop the instruction, since an instruction that cannot be complied with is
-   exactly the advisory-guard failure this project already ruled does no work.
+Mari's ruling, now in the parser (`analyzer.ts`, `parseAnalysisJson`):
 
-Flag which and I'll implement the parser side.
+```json
+{"no_beat": true}
+```
+
+- `reason` is **tolerated, never required**. A mandatory freeform justification is a
+  fresh boilerplate surface bolted onto every decline, written by the same model
+  that reaches for the nearest phrasing. Decline telemetry belongs in code.
+- Requires the **boolean** `true`. `"true"` and `1` do not count — loose coercion
+  would let a stray field kill a real beat.
+- Yields `null`, the same as a parse failure, because downstream "no beat" is one
+  outcome with one meaning.
+- **But it is distinguishable where it matters**: `isDeclineResponse(raw)` is
+  exported and the bench counts `declined` separately from `no-beat`. This is not
+  bookkeeping — "JSON validity must not drop a point" is a pre-registered ship
+  condition, and without the split a draft that declines correctly would be scored
+  as if it emitted garbage, i.e. penalised for obeying its own instruction.
+
+So the draft may now teach declining, and the decline is free.
 
 ---
 
@@ -142,11 +155,24 @@ address and any emotion-specific noun must survive substitution.
 
 *System prompt* — only one, and only for dysregulation:
 
-- `structuralSubpatterns: string[]` → rendered by `dysregulationPrompt` as
-  `"The classifier also detected these structural signals in the text: <a, b>.
-  Weight these in your subpattern assessment."`, and **omitted entirely when the
-  array is empty** (`analyzer.ts:477-480`). This is the only conditional assembly
-  that exists today.
+- `structuralSubpatterns: string[]` → rendered by `dysregulationPrompt`
+  (`analyzer.ts:477-480`), and **omitted entirely when the array is empty**. This is
+  the only conditional assembly that exists today.
+
+  Verified output rather than a sketch — `buildSystemPrompt("dysregulation", ["dissociation","shutdown"])`:
+
+  ```text
+  The classifier also detected these structural signals in the text: dissociation, shutdown. Weight these in your subpattern assessment.
+  ```
+
+  With `[]` the line is absent from the prompt entirely — not rendered empty.
+
+  > An earlier revision of this section wrote the slot as a `<a, b>` placeholder,
+  > which a markdown preview parsed as an HTML anchor tag and swallowed, rendering
+  > `…in the text: .` and reading exactly like a broken interpolation. The code was
+  > never wrong. Left recorded because a document about markup-shaped contamination
+  > getting eaten by markup is worth one line, and because "check the code before
+  > believing the doc" is the same law as "run, don't predict".
 
 *User prompt* — built separately in `buildUserPrompt` (`analyzer.ts:539-598`), and
 you are **not** rewriting it, but your rules reference these blocks by name, so the
@@ -262,11 +288,26 @@ language. Verify yours rather than predicting it:
 node -e "import('./dist/sentiment/analyzer.js').then(m=>console.log(m.skeleton(process.argv[1])))" "your example here"
 ```
 
+**Two properties that constrain bait design** (Mari, on reading the above):
+
+1. **`not` is a function word, so the matcher is polarity-blind.** `"insists the
+   boat was green, not blue"` and a hypothetical `"insists the boat was green and
+   blue"` share the skeleton `insist boat green blue`. Fine for a fingerprint —
+   negation is exactly the kind of joint an imitator redresses — but **bait cannot
+   lean on negation for its uniqueness**, because the distinguishing word is
+   discarded before matching.
+2. **The oldest warrant sits exactly at the floor.** `"exposes her personal fear"`
+   → `expos personal fear`, three tokens, and `MIN_SKELETON_WORDS` is 3. It is
+   guarded, but with zero margin: lose one token to a rewording and it stops
+   matching. New bait should aim for **≥4 skeleton tokens** so it has somewhere to
+   erode to.
+
 **Design implication.** Bait that glows in the dark needs a skeleton that is ≥3
-content tokens and that no real motivation in this domain would ever produce. The
-off-planet examples work because `boat green blue` and `locksmith call back` are
-not things anyone here says. Check any candidate against the store before
-committing to it:
+content tokens (aim ≥4), carries its uniqueness in nouns and verbs rather than in
+negation or function words, and that no real motivation in this domain would ever
+produce. The off-planet examples work because `boat green blue` and
+`locksmith call back` are not things anyone here says. Check any candidate against
+the store before committing to it:
 
 ```bash
 node scripts/bait-audit.mjs

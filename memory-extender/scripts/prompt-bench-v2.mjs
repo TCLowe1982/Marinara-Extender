@@ -48,7 +48,7 @@ import { existsSync } from "fs";
 import { join } from "path";
 import { parse } from "yaml";
 
-const { buildSystemPrompt, echoesPhrases, skeletonTokens } = await import("../dist/sentiment/analyzer.js");
+const { buildSystemPrompt, echoesPhrases, skeletonTokens, isDeclineResponse } = await import("../dist/sentiment/analyzer.js");
 const { getDataDir } = await import("../dist/storage.js");
 const { meetsContentFloor } = await import("../dist/sentiment/classifier.js");
 const { loadSentimentConfig } = await import("../dist/sentiment/config.js");
@@ -312,12 +312,18 @@ console.log(`chunk length: min ${chunks[0]?.len} · median ${chunks[Math.floor(c
 const results = {};
 for (const arm of armNames) {
   const build = ARMS[arm];
-  const r = { n: 0, noBeat: 0, selfEcho: 0, crossEcho: 0, boiler: 0, grounding: [], motivations: [], sysTokens: 0, samples: [] };
+  const r = { n: 0, noBeat: 0, declined: 0, selfEcho: 0, crossEcho: 0, boiler: 0, grounding: [], motivations: [], sysTokens: 0, samples: [] };
   for (const ch of chunks) {
     const sys = build(ch.emotion);
     r.sysTokens += Math.round(sys.length / 4);
-    const out = parseOut(await ask(sys, `ANALYZE THIS — ${ch.text.slice(0, 12000)}`));
+    const raw = await ask(sys, `ANALYZE THIS — ${ch.text.slice(0, 12000)}`);
+    const out = parseOut(raw);
     r.n++;
+    // A DECLINE IS NOT A PARSE FAILURE (vikj). "JSON validity must not drop a point"
+    // is a pre-registered ship condition, so a prompt that legally declines must not
+    // be scored as if it emitted garbage — that would penalise a draft for obeying
+    // its own instruction. Counted apart; no-beat stays the invalid-output number.
+    if (raw && isDeclineResponse(raw)) { r.declined++; continue; }
     if (!out) { r.noBeat++; continue; }
     const m = String(out.motivation);
     // ONE INSTRUMENT: the shipped guard's matcher, not a substring test.
@@ -335,7 +341,7 @@ for (const arm of armNames) {
 }
 
 const pct = (x, n) => (n ? Math.round((x / n) * 100) : 0) + "%";
-console.log("\narm                sysTok  no-beat  self-echo  x-echo  boilerplate  grounding  distinct");
+console.log("\narm                sysTok  no-beat  declined  self-echo  x-echo  boilerplate  grounding  distinct");
 for (const arm of armNames) {
   const r = results[arm];
   const g = r.grounding.length ? Math.round((r.grounding.reduce((a, b) => a + b, 0) / r.grounding.length) * 100) + "%" : "n/a";
@@ -344,6 +350,7 @@ for (const arm of armNames) {
     arm.padEnd(19) +
     String(Math.round(r.sysTokens / r.n)).padStart(6) +
     pct(r.noBeat, r.n).padStart(9) +
+    pct(r.declined, r.n).padStart(10) +
     (OWN[arm].length ? pct(r.selfEcho, r.n) : "  n/a").padStart(11) +
     pct(r.crossEcho, r.n).padStart(8) +
     pct(r.boiler, r.n).padStart(13) +
@@ -352,7 +359,9 @@ for (const arm of armNames) {
   );
 }
 
-console.log("\nself-echo = motivation reproduces THIS arm's own bait (n/a for the baseline, which has none)");
+console.log("\nno-beat   = UNUSABLE output — unparseable, or missing a required field. This is the validity number.");
+console.log("declined  = legal {\"no_beat\":true}. Obeying the instruction, NOT a parse failure. Never counted as invalid.");
+console.log("self-echo = motivation reproduces THIS arm's own bait (n/a for the baseline, which has none)");
 console.log("x-echo    = reproduces ANY arm's bait — the number comparable across all five");
 console.log("grounding = share of the motivation's content words present in the chunk (higher better)");
 console.log("distinct  = unique motivation SKELETONS / total (the rule's own claim, measured)");

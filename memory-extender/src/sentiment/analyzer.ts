@@ -366,6 +366,48 @@ export function rejectAsEcho(motivation: string, sourceText: string): boolean {
 const SUBTEXT_INSTRUCTION = `
 - subtext: If this chunk contains sexual or physically intimate content, analyze the EMOTIONAL FUNCTION of that content — what is it doing beyond arousal? Consider: trust-building, vulnerability, power exchange, marking/claiming, first-time significance, comfort-seeking, validation, grief, or avoidance. If no sexual/intimate content is present, omit this field or set it to null.`.trim();
 
+/**
+ * The thread rule, in two variants.
+ *
+ * CONDITIONAL BECAUSE A RULE WITH NO DATA POINTS AT A WALL (Mari's ruling, vikj):
+ * when the user prompt carries no "Active threads" block, a rule instructing the
+ * model to pick from that list is instructing it to read something absent.
+ *
+ * BUT THE RULE DOES TWO JOBS AND ONLY ONE OF THEM DIES. It (a) selects from the
+ * live list and (b) MINTS a label when the moment starts something new. With no
+ * active threads, (a) is dead and (b) is the only way a thread is ever created —
+ * every chat starts with zero threads, so deleting the block outright would mean
+ * no chat could ever grow its first one. So the no-threads variant drops the
+ * selection clause and keeps the minting half.
+ *
+ * That is a DELETION of a dead reference, not new prose: the surviving sentences
+ * are the shipped ones, unedited. Wording is Mari's jurisdiction; which of her
+ * sentences are reachable is this file's.
+ */
+const THREAD_RULE_WITH_LIST = `- thread: which ongoing narrative thread this beat belongs to. Pick a label VERBATIM from the "Active threads" list when the beat continues one of them; if the moment clearly starts something new, give it a short 2–5 word label naming the EVENT or ARC. Never name the participants — the cast is not the story.
+  GOOD: "Porsche test drive", "jurisprudence soft launch", "the Hargrove investigation"
+  BAD: "thomas_and_mari" (cast list, not an event), "professor_mari_and_priya" (cast list, identifier style)
+  Use null when the beat is incidental and belongs to no thread.`;
+
+const THREAD_RULE_NO_LIST = `- thread: which ongoing narrative thread this beat belongs to. If the moment clearly starts something new, give it a short 2–5 word label naming the EVENT or ARC. Never name the participants — the cast is not the story.
+  GOOD: "Porsche test drive", "jurisprudence soft launch", "the Hargrove investigation"
+  BAD: "thomas_and_mari" (cast list, not an event), "professor_mari_and_priya" (cast list, identifier style)
+  Use null when the beat is incidental and belongs to no thread.`;
+
+/**
+ * Substituted once, at the end of buildSystemPrompt, rather than threaded through
+ * all ten prompt builders. Keeps the emotion prompts unaware of thread state — and
+ * keeps this change to two lines in a file being rewritten tomorrow.
+ */
+function applyThreadRule(prompt: string, hasThreads: boolean): string {
+  return prompt.replace(
+    THREAD_RULE_SLOT,
+    hasThreads ? THREAD_RULE_WITH_LIST : THREAD_RULE_NO_LIST,
+  );
+}
+
+const THREAD_RULE_SLOT = "__THREAD_RULE__";
+
 const SHARED_RULES = `
 Rules:
 - Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
@@ -383,10 +425,7 @@ Rules:
 - salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
 - emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
 - subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
-- thread: which ongoing narrative thread this beat belongs to. Pick a label VERBATIM from the "Active threads" list when the beat continues one of them; if the moment clearly starts something new, give it a short 2–5 word label naming the EVENT or ARC. Never name the participants — the cast is not the story.
-  GOOD: "Porsche test drive", "jurisprudence soft launch", "the Hargrove investigation"
-  BAD: "thomas_and_mari" (cast list, not an event), "professor_mari_and_priya" (cast list, identifier style)
-  Use null when the beat is incidental and belongs to no thread.
+__THREAD_RULE__
 - Respond with raw JSON only — no explanation, no markdown.`.trim();
 
 const JSON_FORMAT_STANDARD = `{"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":${EMOTIONS_FORMAT},"subtext":null,"salience":0.0,"subject":"...","thread":null}`;
@@ -554,19 +593,32 @@ Format: ${JSON_FORMAT_WITH_SUBPATTERN}`;
 
 // ── Prompt dispatcher ──────────────────────────────────────────────────────
 
-export function buildSystemPrompt(emotion: Emotion, structuralSubpatterns: string[]): string {
-  switch (emotion) {
-    case "fear":          return fearPrompt();
-    case "shame":         return shamePrompt();
-    case "hope":          return hopePrompt();
-    case "desire":        return desirePrompt();
-    case "relief":        return reliefPrompt();
-    case "vulnerability": return vulnerabilityPrompt();
-    case "trust":         return trustPrompt();
-    case "anger":         return angerPrompt();
-    case "joy":           return joyPrompt();
-    case "dysregulation": return dysregulationPrompt(structuralSubpatterns);
-  }
+/**
+ * @param hasThreads whether the USER prompt will carry an "Active threads" block.
+ *   Defaults true, which is the pre-existing text — so the bench, the prompt dump
+ *   and the bait-warrant test all keep seeing the full rule and nothing silently
+ *   changes under them.
+ */
+export function buildSystemPrompt(
+  emotion: Emotion,
+  structuralSubpatterns: string[],
+  hasThreads = true,
+): string {
+  const prompt = ((): string => {
+    switch (emotion) {
+      case "fear":          return fearPrompt();
+      case "shame":         return shamePrompt();
+      case "hope":          return hopePrompt();
+      case "desire":        return desirePrompt();
+      case "relief":        return reliefPrompt();
+      case "vulnerability": return vulnerabilityPrompt();
+      case "trust":         return trustPrompt();
+      case "anger":         return angerPrompt();
+      case "joy":           return joyPrompt();
+      case "dysregulation": return dysregulationPrompt(structuralSubpatterns);
+    }
+  })();
+  return applyThreadRule(prompt, hasThreads);
 }
 
 // ── Context window ─────────────────────────────────────────────────────────
@@ -658,7 +710,11 @@ export async function analyzeChunk(
     .map((m) => m.subpattern)
     .filter((s): s is string => Boolean(s));
 
-  const systemPrompt = buildSystemPrompt(result.primaryEmotion, structuralSubpatterns);
+  // The user prompt only carries an "Active threads" block when this is non-empty
+  // (buildUserPrompt), so the system rule that cites that list is only reachable
+  // under the same condition.
+  const hasThreads = (extras?.threads?.length ?? 0) > 0;
+  const systemPrompt = buildSystemPrompt(result.primaryEmotion, structuralSubpatterns, hasThreads);
   const userPrompt   = buildUserPrompt(result, context, extras);
 
   const raw = await callLlm(systemPrompt, userPrompt);

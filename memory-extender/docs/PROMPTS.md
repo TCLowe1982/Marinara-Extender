@@ -6,7 +6,7 @@ The prompts live as template literals across six files and are stitched together
 call time. This file is the assembled truth, committed so that a prompt change shows
 up in review as readable prose rather than as a diff of string fragments.
 
-Build: `1.2.0+9f38278`
+Build: `1.2.0+9f79121`
 
 | Prompt | Fires |
 |---|---|
@@ -21,6 +21,7 @@ Build: `1.2.0+9f38278`
 | [Tier 2 analyzer — anger](#analyzer-anger) | Fires per salient chunk whose primary emotion is anger. |
 | [Tier 2 analyzer — joy](#analyzer-joy) | Fires per salient chunk whose primary emotion is joy. |
 | [Tier 2 analyzer — dysregulation](#analyzer-dysregulation) | Fires per salient chunk whose primary emotion is dysregulation. |
+| [Tier 2 analyzer — fear, with NO active threads](#analyzer-no-threads) | Identical to the above except the thread rule drops its reference to the absent "Active threads" list. |
 | [Tier 3 ambient facts (live turn)](#ambient-facts) | One batched call per turn over pre-filtered candidate sentences. |
 | [Scene facts (import)](#scene-facts) | Import path only. |
 | [Durability judge](#fact-judge) | Second pass over scene-fact candidates before anything reaches permanent memory. |
@@ -489,7 +490,7 @@ Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotion
 ```text
 You are analyzing a moment of emotional dysregulation — behavior driven by an unregulated emotional state rather than conscious choice. This applies to anyone in the conversation; dysregulation is not a character flaw, it is a signal of an unmet need.
 
-The classifier also detected these structural signals in the text: <structural subpatterns, when matched>. Weight these in your subpattern assessment.
+The classifier also detected these structural signals in the text: (STRUCTURAL SUBPATTERNS, WHEN MATCHED). Weight these in your subpattern assessment.
 
 Subpatterns to consider:
 - bpd_testing: pushing someone away to test whether they will stay; creating conflict to check if the relationship is safe
@@ -532,6 +533,47 @@ Rules:
 - Respond with raw JSON only — no explanation, no markdown.
 
 Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","subpattern":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
+```
+
+<a id="analyzer-no-threads"></a>
+
+## Tier 2 analyzer — fear, with NO active threads
+
+**Source:** `src/sentiment/analyzer.ts — buildSystemPrompt(e, [], hasThreads=false)`  
+**When:** Identical to the above except the thread rule drops its reference to the absent "Active threads" list. The label-minting half is deliberately KEPT: every chat starts with zero threads, so this variant is the only path by which a first thread is ever created. Measured delta: 23 tokens.
+
+```text
+You are analyzing a moment of fear in a conversation.
+
+Extract the emotional beat as JSON:
+- motivation: What is this person actually afraid of? What threat — real or perceived — is activating the fear response? What does this fear protect or preserve?
+- relational_dynamics: How is the fear affecting or being shaped by the relationship in this moment? Does it push them toward clinging, fleeing, or freezing?
+- outcome: What does this moment of fear signal about what could happen next — in this relationship or within this person?
+- subtext: If this chunk contains sexual or physically intimate content, analyze the EMOTIONAL FUNCTION of that content — what is it doing beyond arousal? Consider: trust-building, vulnerability, power exchange, marking/claiming, first-time significance, comfort-seeking, validation, grief, or avoidance. If no sexual/intimate content is present, omit this field or set it to null.
+
+Rules:
+- Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
+- motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
+  TOO VAGUE, because it could describe a hundred different moments:
+    "exposes her personal fear" / "reveals her vulnerability and desire for connection"
+  SPECIFIC ENOUGH, because only one moment could have produced it:
+    "insists the boat was green, not blue, and will not let it go"
+    "asks whether the locksmith ever called back"
+  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
+  words. If you cannot name what happened in THIS chunk that specifically, the chunk
+  has no beat — say so rather than reaching for a remembered phrase.
+- Be specific to the text provided — do not generalize.
+- 1–3 sentences per field.
+- salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
+- emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
+- subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
+- thread: which ongoing narrative thread this beat belongs to. If the moment clearly starts something new, give it a short 2–5 word label naming the EVENT or ARC. Never name the participants — the cast is not the story.
+  GOOD: "Porsche test drive", "jurisprudence soft launch", "the Hargrove investigation"
+  BAD: "thomas_and_mari" (cast list, not an event), "professor_mari_and_priya" (cast list, identifier style)
+  Use null when the beat is incidental and belongs to no thread.
+- Respond with raw JSON only — no explanation, no markdown.
+
+Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
 ```
 
 <a id="ambient-facts"></a>
@@ -693,7 +735,7 @@ FIELD RULES:
 - lane: one of "open_threads" | "user_topics" | "character_topics"
   - open_threads: ongoing tasks, unresolved issues, promises, follow-ups
   - user_topics: subjects the user mentioned repeatedly or clearly cares about
-  - character_topics: things <character name> would want to remember — emotional moments, lore, callbacks
+  - character_topics: things (CHARACTER NAME) would want to remember — emotional moments, lore, callbacks
 - summary: ≤80 chars, plain text
 - content: 1-3 sentences
 - status: only for open_threads — "open" | "in_progress" | "done" | "deferred". Omit for other lanes.
@@ -721,13 +763,13 @@ FIELD RULES:
 - lane: one of "open_threads" | "user_topics" | "character_topics"
   - open_threads: work in progress right now, things promised or left unresolved
   - user_topics: facts or preferences the user revealed this session
-  - character_topics: emotional moments, lore, things <character name> should carry forward
+  - character_topics: emotional moments, lore, things (CHARACTER NAME) should carry forward
 - summary: ≤80 chars, plain text
 - content: 1-3 sentences
 - status: only for open_threads — "open" | "in_progress" | "done" | "deferred". Omit for other lanes.
 
 EXAMPLE OUTPUT:
-{"entries":[{"lane":"character_topics","summary":"Shared a quiet moment after the conference talk","content":"TC and <character name> stepped outside after the panel. The conversation shifted from professional to personal — he admitted he was nervous about the reception."},{"lane":"open_threads","summary":"TC mentioned wanting to revisit the ethics section","content":"He flagged the ethics section as needing another pass but they moved on. Worth returning to.","status":"open"}]}
+{"entries":[{"lane":"character_topics","summary":"Shared a quiet moment after the conference talk","content":"TC and (CHARACTER NAME) stepped outside after the panel. The conversation shifted from professional to personal — he admitted he was nervous about the reception."},{"lane":"open_threads","summary":"TC mentioned wanting to revisit the ethics section","content":"He flagged the ethics section as needing another pass but they moved on. Worth returning to.","status":"open"}]}
 
 RULES: 2-6 entries. Only what genuinely matters from this window. Skip filler, greetings, routine exchanges. Output ONLY the JSON object — nothing before or after it.
 ```

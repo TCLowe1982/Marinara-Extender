@@ -60,9 +60,31 @@ export async function collectPrompts(): Promise<PromptDoc[]> {
       `analyzer-${e}`, `Tier 2 analyzer — ${e}`,
       "src/sentiment/analyzer.ts — buildSystemPrompt()",
       `Fires per salient chunk whose primary emotion is ${e}. Local model first, external API on failure. Its "motivation" rules are shared across all ten.`,
-      async () => (await import("./sentiment/analyzer.js")).buildSystemPrompt(e, e === "dysregulation" ? ["<structural subpatterns, when matched>"] : []),
+      // NO ANGLE BRACKETS IN REVIEW PLACEHOLDERS. `<structural subpatterns, when
+      // matched>` reads as an HTML tag and vanishes somewhere in the path that
+      // delivers this file to a reviewer — even inside a ```text fence. The result
+      // is a line reading "...in the text: ." with a hollow slot, which has now been
+      // reported as a code bug THREE times: at the 2026-08-04 prompt-suite review
+      // (bookmark w4famc1gwc, "dysregulation empty-slot bug"), in the vikj packet,
+      // and again on reading this dump. The analyzer was correct every time.
+      //
+      // This file exists so prompts are REVIEWABLE. A placeholder that disappears
+      // defeats its only purpose, so placeholders here are parenthesised caps.
+      async () => (await import("./sentiment/analyzer.js")).buildSystemPrompt(e, e === "dysregulation" ? ["(STRUCTURAL SUBPATTERNS, WHEN MATCHED)"] : []),
     ));
   }
+
+  // The SECOND shipped variant of the shared block. buildSystemPrompt swaps the
+  // thread rule when the user prompt will carry no "Active threads" list, so this
+  // is live text on every call in a chat with no open threads — which is every
+  // chat's first turns. Emitted because a variant nobody can read is a variant
+  // nobody reviews, and the whole point of this file is that TC sees what ships.
+  out.push(await safe(
+    "analyzer-no-threads", "Tier 2 analyzer — fear, with NO active threads",
+    "src/sentiment/analyzer.ts — buildSystemPrompt(e, [], hasThreads=false)",
+    "Identical to the above except the thread rule drops its reference to the absent \"Active threads\" list. The label-minting half is deliberately KEPT: every chat starts with zero threads, so this variant is the only path by which a first thread is ever created. Measured delta: 23 tokens.",
+    async () => (await import("./sentiment/analyzer.js")).buildSystemPrompt("fear", [], false),
+  ));
 
   out.push(await safe(
     "ambient-facts", "Tier 3 ambient facts (live turn)",
@@ -89,14 +111,14 @@ export async function collectPrompts(): Promise<PromptDoc[]> {
     "digest", "Tier 1 digest (full import)",
     "src/digest.ts — buildSystemPrompt()",
     "Bulk import of a chat log into memory entries.",
-    async () => (await import("./digest.js")).buildSystemPrompt("<character name>"),
+    async () => (await import("./digest.js")).buildSystemPrompt("(CHARACTER NAME)"),
   ));
 
   out.push(await safe(
     "snapshot", "Tier 1 snapshot (periodic)",
     "src/digest.ts — buildSnapshotSystemPrompt()",
     "Roughly every 30 minutes of active chat. Deliberately framed narrower than the full digest — this window, not the archive.",
-    async () => (await import("./digest.js")).buildSnapshotSystemPrompt("<character name>"),
+    async () => (await import("./digest.js")).buildSnapshotSystemPrompt("(CHARACTER NAME)"),
   ));
 
   out.push(await safe(

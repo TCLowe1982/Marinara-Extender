@@ -282,6 +282,21 @@ function parseOut(raw) {
   return null;
 }
 
+// Emit an arm's system text verbatim and exit. The champion is edited FROM, not
+// reconstructed — a retyped prompt is a different prompt, and the whole result
+// rests on the arms being exactly what ran.
+const DUMP = (process.argv.find((a) => a.startsWith("--dump-arm=")) ?? "").split("=")[1];
+if (DUMP) {
+  const emotion = arg("emotion", "fear");
+  const build = ARMS[DUMP];
+  if (!build) {
+    console.error(`Unknown arm "${DUMP}". Known: ${Object.keys(ARMS).join(", ")}`);
+    process.exit(1);
+  }
+  process.stdout.write(build(emotion));
+  process.exit(0);
+}
+
 const chunks = await sampleChunks(N);
 if (chunks.length === 0) {
   console.error("No eligible chunks found. Is MARINARA_EXTENDER_DATA pointing at the live store?");

@@ -21,3 +21,6 @@ marinara-extender-backups/
 
 # Local working notes (bug reports, drafts) - published artifacts live elsewhere
 local-notes/
+
+# Tripwire log: local ingestion telemetry, not shared state.
+memory-extender/data/bait-contamination.jsonl

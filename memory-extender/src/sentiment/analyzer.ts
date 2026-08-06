@@ -24,6 +24,8 @@ import { getCachedAuth } from "../auth-cache.js";
 import { fetchWithBackoff } from "../http.js";
 import { localUrl, localEnabled, localModel, externalUpstream, externalModel } from "../llm-config.js";
 import type { BeatAnalysis, ClassificationResult, Emotion, EmotionWeight } from "./types.js";
+import { detectBaitContamination, recordContamination, excerptAround } from "./bait-tripwire.js";
+import { getDataDir } from "../storage.js";
 
 // ── JSON extraction (handles markdown-fenced responses) ────────────────────
 
@@ -485,9 +487,24 @@ export function rejectAsEcho(motivation: string, sourceText: string): boolean {
   // week. Word-boundaried for the same reason the legacy probes are: /never real/
   // without \b also matches "never really", which is everywhere in this store.
   const src = (sourceText ?? "").toLowerCase().replace(/\s+/g, " ");
-  const corroborated = hit.probeAll
-    ? hit.probeAll.every((w) => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i").test(src))
-    : hit.probe ? hit.probe.test(src) : src.includes(hit.phrase);
+
+  // GENERATED BAIT HAS NO ESCAPE HATCH, and closing it is not a loss.
+  //
+  // The hatch exists so a real confession is not banned by its own fame — sound for a
+  // sentence a person could plausibly say. probeAll words are chosen by anti-join
+  // BECAUSE the corpus has never held them, so "the source contains them" cannot mean
+  // "someone finally said it" with any useful probability; it means the bait leaked
+  // into the conversation. That is precisely the sequence that killed the boat: it was
+  // discussed in a chat, the discussion made its probe corroborable, and the hatch
+  // then let ten echoes through on the character it was discussed with.
+  //
+  // The false-negative cost is a genuine beat about, say, a cooperage AND a millpond
+  // sluice in one chunk. Against that: a warrant everyone trusts and nobody checks.
+  // And the remedy when it does happen is rotation, which now costs seconds — see
+  // bait-tripwire.ts, which logs the event so the rotation actually gets triggered.
+  if (hit.probeAll) return true;
+
+  const corroborated = hit.probe ? hit.probe.test(src) : src.includes(hit.phrase);
   return !corroborated;
 }
 
@@ -775,6 +792,8 @@ export interface AnalysisExtras {
   roster?: string[];
   threads?: string[];
   sceneTitle?: string;
+  /** Only used to attribute a contamination event to a conversation. */
+  chatId?: string;
 }
 
 function buildUserPrompt(result: ClassificationResult, context?: AnalysisContext, extras?: AnalysisExtras): string {
@@ -859,9 +878,27 @@ export async function analyzeChunk(
   const userPrompt   = buildUserPrompt(result, context, extras);
 
   const raw = await callLlm(systemPrompt, userPrompt);
+  const sourceText = result.chunk?.text ?? "";
+
+  // TRIPWIRE. Fires on the SOURCE, not on the model's answer, because the leak event
+  // is "bait vocabulary appeared in a chat" — which is upstream of, and independent
+  // of, whether the model happened to echo it this time. Catching it here is what
+  // makes rotation possible BEFORE the store absorbs a run of echoes, instead of
+  // after, which is all scripts/bait-rot.mjs can offer.
+  const tripped = detectBaitContamination(sourceText, listEchoEntries());
+  for (const t of tripped) {
+    recordContamination(getDataDir(), {
+      at: new Date().toISOString(),
+      entry: t.entry,
+      words: t.words,
+      chatId: extras?.chatId,
+      excerpt: excerptAround(sourceText, t.words[0] ?? ""),
+    });
+  }
+
   // The chunk the model was asked about — the corroboration evidence for the echo
   // guard. Without it the guard cannot tell a copied example from a real utterance.
-  return parseAnalysisJson(raw, result.chunk?.text ?? "");
+  return parseAnalysisJson(raw, sourceText);
 }
 
 export interface AnalyzedBeat {

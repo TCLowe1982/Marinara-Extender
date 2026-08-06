@@ -127,6 +127,42 @@ if (json) {
   }
 }
 
+// ── Live tripwire events ─────────────────────────────────────────────────────
+// The sweep above is retrospective. bait-tripwire.ts fires at INGESTION and appends
+// here, so this section answers the question the sweep cannot: has bait been spoken
+// into a chat since the last rotation, whether or not the model echoed it yet.
+
+const { contaminationLogPath } = await import("../dist/sentiment/bait-tripwire.js");
+const logPath = contaminationLogPath(getDataDir());
+let events = [];
+try {
+  events = (await readFile(logPath, "utf8"))
+    .split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    .filter(Boolean);
+} catch { /* no log yet is the good case */ }
+
+if (!json) {
+  console.log(`\n── live tripwire ──`);
+  if (!events.length) {
+    console.log("no contamination events recorded (no bait word has entered a chat).");
+  } else {
+    const byEntry = new Map();
+    for (const e of events) byEntry.set(e.entry, (byEntry.get(e.entry) ?? 0) + 1);
+    console.log(`${events.length} contamination event(s) across ${byEntry.size} warrant(s):`);
+    for (const [entry, n] of [...byEntry].sort((a, b) => b[1] - a[1])) {
+      console.log(`  ledger entry ${entry}: ${n} event(s)`);
+    }
+    console.log(`\nA bait word was SPOKEN into a chat. That is the leak, and it is the`);
+    console.log(`moment to rotate — before the store absorbs a run of echoes rather than`);
+    console.log(`after, which is all the sweep above can offer.`);
+    console.log(`  node scripts/bait-select.mjs --generate 200 --seed <new> --pick specific:2,vague:2 --write src/sentiment/bait.json`);
+    console.log(`Full events (with excerpts, for telling meta-talk from real talk):`);
+    console.log(`  ${logPath}`);
+  }
+}
+
 // Exit on CURRENT rot only. A retired warrant that has rotted is a known, accepted
-// loss; failing on it forever would train everyone to ignore this check.
-process.exit(rows.some((r) => r.rotted && r.current) ? 1 : 0);
+// loss; failing on it forever would train everyone to ignore this check. A live
+// tripwire event on a CURRENT warrant is a failure too — that is bait in a chat.
+const liveHit = events.some((e) => rows[e.entry]?.current);
+process.exit(rows.some((r) => r.rotted && r.current) || liveHit ? 1 : 0);

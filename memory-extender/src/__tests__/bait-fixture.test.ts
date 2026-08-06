@@ -83,11 +83,27 @@ describe("probeAll corroboration", () => {
     }
   });
 
-  it("releases the echo only when every probe word is corroborated", () => {
+  // INVERTED 2026-08-06 (TC). This previously asserted that full corroboration opens
+  // the escape hatch, mirroring the legacy behaviour. It should not, and the reason is
+  // the premise the hatch rests on: "if the source says it, the speaker really said
+  // it". True for a human-plausible sentence; FALSE for anti-join bait, whose words
+  // were selected precisely because this corpus has never held them. Their appearance
+  // means the bait leaked into the chat — which is the exact sequence that killed the
+  // boat example — so treating it as authenticity re-opens the hole one level down.
+  it("never releases generated bait, even when fully corroborated", () => {
     for (const e of bait.specific) {
       const src = `we were talking about the ${e.probe.join(" and the ")} the other day`;
-      expect(rejectAsEcho(e.text, src)).toBe(false);
+      expect(rejectAsEcho(e.text, src)).toBe(true);
     }
+  });
+
+  // The hatch still exists where its premise holds. A retired human-plausible phrase
+  // with a regex probe must still be releasable, or a real confession gets banned by
+  // its own fame — the bug that made the hatch necessary in the first place.
+  it("keeps the hatch open for human-plausible legacy phrases", () => {
+    const legacy = "admits she's afraid the memory loss means she was never real";
+    expect(rejectAsEcho(legacy, "")).toBe(true);
+    expect(rejectAsEcho(legacy, "i'm afraid i was never real, none of it happened")).toBe(false);
   });
 
   it("keeps the retired entries, so older stored echoes stay catchable", () => {

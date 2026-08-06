@@ -185,10 +185,51 @@ Separate from the per-turn path: `digest.ts`, via `/api/snapshot` / `/api/digest
 `runSentimentPipeline` is the pattern applied literally — invoke the `ledger-pattern` skill when touching it:
 
 - **Stage 0 — chunk** (`chunkMessages`): break messages on dialogue/narrator boundaries. POV relabel turns first-person "Narrator" into a named character.
-- **Stage 1 — classify** (`classifyChunks`): fast keyword/salience filter → `passing`. For **chat** imports `analyzeAll` is true (the whole scene is one speaker label, so it can only be split by analyzed *subject*, not speaker); **story** imports keep the speaker pre-filter.
+- **Stage 1 — classify** (`classifyChunks`): fast keyword/salience filter → `passing`. For **chat** imports `analyzeAll` is true (the whole scene is one speaker label, so it can only be split by analyzed *subject*, not speaker); **story** imports keep the speaker pre-filter. **Three gates run before scoring**, each setting `suppressedReason` so a guard working and a guard misfiring are never indistinguishable — see *Stage-1 gates* below.
 - **Stages 2+3 — analyze & encode, one chunk at a time** (`pipeline.ts:167`): each chunk → `analyzeChunk` (with its true before/after neighbors + roster) → subject-route → `encodeBeat` + companion entry. **Persisted incrementally** — the on-disk beat store *is* the ledger: a cancel/crash keeps every completed beat, and a re-run resumes via deterministic `beatIdForChunk` (skipping done chunks while still ensuring their companion entry exists). `forceReanalyze` bypasses the resume skip when a re-import's purpose is re-routing subjects.
 - **Narrative-position boost** (`pipeline.ts:60`, `×1.3`): the final 20% of a story carries climax/resolution weight, so its beats' salience is boosted.
 - **Durable-fact pass** (`ingestSceneFacts`, 1dn): runs over the **full** chunk set, not just salient ones — identity/lore facts live *below* the beat salience threshold, so they'd never become beats; captured separately. Guarded so a fact-pass failure can't fail an import that already saved beats.
+
+## Stage-1 gates (`classifier.ts`) — what never reaches the analyzer
+
+Three gates run before scoring. Each sets `suppressedReason` on the result, because a chunk refused for being machine text must be distinguishable from one that was merely dull — otherwise nobody measuring "how much are we skipping" can tell a guard working from a guard misfiring.
+
+| Gate | `suppressedReason` | Rejects |
+|---|---|---|
+| Content floor | `content-floor` | under `min_chunk_tokens` (2 raw tokens) |
+| Self-prompt | `self-prompt` | ≥40% of the chunk is our own system prompt |
+| Ops/meta | `ops-lane` | nothing survives partitioning as prose |
+
+**Self-ingestion (`self-prompt.ts`, pe4o).** Prompt text pasted into a chat for review — the project's own required workflow — was being chunked, scored, analysed and filed under a character. 65 live records were built that way, 62 on one character, 47 in a single day; it is also the root of the bait rot, since the boat example's probe became corroborable because the *prompt containing it* was ingested. Signatures are **derived from the live prompt**, never hand-listed, for the same reason `bait-warrant` reads the built prompt: a hand list rots silently. `docs/PROMPTS.md` catalog furniture is registered too — the doc is generated *from* the prompts and exists to be pasted.
+
+**Ops/meta (`ops-lane.ts`, hjt9).** `routeOps` splits a chunk into prose and structure. Structure goes to `data/ops-lane.jsonl` — **a sink, not a fourth lane**: `storage.ts`'s `Lane` type means a *recall* lane, so filing ops content there would classify it correctly and then feed it to the model anyway. The prose half is what continues, and `classifyChunk` returns the **reduced** chunk, so the analyzer's prompt, the stored beat's text and the echo guard's corroboration evidence all see what a person said rather than what they pasted. That is how "the escape hatch must not accept a paste of the phrase as the speaker having said it" is enforced — structurally, not with another special case inside the guard.
+
+## House law: return the split, never a boolean
+
+**A verdict about a whole chunk misfiles everything wrapped around the thing it detected.** A detector answers *"is this chunk X?"* when the honest question is *"which lines of it are X?"* Both read as correct code, and they diverge exactly on the material that matters most — real conversation with something pasted into the middle of it. The failure is silent: the prose dies with the paste and nobody sees it go.
+
+Three incidents, all found by **measurement, never by review**:
+
+- `code-shape-scan` — a chunk at 0.64 ops-shaped whose prose was *"god yeah dotenv loading is sonnet's KRYPTONITE…"* around a fenced block. Real memory.
+- `paste-prior`'s fence override (`if (fenced) score = max(score, 0.9)`) — all six riskiest calls were Mari's own messages, e.g. *"TC. LOOK AT IT. look at your progress bar"* around one pasted log, routed whole at 0.90.
+- the self-prompt gate — suppressed on **any** matching line, killing 2,242 characters of *"Read-only. Here's the smell, ranked…"* for quoting one schema line.
+
+**The remedy.** Return the partition. When the unit genuinely cannot be split — every affected record in this store is a *single line* — use a **coverage ratio** rather than any-hit; that is the same idea at a granularity where lines do not exist.
+
+**The sibling failure: a precision number is only valid for the scope it was measured in.** `code-filter`'s `shell-command` and `bare-literal` were measured safe at chunk level, where they touch the ops-shaped 1%. Per-line routing applied them to *every* chunk, and they began dropping markdown blockquotes of character-card prose (`> Do not proactively suggest breaks…`) and lines of dialogue (`"Zielińska. Party of three. Five-thirty."`). Widening a detector's scope invalidates its precision measurement and requires re-measuring. Fixing both took 310 touched chunks down to 140.
+
+## Bait & the echo guard — four layers
+
+The prompt's illustrations are **bait**: concrete enough to teach shape, absurd enough to self-flag, and registered in `PROMPT_EXAMPLE_ECHOES` so a parroted one is arrested.
+
+- **`bait-select.mjs`** picks bait by **anti-join against the whole corpus**, not by ear. Two shipped examples went in-domain within 48 hours of being chosen by ear. Enforces: every content word under a frequency ceiling (25) except speech-act scaffolding; ≥2 zero-occurrence probe words; probe stems that prefix *no* raw corpus word. `--generate` mints candidates from a lexicon so no sentence is ever hand-written into a file or a message.
+- **`bait-warrant.test.ts`** — every quoted illustration in the built prompt must be arrestable.
+- **`bait-tripwire.ts`** — fires at ingestion when a bait word appears in a chunk. Generated bait has **no escape hatch**: its words are corpus-absent by construction, so their appearance means contamination, not authenticity. The hatch stays open for human-plausible legacy phrases, where the premise still holds.
+- **`bait-rot.mjs`** — the inverse of `bait-warrant`: can the *store* now corroborate a warrant? Runs on `start.ps1` (non-blocking) and `.githooks/pre-push` (blocking). Exits non-zero on **current** rot only; failing forever on retired rot trains everyone to ignore it.
+
+**Single-channel exposure.** Bait appears in the system prompt and in no other artifact the pipeline can ingest. It lives in `src/sentiment/bait.json`, is never quoted in source, tests or docs, and is redacted from `docs/PROMPTS.md` and `bait-audit` output. **Rotation, not secrecy, is the defence** — anti-join costs seconds, so anything exposed is replaced.
+
+**When counting contamination, the contamination's own artifacts are the largest false-positive source.** Measured three times in one session, each inflated number looking like a scarier version of the true finding: whole-YAML scanning counted stored *field values* (1,100 vs 65); short bait fragments counted quotations (683); the pifl phrase matched 596 records alone (636 vs 34). Only source text — `text` on a beat, `content` on an entry — answers "was this ingested".
 
 ## Cadence & threshold quick-reference
 
@@ -206,5 +247,7 @@ Separate from the per-turn path: `digest.ts`, via `/api/snapshot` / `/api/digest
 - **Every beat needs a companion ledger entry.** The loader builds the injected `<memory>` block from the **entry index, not the beats store** (`pipeline.ts:255–259`). A beat with no companion entry is invisible to recall. Never encode a beat without `createEntryIfUnique`.
 - **Never guess a subject into a permanent ledger.** Unknown subject → holding pool (beats) or chat-scope `[about: …]` (facts). Guessing pollutes a character's memory irreversibly.
 - **Fire-and-forget must never block or throw into the response.** Each tier is wrapped in its own `try/catch` and `void`-ed. A failed tier logs a warning; the turn still returns its block.
+- **Return the split, never a boolean.** Any detector deciding "is this chunk X?" must return which *lines* are X. Three separate incidents; see *House law* above.
+- **A precision number is only valid for the scope it was measured in.** Widening a detector's scope requires re-measuring it.
 - **Dedup is `kind`-aware** — `incident` (beats) vs `trait` (ambient facts) go through different bars in the dedup matrix (`dedup.ts`). Pass the right `kind` or dedup misfires.
 - **The import path is windowed + resumable by design** — don't "optimize" it into one big call; that's the exact failure the Ledger Pattern exists to prevent.

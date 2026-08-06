@@ -1,0 +1,32 @@
+{
+  "specific": [
+    {
+      "text": "asks whether the cooperage ever caulked the millpond sluice",
+      "probe": [
+        "cooperage",
+        "caulk"
+      ],
+      "skeletonLen": 7
+    },
+    {
+      "text": "asks whether the tannery ever whitewashed the malthouse",
+      "probe": [
+        "tannery",
+        "whitewash"
+      ],
+      "skeletonLen": 6
+    }
+  ],
+  "vague": [
+    {
+      "text": "reveals her vulnerability and her longing for connection",
+      "probe": [],
+      "skeletonLen": 4
+    },
+    {
+      "text": "highlights the complexity of their evolving relationship",
+      "probe": [],
+      "skeletonLen": 4
+    }
+  ]
+}

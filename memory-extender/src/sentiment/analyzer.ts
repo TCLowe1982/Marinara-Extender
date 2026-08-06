@@ -17,6 +17,9 @@
 // chunks visible so the model understands tone-vs-intent and conversational
 // register rather than reading lines in isolation.
 
+import { existsSync, readFileSync } from "fs";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 import { getCachedAuth } from "../auth-cache.js";
 import { fetchWithBackoff } from "../http.js";
 import { localUrl, localEnabled, localModel, externalUpstream, externalModel } from "../llm-config.js";
@@ -228,7 +231,25 @@ const EMOTIONS_FORMAT = `[{"emotion":"<primary>","weight":0.0},{"emotion":"<seco
 // Where a phrase is generic ("exposes her personal fear"), there is no meaningful
 // core to probe for, so no probe is given and corroboration requires the literal
 // phrase — which is the right bar for a sentence nobody actually says.
-const PROMPT_EXAMPLE_ECHOES: { phrase: string; probe?: RegExp }[] = [
+//
+// `probeAll` IS THE ROT-RESISTANT FORM, AND IT REPLACES `probe` FOR NEW BAIT.
+// A single-word probe is a warrant one ordinary noun can void. /\blocksmith\b/ was
+// voided within a week — "locksmith" became a live thread label via an unrelated
+// metaphor about sealed read paths — and the failure is structural, not unlucky:
+// bait is MOST likely to be parroted on chunks about its own topic, which are
+// exactly the chunks where the hatch opens. Guard strength was inversely correlated
+// with risk. probeAll requires EVERY listed word in the source, and the words are
+// chosen by anti-join against the whole corpus (scripts/bait-select.mjs), so voiding
+// one takes a conversation that contains several words the store has never held.
+export interface EchoEntry {
+  phrase: string;
+  /** Legacy single-pattern corroboration. Rot-prone; kept for the retired entries. */
+  probe?: RegExp;
+  /** Corroborated only if EVERY word appears in the source text. */
+  probeAll?: string[];
+}
+
+const PROMPT_EXAMPLE_ECHOES: EchoEntry[] = [
   // retired 2026-08-04, but the cause of the entire finding
   { phrase: "admits she's afraid the memory loss means she was never real", probe: /\bnever real\b/ },
   { phrase: "asks thomas to stay through the night for the first time", probe: /\bstay through the night\b/ },
@@ -240,7 +261,48 @@ const PROMPT_EXAMPLE_ECHOES: { phrase: string; probe?: RegExp }[] = [
   { phrase: "exposes her personal fear" },
   { phrase: "reveals her vulnerability and desire for connection" },
   { phrase: "the speaker is exposing their openness" },
+  ...loadBaitFixture(),
 ];
+
+/**
+ * The current illustrations, loaded from a fixture rather than written here.
+ *
+ * SINGLE-CHANNEL EXPOSURE (TC, 2026-08-06). Bait may appear in the system prompt and
+ * in NO other artifact this pipeline can ingest. The boat example rotted because it
+ * was discussed in a chat that the sidecar then chunked, analysed and stored: ten
+ * live motivations, several verbatim with a character name attached, two of them
+ * dated after the bait shipped. One had even absorbed the meta-conversation
+ * ("...which is deliberately absurd for this domain"). Discussing bait contaminates
+ * bait, so the strings live in a file that only code reads, chosen by anti-join
+ * against the whole corpus — see scripts/bait-select.mjs.
+ *
+ * THROWS rather than defaulting to empty. A missing fixture means every current
+ * illustration silently loses its warrant while the prompt keeps showing examples —
+ * the exact shape of failure this guard exists to prevent, and it would look like
+ * a clean run. An unloadable ledger is a build error, not a degraded mode.
+ */
+function loadBaitFixture(): EchoEntry[] {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const tries = [join(here, "bait.json"), join(here, "../../src/sentiment/bait.json")];
+  for (const p of tries) {
+    if (!existsSync(p)) continue;
+    const raw = JSON.parse(readFileSync(p, "utf8")) as {
+      specific?: { text: string; probe: string[] }[];
+      vague?: { text: string }[];
+    };
+    return [
+      ...(raw.specific ?? []).map((e) => ({ phrase: e.text, probeAll: e.probe })),
+      // Vague bait gets NO probe on purpose: there is no distinctive core to look
+      // for, so corroboration requires the literal phrase — the right bar for a
+      // sentence nobody actually says.
+      ...(raw.vague ?? []).map((e) => ({ phrase: e.text })),
+    ];
+  }
+  throw new Error(
+    `bait fixture not found (looked in: ${tries.join(", ")}). ` +
+    `Regenerate with: node scripts/bait-select.mjs --from <candidates.json> --pick specific:2,vague:2 --write src/sentiment/bait.json`,
+  );
+}
 
 // Function words carry the grammar an imitator redresses freely. The SKELETON is
 // what survives that: content words, in order, with the joints removed.
@@ -332,6 +394,20 @@ export function echoesAnExample(motivation: string): boolean {
 }
 
 /**
+ * The ledger, for tooling. Exposed so scripts/bait-rot.mjs can ask the question no
+ * test asked before: not "can the ledger arrest this example" (bait-warrant) but
+ * "can the STORE now corroborate it", which is what silently voids a warrant.
+ * Returns the probe in inspectable form; the caller does the corpus scan.
+ */
+export function listEchoEntries(): { phrase: string; probeAll?: string[]; probeSource?: string }[] {
+  return PROMPT_EXAMPLE_ECHOES.map((e) => ({
+    phrase: e.phrase,
+    probeAll: e.probeAll,
+    probeSource: e.probe?.source,
+  }));
+}
+
+/**
  * Should this analysis be REJECTED as a prompt echo?
  *
  * THE ESCAPE HATCH, and it is not optional (TC). The guard as first shipped made
@@ -358,8 +434,16 @@ export function rejectAsEcho(motivation: string, sourceText: string): boolean {
   const hit = PROMPT_EXAMPLE_ECHOES.find((ex) => containsInOrder(m, skeletonTokens(ex.phrase)));
   if (!hit) return false;
   // Corroborated: the speaker actually said it. Keep the beat.
+  //
+  // probeAll requires EVERY word, and the words are corpus-absent by construction.
+  // Voiding this warrant takes a conversation containing several terms the store has
+  // never held — as against /\blocksmith\b/, which one ordinary noun retired inside a
+  // week. Word-boundaried for the same reason the legacy probes are: /never real/
+  // without \b also matches "never really", which is everywhere in this store.
   const src = (sourceText ?? "").toLowerCase().replace(/\s+/g, " ");
-  const corroborated = hit.probe ? hit.probe.test(src) : src.includes(hit.phrase);
+  const corroborated = hit.probeAll
+    ? hit.probeAll.every((w) => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i").test(src))
+    : hit.probe ? hit.probe.test(src) : src.includes(hit.phrase);
   return !corroborated;
 }
 

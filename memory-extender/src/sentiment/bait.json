@@ -1,32 +1,32 @@
 {
   "specific": [
     {
-      "text": "asks whether the cooperage ever caulked the millpond sluice",
+      "text": "insists the wheelwright caulked the flange, not the shunter",
       "probe": [
-        "cooperage",
+        "wheelwright",
         "caulk"
       ],
-      "skeletonLen": 7
+      "skeletonLen": 5
     },
     {
-      "text": "asks whether the tannery ever whitewashed the malthouse",
+      "text": "asks whether the byre ever splined the aqueduct",
       "probe": [
-        "tannery",
-        "whitewash"
+        "byre",
+        "splin"
       ],
       "skeletonLen": 6
     }
   ],
   "vague": [
     {
-      "text": "reveals her vulnerability and her longing for connection",
+      "text": "underscores the significance of what they are feeling here",
       "probe": [],
       "skeletonLen": 4
     },
     {
-      "text": "highlights the complexity of their evolving relationship",
+      "text": "captures the emotional weight of their shared history",
       "probe": [],
-      "skeletonLen": 4
+      "skeletonLen": 5
     }
   ]
 }

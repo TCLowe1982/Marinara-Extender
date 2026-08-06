@@ -96,6 +96,7 @@ const rows = entries.map((e, i) => ({
   skeleton: skeletonTokens(e.phrase).length,
   spoken: hits[i],
   derived: derived[i],
+  current: e.current,
   rotted: hits[i] > 0,
   // Phrase deliberately withheld from stdout — single-channel exposure. Index is
   // enough to act on, and --json carries it for tooling that already has the file.
@@ -106,10 +107,10 @@ if (json) {
   console.log(JSON.stringify({ lines, rows }, null, 2));
 } else {
   console.log(`scanned ${lines} corpus lines (${spokenLines} spoken, under chats/) against ${entries.length} ledger entries\n`);
-  console.log(" idx  warrant          skel  spoken  derived  status");
+  console.log(" idx  warrant          skel  state    spoken  derived  status");
   for (const r of rows) {
     console.log(
-      `  ${String(r.index).padStart(2)}  ${r.kind.padEnd(15)} ${String(r.skeleton).padStart(4)}  ${String(r.spoken).padStart(6)}  ${String(r.derived).padStart(7)}  ${r.rotted ? "** ROTTED **" : "intact"}`,
+      `  ${String(r.index).padStart(2)}  ${r.kind.padEnd(15)} ${String(r.skeleton).padStart(4)}  ${(r.current ? "current" : "retired").padEnd(7)}  ${String(r.spoken).padStart(6)}  ${String(r.derived).padStart(7)}  ${r.rotted ? (r.current ? "** ROTTED **" : "rotted (retired)") : "intact"}`,
     );
   }
   const bad = rows.filter((r) => r.rotted);
@@ -126,4 +127,6 @@ if (json) {
   }
 }
 
-process.exit(rows.some((r) => r.rotted) ? 1 : 0);
+// Exit on CURRENT rot only. A retired warrant that has rotted is a known, accepted
+// loss; failing on it forever would train everyone to ignore this check.
+process.exit(rows.some((r) => r.rotted && r.current) ? 1 : 0);

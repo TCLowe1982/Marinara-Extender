@@ -27,7 +27,16 @@
 import { readdir } from "fs/promises";
 import { join } from "path";
 
-const { buildSystemPrompt, echoesAnExample, skeletonTokens, echoesPhrases } = await import("../dist/sentiment/analyzer.js");
+const { buildSystemPrompt, echoesAnExample, skeletonTokens, echoesPhrases, baitPhrases } = await import("../dist/sentiment/analyzer.js");
+
+// REDACT ON THE WAY OUT (TC, 2026-08-06: bait is no longer prose for showing).
+// This script printed the illustrations verbatim, which made every run of it a
+// publication event — the audit tool was itself a leak channel, and one run put the
+// current pair into a transcript. The fixture was rotated in response, which is the
+// intended remedy: bait selected by anti-join costs seconds, so exposure is answered
+// by replacement rather than by trying to keep a secret.
+const BAIT = new Set(baitPhrases());
+const show = (s) => (BAIT.has(s) ? "«bait — withheld, see src/sentiment/bait.json»" : JSON.stringify(s.slice(0, 60)));
 const { getDataDir } = await import("../dist/storage.js");
 const { readAllBeats } = await import("../dist/sentiment/encoder.js");
 const { readThreadRegistry } = await import("../dist/threads.js");
@@ -81,7 +90,7 @@ for (const ex of quoted) {
   const dead = countIn(motivations.filter((m) => m.retired), ex, (r) => r.text);
   const th = countIn(threads, ex, (t) => String(t.label ?? ""));
   console.log(
-    `${rule.padEnd(11)} ${(covered ? "YES" : "** NO **").padEnd(8)} ${String(`${live}/${dead}`).padStart(24)} ${String(th).padStart(8)}  ${JSON.stringify(ex.slice(0, 60))}`,
+    `${rule.padEnd(11)} ${(covered ? "YES" : "** NO **").padEnd(8)} ${String(`${live}/${dead}`).padStart(24)} ${String(th).padStart(8)}  ${show(ex)}`,
   );
 }
 
@@ -102,7 +111,7 @@ if (threadExamples.length) {
       const s = skeletonTokens(String(t.label ?? "")).join(" ");
       return s && exSkel && (s === exSkel || s.includes(exSkel) || exSkel.includes(s));
     });
-    console.log(`  ${JSON.stringify(ex)} -> ${near.length} thread(s)${near.length ? ": " + near.map((t) => JSON.stringify(t.label)).slice(0, 4).join(", ") : ""}`);
+    console.log(`  ${show(ex)} -> ${near.length} thread(s)${near.length ? ": " + near.map((t) => JSON.stringify(t.label)).slice(0, 4).join(", ") : ""}`);
   }
 }
 

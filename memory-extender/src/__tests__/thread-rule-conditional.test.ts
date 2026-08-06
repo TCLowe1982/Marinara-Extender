@@ -24,9 +24,17 @@ const EMOTIONS = [
 ] as const;
 
 describe("thread rule is conditional on the list existing", () => {
+  // ASSERTIONS UPDATED 2026-08-06 for Mari's rewrite; the guards are unchanged.
+  // The old wording taught label shape by EXAMPLE — "Porsche test drive",
+  // "jurisprudence soft launch", "the Hargrove investigation" — and all three were
+  // in-domain bait that bait-audit reported UNCOVERED, with "Porsche test drive"
+  // already matching 8 live motivations and 4 registry threads. They could not be
+  // registered in PROMPT_EXAMPLE_ECHOES without rejecting genuine beats about the
+  // real Porsche (n9bv). The rewrite states the constraint rather than demonstrating
+  // it, so what these tests pin is now the CONSTRAINT, not the sample phrases.
   it("cites the Active threads list when threads are present", () => {
     const p = buildSystemPrompt("fear", [], true);
-    expect(p).toContain('Pick a label VERBATIM from the "Active threads" list');
+    expect(p).toContain('Reuse a label from the "Active threads" list');
   });
 
   it("drops the citation when no threads are present", () => {
@@ -37,12 +45,17 @@ describe("thread rule is conditional on the list existing", () => {
   it("KEEPS minting when no threads are present — the silent regression guard", () => {
     const p = buildSystemPrompt("fear", [], false);
     expect(p).toContain("thread:");
-    expect(p).toContain("starts something new");
-    expect(p).toContain("naming the EVENT or ARC");
+    // Minting: the variant must still tell the model to WRITE a label, not merely
+    // to select one. Without this, no chat could ever grow its first thread.
+    expect(p).toContain("write a label");
     // The label-shape teaching has to survive too, or the first thread of every
     // chat gets minted with no guidance about what a label should look like.
-    expect(p).toContain("Never name the participants");
-    expect(p).toContain("Use null when the beat is incidental");
+    // "the situation itself, not the cast" carries what the GOOD/BAD lists carried.
+    expect(p).toContain("not the cast");
+    // And the null case, which is now phrased as omission. Both reach the parser as
+    // undefined: `typeof parsed.thread === "string"` rejects null and a missing key
+    // alike, so the wording change is not a behaviour change.
+    expect(p).toContain("Omit the field if nothing ongoing is at stake");
   });
 
   it("defaults to the full rule, so existing callers see no change", () => {

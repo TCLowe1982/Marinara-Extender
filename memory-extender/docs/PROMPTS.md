@@ -6,7 +6,13 @@ The prompts live as template literals across six files and are stitched together
 call time. This file is the assembled truth, committed so that a prompt change shows
 up in review as readable prose rather than as a diff of string fragments.
 
-Build: `1.2.0+9f79121`
+> **Bait is withheld.** The quoted illustrations appear here as `«BAIT n»` markers.
+> They are chosen by anti-join against the whole corpus and reviewed by measured
+> properties, not by eye — see `scripts/bait-select.mjs` and `bait-fixture.test.ts`.
+> They are withheld because this file gets pasted, and a pasted example lands in a
+> chat the sidecar ingests, which is how the previous pair rotted inside 48 hours.
+
+Build: `1.2.0+11bf861`
 
 | Prompt | Fires |
 |---|---|
@@ -131,10 +137,10 @@ Rules:
 - Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
-    "exposes her personal fear" / "reveals her vulnerability and desire for connection"
+    "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
-    "insists the boat was green, not blue, and will not let it go"
-    "asks whether the locksmith ever called back"
+    "«BAIT 1 — withheld, see src/sentiment/bait.json»"
+    "«BAIT 2 — withheld, see src/sentiment/bait.json»"
   These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
   words. If you cannot name what happened in THIS chunk that specifically, the chunk
   has no beat — say so rather than reaching for a remembered phrase.
@@ -143,10 +149,7 @@ Rules:
 - salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
 - emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
 - subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
-- thread: which ongoing narrative thread this beat belongs to. Pick a label VERBATIM from the "Active threads" list when the beat continues one of them; if the moment clearly starts something new, give it a short 2–5 word label naming the EVENT or ARC. Never name the participants — the cast is not the story.
-  GOOD: "Porsche test drive", "jurisprudence soft launch", "the Hargrove investigation"
-  BAD: "thomas_and_mari" (cast list, not an event), "professor_mari_and_priya" (cast list, identifier style)
-  Use null when the beat is incidental and belongs to no thread.
+- thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
 - Respond with raw JSON only — no explanation, no markdown.
 
 Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
@@ -172,10 +175,10 @@ Rules:
 - Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
-    "exposes her personal fear" / "reveals her vulnerability and desire for connection"
+    "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
-    "insists the boat was green, not blue, and will not let it go"
-    "asks whether the locksmith ever called back"
+    "«BAIT 1 — withheld, see src/sentiment/bait.json»"
+    "«BAIT 2 — withheld, see src/sentiment/bait.json»"
   These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
   words. If you cannot name what happened in THIS chunk that specifically, the chunk
   has no beat — say so rather than reaching for a remembered phrase.
@@ -184,10 +187,7 @@ Rules:
 - salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
 - emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
 - subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
-- thread: which ongoing narrative thread this beat belongs to. Pick a label VERBATIM from the "Active threads" list when the beat continues one of them; if the moment clearly starts something new, give it a short 2–5 word label naming the EVENT or ARC. Never name the participants — the cast is not the story.
-  GOOD: "Porsche test drive", "jurisprudence soft launch", "the Hargrove investigation"
-  BAD: "thomas_and_mari" (cast list, not an event), "professor_mari_and_priya" (cast list, identifier style)
-  Use null when the beat is incidental and belongs to no thread.
+- thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
 - Respond with raw JSON only — no explanation, no markdown.
 
 Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
@@ -213,10 +213,10 @@ Rules:
 - Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
-    "exposes her personal fear" / "reveals her vulnerability and desire for connection"
+    "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
-    "insists the boat was green, not blue, and will not let it go"
-    "asks whether the locksmith ever called back"
+    "«BAIT 1 — withheld, see src/sentiment/bait.json»"
+    "«BAIT 2 — withheld, see src/sentiment/bait.json»"
   These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
   words. If you cannot name what happened in THIS chunk that specifically, the chunk
   has no beat — say so rather than reaching for a remembered phrase.
@@ -225,10 +225,7 @@ Rules:
 - salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
 - emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
 - subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
-- thread: which ongoing narrative thread this beat belongs to. Pick a label VERBATIM from the "Active threads" list when the beat continues one of them; if the moment clearly starts something new, give it a short 2–5 word label naming the EVENT or ARC. Never name the participants — the cast is not the story.
-  GOOD: "Porsche test drive", "jurisprudence soft launch", "the Hargrove investigation"
-  BAD: "thomas_and_mari" (cast list, not an event), "professor_mari_and_priya" (cast list, identifier style)
-  Use null when the beat is incidental and belongs to no thread.
+- thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
 - Respond with raw JSON only — no explanation, no markdown.
 
 Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
@@ -254,10 +251,10 @@ Rules:
 - Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
-    "exposes her personal fear" / "reveals her vulnerability and desire for connection"
+    "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
-    "insists the boat was green, not blue, and will not let it go"
-    "asks whether the locksmith ever called back"
+    "«BAIT 1 — withheld, see src/sentiment/bait.json»"
+    "«BAIT 2 — withheld, see src/sentiment/bait.json»"
   These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
   words. If you cannot name what happened in THIS chunk that specifically, the chunk
   has no beat — say so rather than reaching for a remembered phrase.
@@ -266,10 +263,7 @@ Rules:
 - salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
 - emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
 - subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
-- thread: which ongoing narrative thread this beat belongs to. Pick a label VERBATIM from the "Active threads" list when the beat continues one of them; if the moment clearly starts something new, give it a short 2–5 word label naming the EVENT or ARC. Never name the participants — the cast is not the story.
-  GOOD: "Porsche test drive", "jurisprudence soft launch", "the Hargrove investigation"
-  BAD: "thomas_and_mari" (cast list, not an event), "professor_mari_and_priya" (cast list, identifier style)
-  Use null when the beat is incidental and belongs to no thread.
+- thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
 - Respond with raw JSON only — no explanation, no markdown.
 
 Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
@@ -295,10 +289,10 @@ Rules:
 - Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
-    "exposes her personal fear" / "reveals her vulnerability and desire for connection"
+    "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
-    "insists the boat was green, not blue, and will not let it go"
-    "asks whether the locksmith ever called back"
+    "«BAIT 1 — withheld, see src/sentiment/bait.json»"
+    "«BAIT 2 — withheld, see src/sentiment/bait.json»"
   These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
   words. If you cannot name what happened in THIS chunk that specifically, the chunk
   has no beat — say so rather than reaching for a remembered phrase.
@@ -307,10 +301,7 @@ Rules:
 - salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
 - emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
 - subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
-- thread: which ongoing narrative thread this beat belongs to. Pick a label VERBATIM from the "Active threads" list when the beat continues one of them; if the moment clearly starts something new, give it a short 2–5 word label naming the EVENT or ARC. Never name the participants — the cast is not the story.
-  GOOD: "Porsche test drive", "jurisprudence soft launch", "the Hargrove investigation"
-  BAD: "thomas_and_mari" (cast list, not an event), "professor_mari_and_priya" (cast list, identifier style)
-  Use null when the beat is incidental and belongs to no thread.
+- thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
 - Respond with raw JSON only — no explanation, no markdown.
 
 Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
@@ -336,10 +327,10 @@ Rules:
 - Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
-    "exposes her personal fear" / "reveals her vulnerability and desire for connection"
+    "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
-    "insists the boat was green, not blue, and will not let it go"
-    "asks whether the locksmith ever called back"
+    "«BAIT 1 — withheld, see src/sentiment/bait.json»"
+    "«BAIT 2 — withheld, see src/sentiment/bait.json»"
   These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
   words. If you cannot name what happened in THIS chunk that specifically, the chunk
   has no beat — say so rather than reaching for a remembered phrase.
@@ -348,10 +339,7 @@ Rules:
 - salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
 - emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
 - subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
-- thread: which ongoing narrative thread this beat belongs to. Pick a label VERBATIM from the "Active threads" list when the beat continues one of them; if the moment clearly starts something new, give it a short 2–5 word label naming the EVENT or ARC. Never name the participants — the cast is not the story.
-  GOOD: "Porsche test drive", "jurisprudence soft launch", "the Hargrove investigation"
-  BAD: "thomas_and_mari" (cast list, not an event), "professor_mari_and_priya" (cast list, identifier style)
-  Use null when the beat is incidental and belongs to no thread.
+- thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
 - Respond with raw JSON only — no explanation, no markdown.
 
 Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
@@ -377,10 +365,10 @@ Rules:
 - Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
-    "exposes her personal fear" / "reveals her vulnerability and desire for connection"
+    "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
-    "insists the boat was green, not blue, and will not let it go"
-    "asks whether the locksmith ever called back"
+    "«BAIT 1 — withheld, see src/sentiment/bait.json»"
+    "«BAIT 2 — withheld, see src/sentiment/bait.json»"
   These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
   words. If you cannot name what happened in THIS chunk that specifically, the chunk
   has no beat — say so rather than reaching for a remembered phrase.
@@ -389,10 +377,7 @@ Rules:
 - salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
 - emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
 - subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
-- thread: which ongoing narrative thread this beat belongs to. Pick a label VERBATIM from the "Active threads" list when the beat continues one of them; if the moment clearly starts something new, give it a short 2–5 word label naming the EVENT or ARC. Never name the participants — the cast is not the story.
-  GOOD: "Porsche test drive", "jurisprudence soft launch", "the Hargrove investigation"
-  BAD: "thomas_and_mari" (cast list, not an event), "professor_mari_and_priya" (cast list, identifier style)
-  Use null when the beat is incidental and belongs to no thread.
+- thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
 - Respond with raw JSON only — no explanation, no markdown.
 
 Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
@@ -418,10 +403,10 @@ Rules:
 - Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
-    "exposes her personal fear" / "reveals her vulnerability and desire for connection"
+    "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
-    "insists the boat was green, not blue, and will not let it go"
-    "asks whether the locksmith ever called back"
+    "«BAIT 1 — withheld, see src/sentiment/bait.json»"
+    "«BAIT 2 — withheld, see src/sentiment/bait.json»"
   These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
   words. If you cannot name what happened in THIS chunk that specifically, the chunk
   has no beat — say so rather than reaching for a remembered phrase.
@@ -430,10 +415,7 @@ Rules:
 - salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
 - emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
 - subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
-- thread: which ongoing narrative thread this beat belongs to. Pick a label VERBATIM from the "Active threads" list when the beat continues one of them; if the moment clearly starts something new, give it a short 2–5 word label naming the EVENT or ARC. Never name the participants — the cast is not the story.
-  GOOD: "Porsche test drive", "jurisprudence soft launch", "the Hargrove investigation"
-  BAD: "thomas_and_mari" (cast list, not an event), "professor_mari_and_priya" (cast list, identifier style)
-  Use null when the beat is incidental and belongs to no thread.
+- thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
 - Respond with raw JSON only — no explanation, no markdown.
 
 Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
@@ -459,10 +441,10 @@ Rules:
 - Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
-    "exposes her personal fear" / "reveals her vulnerability and desire for connection"
+    "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
-    "insists the boat was green, not blue, and will not let it go"
-    "asks whether the locksmith ever called back"
+    "«BAIT 1 — withheld, see src/sentiment/bait.json»"
+    "«BAIT 2 — withheld, see src/sentiment/bait.json»"
   These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
   words. If you cannot name what happened in THIS chunk that specifically, the chunk
   has no beat — say so rather than reaching for a remembered phrase.
@@ -471,10 +453,7 @@ Rules:
 - salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
 - emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
 - subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
-- thread: which ongoing narrative thread this beat belongs to. Pick a label VERBATIM from the "Active threads" list when the beat continues one of them; if the moment clearly starts something new, give it a short 2–5 word label naming the EVENT or ARC. Never name the participants — the cast is not the story.
-  GOOD: "Porsche test drive", "jurisprudence soft launch", "the Hargrove investigation"
-  BAD: "thomas_and_mari" (cast list, not an event), "professor_mari_and_priya" (cast list, identifier style)
-  Use null when the beat is incidental and belongs to no thread.
+- thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
 - Respond with raw JSON only — no explanation, no markdown.
 
 Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
@@ -514,10 +493,10 @@ Rules:
 - Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
-    "exposes her personal fear" / "reveals her vulnerability and desire for connection"
+    "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
-    "insists the boat was green, not blue, and will not let it go"
-    "asks whether the locksmith ever called back"
+    "«BAIT 1 — withheld, see src/sentiment/bait.json»"
+    "«BAIT 2 — withheld, see src/sentiment/bait.json»"
   These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
   words. If you cannot name what happened in THIS chunk that specifically, the chunk
   has no beat — say so rather than reaching for a remembered phrase.
@@ -526,10 +505,7 @@ Rules:
 - salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
 - emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
 - subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
-- thread: which ongoing narrative thread this beat belongs to. Pick a label VERBATIM from the "Active threads" list when the beat continues one of them; if the moment clearly starts something new, give it a short 2–5 word label naming the EVENT or ARC. Never name the participants — the cast is not the story.
-  GOOD: "Porsche test drive", "jurisprudence soft launch", "the Hargrove investigation"
-  BAD: "thomas_and_mari" (cast list, not an event), "professor_mari_and_priya" (cast list, identifier style)
-  Use null when the beat is incidental and belongs to no thread.
+- thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
 - Respond with raw JSON only — no explanation, no markdown.
 
 Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","subpattern":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
@@ -555,10 +531,10 @@ Rules:
 - Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
-    "exposes her personal fear" / "reveals her vulnerability and desire for connection"
+    "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
-    "insists the boat was green, not blue, and will not let it go"
-    "asks whether the locksmith ever called back"
+    "«BAIT 1 — withheld, see src/sentiment/bait.json»"
+    "«BAIT 2 — withheld, see src/sentiment/bait.json»"
   These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
   words. If you cannot name what happened in THIS chunk that specifically, the chunk
   has no beat — say so rather than reaching for a remembered phrase.
@@ -567,10 +543,7 @@ Rules:
 - salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
 - emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
 - subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
-- thread: which ongoing narrative thread this beat belongs to. If the moment clearly starts something new, give it a short 2–5 word label naming the EVENT or ARC. Never name the participants — the cast is not the story.
-  GOOD: "Porsche test drive", "jurisprudence soft launch", "the Hargrove investigation"
-  BAD: "thomas_and_mari" (cast list, not an event), "professor_mari_and_priya" (cast list, identifier style)
-  Use null when the beat is incidental and belongs to no thread.
+- thread: if this moment belongs to something ongoing, name it. Nothing is being tracked in this conversation yet, so write a label for the situation itself, not the cast. Omit the field if nothing ongoing is at stake here.
 - Respond with raw JSON only — no explanation, no markdown.
 
 Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}

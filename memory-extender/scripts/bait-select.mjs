@@ -178,6 +178,65 @@ export function scoreCandidate(text, vocab, live, mode = "specific") {
   };
 }
 
+// ── Generation ───────────────────────────────────────────────────────────────
+//
+// HAND-AUTHORING BAIT IS THE LEAK. A person writing candidate sentences has to write
+// them SOMEWHERE — a file, a message, a review comment — and every one of those is a
+// channel. The first pool for this rotation was hand-written into a working
+// transcript, which exposed all sixteen candidates before any of them shipped.
+//
+// So the tool composes instead. A LEXICON of individual words carries no bait: the
+// bait is the combination, and the combination is minted here, verified against the
+// corpus, and written straight to the fixture without passing through prose. That
+// makes examples genuinely disposable — the answer to exposure is `--generate` again,
+// not a policy about who may read what.
+//
+// The lexicon is deliberately drawn from trades and infrastructure with no purchase
+// on this store's subject matter. Every word is still checked at scoring time, so a
+// term that drifts in-domain later simply stops being selected.
+
+const LEXICON = {
+  agent: ["wheelwright", "farrier", "cordwainer", "tinsmith", "millwright", "fletcher",
+          "sailmaker", "lockkeeper", "shunter", "fettler", "winnower", "cooper"],
+  place: ["cooperage", "chandlery", "ropewalk", "tannery", "brickworks", "gasworks",
+          "malthouse", "oasthouse", "colliery", "smelter", "limekiln", "creamery",
+          "granary", "dovecote", "apiary", "byre", "haymow", "millpond"],
+  object: ["axle", "sprocket", "ferrule", "grommet", "dowel", "bobbin", "spindle",
+           "flange", "rivet", "gasket", "escapement", "mainspring", "fusee", "detent",
+           "pinion", "selvedge", "skein", "quoin", "penstock", "culvert", "weir",
+           "towpath", "spillway", "aqueduct", "turntable", "semaphore", "gantry"],
+  verb: ["tarred", "caulked", "shimmed", "swaged", "reamed", "brazed", "chamfered",
+         "splined", "scarfed", "winched", "hoisted", "carted", "stowed", "greased",
+         "oiled", "soldered", "thatched", "limed", "whitewashed", "dredged", "puttied"],
+};
+
+const FRAMES = [
+  ({ agent, verb, object, agent2 }) => `insists the ${agent} ${verb} the ${object}, not the ${agent2}`,
+  ({ place, verb, object })         => `asks whether the ${place} ever ${verb} the ${object}`,
+  ({ agent, verb, object, place })  => `insists the ${agent} ${verb} the ${object} before the ${place} was sold`,
+  ({ place, object, agent })        => `asks whether the ${place} ever returned the ${agent} his ${object}`,
+];
+
+function generateCandidates(count, seedStr) {
+  let seed = [...seedStr].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 11);
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32);
+  const pickOne = (arr) => arr[Math.floor(rnd() * arr.length)];
+  const out = new Set();
+  let guard = 0;
+  while (out.size < count && guard++ < count * 50) {
+    const slots = {
+      agent: pickOne(LEXICON.agent),
+      agent2: pickOne(LEXICON.agent),
+      place: pickOne(LEXICON.place),
+      object: pickOne(LEXICON.object),
+      verb: pickOne(LEXICON.verb),
+    };
+    if (slots.agent === slots.agent2) continue;
+    out.add(pickOne(FRAMES)(slots));
+  }
+  return [...out];
+}
+
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
@@ -185,10 +244,16 @@ const quiet = !args.includes("--show");        // default: NEVER print candidate
 const writeTo = args.includes("--write") ? args[args.indexOf("--write") + 1] : null;
 const fromFile = args.includes("--from") ? args[args.indexOf("--from") + 1] : null;
 
-if (!fromFile) {
-  console.error("usage: node scripts/bait-select.mjs --from <candidates.json> [--write <fixture.json>] [--show]");
-  console.error("  candidates.json: { \"specific\": [\"...\"], \"vague\": [\"...\"] }");
-  console.error("  Default output NEVER prints candidate text — properties only.");
+const genN = args.includes("--generate") ? Number(args[args.indexOf("--generate") + 1]) : 0;
+const seedArg = args.includes("--seed") ? args[args.indexOf("--seed") + 1] : "default";
+
+if (!fromFile && !genN) {
+  console.error("usage: node scripts/bait-select.mjs (--generate <n> [--seed <s>] | --from <candidates.json>)");
+  console.error("                                    [--pick specific:2,vague:2] [--write <fixture.json>] [--show]");
+  console.error("  --generate mints candidates from the built-in lexicon, so no sentence is");
+  console.error("             ever hand-written into a file, message or transcript.");
+  console.error("  --from     scores a hand-written pool: { \"specific\": [...], \"vague\": [...] }");
+  console.error("  Output NEVER prints candidate text unless --show is passed.");
   process.exit(2);
 }
 
@@ -196,7 +261,21 @@ const { counts: vocab, files } = await buildVocab(getDataDir());
 const live = await liveSkeletons();
 console.log(`corpus: ${files} files, ${vocab.size} distinct words, ${live.length} live motivations\n`);
 
-const cands = JSON.parse(await readFile(fromFile, "utf8"));
+// Vague bait is genre-boilerplate by definition — it cannot be minted from a rare-word
+// lexicon, because being made of the commonest phrasing IS the property. It stays
+// hand-written, and that is safe: it carries no probe, so corroboration needs the
+// literal sentence, which no rotation pressure applies to.
+const VAGUE_POOL = [
+  "conveys her emotional turmoil about the situation",
+  "shows the depth of their emotional connection in this moment",
+  "underscores the significance of what they are feeling here",
+  "captures the emotional weight of their shared history",
+];
+
+const cands = genN
+  ? { specific: generateCandidates(genN, seedArg), vague: VAGUE_POOL }
+  : JSON.parse(await readFile(fromFile, "utf8"));
+if (genN) console.log(`generated ${cands.specific.length} candidate(s) from the lexicon (seed "${seedArg}")\n`);
 const results = {};
 
 for (const [group, list] of Object.entries(cands)) {
@@ -236,8 +315,23 @@ if (pick) {
     const want = Number(nStr);
     const pool = results[group] ?? [];
     const shuffled = [...pool].sort(() => rnd() - 0.5);
-    results[group] = shuffled.slice(0, want);
-    console.log(`picked ${results[group].length}/${pool.length} from "${group}"`);
+    // PREFER DISTINCT FRAMES. The examples teach SHAPE, so two of the same syntactic
+    // frame ("asks whether X ever Y" twice) teach half as much as one assertion and
+    // one question — and the first roll drew exactly that. Frame is keyed on the
+    // leading skeleton token, which is the speech-act verb.
+    const chosen = [];
+    const frames = new Set();
+    for (const pass of [1, 2]) {
+      for (const c of shuffled) {
+        if (chosen.length >= want || chosen.includes(c)) continue;
+        const frame = skeletonTokens(c.text)[0] ?? "";
+        if (pass === 1 && frames.has(frame)) continue;
+        frames.add(frame);
+        chosen.push(c);
+      }
+    }
+    results[group] = chosen;
+    console.log(`picked ${chosen.length}/${pool.length} from "${group}" across ${frames.size} frame(s)`);
   }
 }
 

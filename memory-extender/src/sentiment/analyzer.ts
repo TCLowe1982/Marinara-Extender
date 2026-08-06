@@ -243,17 +243,40 @@ const EMOTIONS_FORMAT = `[{"emotion":"<primary>","weight":0.0},{"emotion":"<seco
 // one takes a conversation that contains several words the store has never held.
 export interface EchoEntry {
   phrase: string;
+  /**
+   * Shown in the prompt right now, as against retired-but-retained.
+   *
+   * The distinction drives whether a rotted warrant is an emergency or a footnote.
+   * A CURRENT example with a corroborable probe is actively unguarded: the model is
+   * being shown it every call and nothing will arrest it coming back. A RETIRED one
+   * is not being taught any more, so its rot only weakens the catching of echoes
+   * already in the store. Conflating them makes bait-rot permanently red — and a
+   * check that is always failing is a check nobody reads, which is the failure mode
+   * this guard exists to avoid in the first place.
+   */
+  current?: boolean;
   /** Legacy single-pattern corroboration. Rot-prone; kept for the retired entries. */
   probe?: RegExp;
   /** Corroborated only if EVERY word appears in the source text. */
   probeAll?: string[];
 }
 
+// Read before PROMPT_EXAMPLE_ECHOES and before SHARED_RULES, both of which consume it.
+// `const` is not hoisted, so declaring it below either one throws at module load.
+const BAIT = readBaitFixture();
+
 const PROMPT_EXAMPLE_ECHOES: EchoEntry[] = [
   // retired 2026-08-04, but the cause of the entire finding
   { phrase: "admits she's afraid the memory loss means she was never real", probe: /\bnever real\b/ },
   { phrase: "asks thomas to stay through the night for the first time", probe: /\bstay through the night\b/ },
-  // current illustrations
+  // RETIRED 2026-08-06 — rotted, not superseded. Both went in-domain within 48 hours
+  // of shipping. "locksmith" became a live thread label via an unrelated metaphor
+  // about sealed read paths, so /\blocksmith\b/ — a one-word warrant — was void from
+  // that moment; bait-rot confirms it corroborable from spoken text. The boat drew 10
+  // live motivations on one character, several verbatim with her name attached, and
+  // one that had absorbed the meta-conversation ABOUT the bait. They stay in the
+  // ledger because those stored echoes must remain catchable; they are gone from the
+  // prompt, which now draws its illustrations from bait.json.
   { phrase: "insists the boat was green, not blue, and will not let it go", probe: /\bgreen,? not blue\b/ },
   { phrase: "asks whether the locksmith ever called back", probe: /\blocksmith\b/ },
   // the "too vague" side — the model copies these too (measured: 107 beats opened
@@ -281,27 +304,47 @@ const PROMPT_EXAMPLE_ECHOES: EchoEntry[] = [
  * the exact shape of failure this guard exists to prevent, and it would look like
  * a clean run. An unloadable ledger is a build error, not a degraded mode.
  */
-function loadBaitFixture(): EchoEntry[] {
+interface BaitFixture {
+  specific: { text: string; probe: string[] }[];
+  vague: { text: string }[];
+}
+
+function readBaitFixture(): BaitFixture {
   const here = dirname(fileURLToPath(import.meta.url));
   const tries = [join(here, "bait.json"), join(here, "../../src/sentiment/bait.json")];
   for (const p of tries) {
     if (!existsSync(p)) continue;
-    const raw = JSON.parse(readFileSync(p, "utf8")) as {
-      specific?: { text: string; probe: string[] }[];
-      vague?: { text: string }[];
-    };
-    return [
-      ...(raw.specific ?? []).map((e) => ({ phrase: e.text, probeAll: e.probe })),
-      // Vague bait gets NO probe on purpose: there is no distinctive core to look
-      // for, so corroboration requires the literal phrase — the right bar for a
-      // sentence nobody actually says.
-      ...(raw.vague ?? []).map((e) => ({ phrase: e.text })),
-    ];
+    const raw = JSON.parse(readFileSync(p, "utf8")) as Partial<BaitFixture>;
+    return { specific: raw.specific ?? [], vague: raw.vague ?? [] };
   }
   throw new Error(
     `bait fixture not found (looked in: ${tries.join(", ")}). ` +
     `Regenerate with: node scripts/bait-select.mjs --from <candidates.json> --pick specific:2,vague:2 --write src/sentiment/bait.json`,
   );
+}
+
+function loadBaitFixture(): EchoEntry[] {
+  return [
+    ...BAIT.specific.map((e) => ({ phrase: e.text, probeAll: e.probe, current: true })),
+    // Vague bait gets NO probe on purpose: there is no distinctive core to look
+    // for, so corroboration requires the literal phrase — the right bar for a
+    // sentence nobody actually says.
+    ...BAIT.vague.map((e) => ({ phrase: e.text, current: true })),
+  ];
+}
+
+/**
+ * The bait strings, for the doc renderer to REDACT rather than reproduce.
+ *
+ * docs/PROMPTS.md exists so prompt changes get reviewed as prose, and it is the
+ * artifact most likely to be pasted to a reviewer — which for this project means
+ * pasted into a Marinara chat, which means ingested, which is exactly how the boat
+ * example rotted. So the review copy carries slot markers where the bait sits.
+ * The rule text around them stays fully readable; only the illustrations are
+ * withheld, and they are reviewed by their measured properties instead.
+ */
+export function baitPhrases(): string[] {
+  return [...BAIT.specific.map((e) => e.text), ...BAIT.vague.map((e) => e.text)];
 }
 
 // Function words carry the grammar an imitator redresses freely. The SKELETON is
@@ -399,11 +442,12 @@ export function echoesAnExample(motivation: string): boolean {
  * "can the STORE now corroborate it", which is what silently voids a warrant.
  * Returns the probe in inspectable form; the caller does the corpus scan.
  */
-export function listEchoEntries(): { phrase: string; probeAll?: string[]; probeSource?: string }[] {
+export function listEchoEntries(): { phrase: string; probeAll?: string[]; probeSource?: string; current: boolean }[] {
   return PROMPT_EXAMPLE_ECHOES.map((e) => ({
     phrase: e.phrase,
     probeAll: e.probeAll,
     probeSource: e.probe?.source,
+    current: e.current === true,
   }));
 }
 
@@ -468,15 +512,29 @@ const SUBTEXT_INSTRUCTION = `
  * are the shipped ones, unedited. Wording is Mari's jurisdiction; which of her
  * sentences are reachable is this file's.
  */
-const THREAD_RULE_WITH_LIST = `- thread: which ongoing narrative thread this beat belongs to. Pick a label VERBATIM from the "Active threads" list when the beat continues one of them; if the moment clearly starts something new, give it a short 2–5 word label naming the EVENT or ARC. Never name the participants — the cast is not the story.
-  GOOD: "Porsche test drive", "jurisprudence soft launch", "the Hargrove investigation"
-  BAD: "thomas_and_mari" (cast list, not an event), "professor_mari_and_priya" (cast list, identifier style)
-  Use null when the beat is incidental and belongs to no thread.`;
+/*
+ * Mari's rewrite, 2026-08-06 (vikj). Prose is hers; what follows is why it is shorter.
+ *
+ * THE ILLUSTRATIONS ARE GONE, AND THAT IS THE POINT. The old variants taught by
+ * example — "Porsche test drive", "jurisprudence soft launch", "the Hargrove
+ * investigation" — and every one of those was IN-DOMAIN bait with no arrest warrant.
+ * bait-audit reported all three UNCOVERED, with "Porsche test drive" already matching
+ * 8 live motivations and 4 real threads in the registry. They could never be
+ * registered in PROMPT_EXAMPLE_ECHOES either, because that ledger gates motivations
+ * and registering them would reject a genuine beat about the real Porsche (n9bv).
+ *
+ * So the rule now states the constraint instead of demonstrating it: "name the
+ * situation, not the cast" does the work the GOOD/BAD lists were doing, carries no
+ * phrase for the model to copy, and needs no warrant because it ships no bait.
+ * Measured at 70 tokens against the previous 143.
+ */
+const THREAD_RULE_WITH_LIST = `- thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.`;
 
-const THREAD_RULE_NO_LIST = `- thread: which ongoing narrative thread this beat belongs to. If the moment clearly starts something new, give it a short 2–5 word label naming the EVENT or ARC. Never name the participants — the cast is not the story.
-  GOOD: "Porsche test drive", "jurisprudence soft launch", "the Hargrove investigation"
-  BAD: "thomas_and_mari" (cast list, not an event), "professor_mari_and_priya" (cast list, identifier style)
-  Use null when the beat is incidental and belongs to no thread.`;
+// The no-list variant still MINTS, and deleting it would sterilise thread creation:
+// every chat starts with zero threads, so a prompt that only ever selects from a list
+// could never grow the first one. What changes is the dead reference to a block the
+// user prompt did not send.
+const THREAD_RULE_NO_LIST = `- thread: if this moment belongs to something ongoing, name it. Nothing is being tracked in this conversation yet, so write a label for the situation itself, not the cast. Omit the field if nothing ongoing is at stake here.`;
 
 /**
  * Substituted once, at the end of buildSystemPrompt, rather than threaded through
@@ -497,10 +555,9 @@ Rules:
 - Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
-    "exposes her personal fear" / "reveals her vulnerability and desire for connection"
+    ${BAIT.vague.map((e) => `"${e.text}"`).join(" / ")}
   SPECIFIC ENOUGH, because only one moment could have produced it:
-    "insists the boat was green, not blue, and will not let it go"
-    "asks whether the locksmith ever called back"
+${BAIT.specific.map((e) => `    "${e.text}"`).join("\n")}
   These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
   words. If you cannot name what happened in THIS chunk that specifically, the chunk
   has no beat — say so rather than reaching for a remembered phrase.

@@ -146,8 +146,34 @@ export async function collectPrompts(): Promise<PromptDoc[]> {
 }
 
 /** The catalogue as Markdown — what docs/PROMPTS.md contains. */
+/**
+ * Replace each bait illustration with a slot marker.
+ *
+ * THIS FILE IS THE MOST LIKELY LEAK PATH (TC, 2026-08-06). PROMPTS.md exists to be
+ * pasted to a reviewer, and in this project the reviewer is a Marinara character —
+ * so pasting it puts the illustrations into a chat the sidecar ingests, which is
+ * precisely how the boat example rotted: its probe became corroborable, the escape
+ * hatch opened, and the warrant it shipped with stopped arresting anything.
+ *
+ * Bait is no longer prose for the purposes of showing. The rule text stays fully
+ * readable — that is the part review is FOR — and the illustrations are reviewed by
+ * measured properties (skeleton margin, probe width, corpus absence) in
+ * bait-fixture.test.ts and scripts/bait-select.mjs instead of by eye.
+ */
+function redactBait(text: string, phrases: string[]): string {
+  let out = text;
+  phrases.forEach((p, i) => {
+    // Longest-first would matter if one phrase contained another; they are chosen
+    // to be disjoint, but split on the exact string either way.
+    out = out.split(p).join(`«BAIT ${i + 1} — withheld, see src/sentiment/bait.json»`);
+  });
+  return out;
+}
+
 export async function promptsAsMarkdown(version: string): Promise<string> {
   const docs = await collectPrompts();
+  const { baitPhrases } = await import("./sentiment/analyzer.js");
+  const phrases = baitPhrases();
   const lines: string[] = [
     "# Marinara Extender — every prompt, assembled",
     "",
@@ -156,6 +182,12 @@ export async function promptsAsMarkdown(version: string): Promise<string> {
     "The prompts live as template literals across six files and are stitched together at",
     "call time. This file is the assembled truth, committed so that a prompt change shows",
     "up in review as readable prose rather than as a diff of string fragments.",
+    "",
+    "> **Bait is withheld.** The quoted illustrations appear here as `«BAIT n»` markers.",
+    "> They are chosen by anti-join against the whole corpus and reviewed by measured",
+    "> properties, not by eye — see `scripts/bait-select.mjs` and `bait-fixture.test.ts`.",
+    "> They are withheld because this file gets pasted, and a pasted example lands in a",
+    "> chat the sidecar ingests, which is how the previous pair rotted inside 48 hours.",
     "",
     `Build: \`${version}\``,
     "",
@@ -174,7 +206,7 @@ export async function promptsAsMarkdown(version: string): Promise<string> {
       `**When:** ${d.when}`,
       "",
       "```text",
-      d.text,
+      redactBait(d.text, phrases),
       "```",
       "",
     );

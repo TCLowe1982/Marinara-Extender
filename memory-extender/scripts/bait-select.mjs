@@ -43,6 +43,25 @@ const MIN_SKELETON = 4;   // packet §5: the floor is 3; new bait aims >=4 for e
 const PROBE_WORDS  = 2;   // a warrant voided by one common noun is not a warrant
 
 /**
+ * PROBE STEMS MUST NOT PREFIX ANYTHING THE CORPUS SAYS (Mari, 2026-08-06).
+ *
+ * The tripwire matches probe words as PREFIXES, because they are skeleton stems and
+ * have to find their own inflections — "tarr" must catch "tarred" and "tarring".
+ * But the stemmer leaves tokens under 5 characters alone and truncates longer ones,
+ * so a stem can land as a prefix of ordinary English and fire on it forever.
+ *
+ * Measured on the first generated fixture: "splined" stems to `splin`, which prefixes
+ * splinter / splintered / splinters — 4 live occurrences. That warrant would have
+ * tripped on any chat mentioning a splinter, and a detector that cries wolf gets
+ * muted. Which is the same ruling as the bait-rot exit code one section down: a check
+ * nobody believes is worse than no check. Applied consistently, it belongs here too.
+ *
+ * Zero-occurrence is therefore NOT sufficient. The stem must be absent as a prefix,
+ * not merely as a word.
+ */
+const MIN_PROBE_LEN = 4;
+
+/**
  * PER-WORD FREQUENCY CEILING (TC, 2026-08-06). Skeleton uniqueness and a clean probe
  * are both necessary and together still insufficient.
  *
@@ -84,8 +103,23 @@ const SCAFFOLD = new Set(
 // A rarity test that silently reports zero for its own tokenisation mismatch is
 // worse than no test, because it reports clean. Both sides use skeletonTokens().
 
+// TWO VOCABULARIES, BECAUSE TWO COMPONENTS MATCH IN DIFFERENT SPACES.
+//
+// `stems` is skeleton space, and the frequency ceiling needs it: a candidate's tokens
+// arrive stemmed, so counting raw words would score "dredged" absent in a store that
+// says "dredge" constantly.
+//
+// `raw` is literal lowercased words, and the PREFIX check needs it, because that is
+// what bait-tripwire actually regexes — it runs `\b<stem>` against untokenised source
+// text. Checking prefixes in skeleton space cannot see the collision it is looking
+// for: "spindles" stems to `spindl`, so `"spindl".startsWith("spindle")` is false and
+// the probe "spindle" passes — while the tripwire's /\bspindle/ matches "Spindles"
+// nineteen times over. The selector was validating a different question from the one
+// the detector asks. Same class of bug as the raw-vs-skeleton mismatch fixed earlier,
+// one layer out, and it survived precisely because both halves looked correct alone.
 async function buildVocab(root) {
   const counts = new Map();
+  const raw = new Map();
   let files = 0;
   async function walk(dir) {
     for (const e of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
@@ -100,11 +134,15 @@ async function buildVocab(root) {
         for (const w of skeletonTokens(line)) {
           counts.set(w, (counts.get(w) ?? 0) + 1);
         }
+        // Raw words, exactly as the tripwire's regex will meet them.
+        for (const w of line.toLowerCase().match(/[a-z]{2,}/g) ?? []) {
+          raw.set(w, (raw.get(w) ?? 0) + 1);
+        }
       }
     }
   }
   await walk(root);
-  return { counts, files };
+  return { counts, raw, files };
 }
 
 // ── Live motivations, for skeleton uniqueness ────────────────────────────────
@@ -139,7 +177,20 @@ async function liveSkeletons() {
  * match 15 and 22 live beats respectively). Judging it by the specific rules would
  * reject it for doing its job.
  */
-export function scoreCandidate(text, vocab, live, mode = "specific") {
+/**
+ * Corpus words this stem is a strict prefix of. Empty means the tripwire can only
+ * ever match the bait's own inflections, which is the property we need.
+ */
+function prefixCollisions(stem, vocab) {
+  const words = [];
+  let total = 0;
+  for (const [w, n] of vocab) {
+    if (w !== stem && w.startsWith(stem)) { words.push(w); total += n; }
+  }
+  return { words, total };
+}
+
+export function scoreCandidate(text, vocab, live, mode = "specific", rawVocab = null) {
   const toks = skeletonTokens(text);
   const counts = toks.map((t) => ({ word: t, n: vocab.get(t) ?? 0 }));
   const clean = counts.filter((c) => c.n === 0);
@@ -162,6 +213,16 @@ export function scoreCandidate(text, vocab, live, mode = "specific") {
     if (collides > 0) reasons.push(`skeleton already matches ${collides} live motivation(s)`);
     if (overCeiling.length > 0) {
       reasons.push(`${overCeiling.length} content word(s) over the ${WORD_FREQ_CEILING} ceiling (peak ${peak})`);
+    }
+    for (const p of probe) {
+      if (p.word.length < MIN_PROBE_LEN) {
+        reasons.push(`probe stem "${p.word}" shorter than ${MIN_PROBE_LEN}`);
+        continue;
+      }
+      const collisions = prefixCollisions(p.word, rawVocab ?? vocab);
+      if (collisions.total > 0) {
+        reasons.push(`probe stem "${p.word}" prefixes ${collisions.words.length} corpus word(s) (${collisions.total} occurrences)`);
+      }
     }
   }
 
@@ -257,7 +318,7 @@ if (!fromFile && !genN) {
   process.exit(2);
 }
 
-const { counts: vocab, files } = await buildVocab(getDataDir());
+const { counts: vocab, raw: rawVocab, files } = await buildVocab(getDataDir());
 const live = await liveSkeletons();
 console.log(`corpus: ${files} files, ${vocab.size} distinct words, ${live.length} live motivations\n`);
 
@@ -283,7 +344,7 @@ for (const [group, list] of Object.entries(cands)) {
   console.log("  #  skel  zero-words  probe-floor  peak-content  collides  verdict");
   results[group] = [];
   list.forEach((text, i) => {
-    const s = scoreCandidate(text, vocab, live, group);
+    const s = scoreCandidate(text, vocab, live, group, rawVocab);
     console.log(
       `  ${String(i).padStart(2)}  ${String(s.skeletonLen).padStart(4)}  ${String(s.cleanWords.length).padStart(10)}  ${String(s.probeFloor).padStart(11)}  ${String(s.peak).padStart(12)}  ${String(s.collides).padStart(8)}  ${s.pass ? "PASS" : "fail: " + s.reasons.join("; ")}`,
     );

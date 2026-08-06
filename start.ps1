@@ -191,6 +191,32 @@ function Update-SidecarBuild {
     return $false
 }
 
+function Test-BaitRot {
+    # BAIT ROT, HUNG ON A HOOK THAT ALREADY HAS AN AUDIENCE (Mari's ruling, 2026-08-06):
+    # "don't schedule it standalone. a cron nobody reads is a prayer, same lexicon as
+    # the backups." This runs where someone is already looking — every sidecar start,
+    # in the console that gets read anyway. No new ritual, nothing new to forget.
+    #
+    # NON-BLOCKING BY DESIGN. Rot is a "rotate the bait soon" signal, not a reason to
+    # refuse to start a memory sidecar. The blocking copy lives in the pre-push hook,
+    # where refusing costs a re-run instead of costing someone their memory service.
+    if (-not (Test-Path (Join-Path $sidecarDir "dist\scripts") ) -and -not (Test-Path (Join-Path $sidecarDir "scripts\bait-rot.mjs"))) { return }
+    Push-Location $sidecarDir
+    $out = & node.exe "scripts\bait-rot.mjs" 2>&1
+    $code = $LASTEXITCODE
+    Pop-Location
+    if ($code -eq 0) {
+        Write-Host "  [OK] Bait warrants intact, no contamination events" -ForegroundColor Green
+        return
+    }
+    Write-Host "  [!!] BAIT ROT or CONTAMINATION detected" -ForegroundColor Red
+    # Only the verdict lines. The full report names ledger indices, never phrases.
+    $out | Select-String -Pattern "ROTTED|contamination event|corroborable" | ForEach-Object {
+        Write-Host "       $_" -ForegroundColor Yellow
+    }
+    Write-Host "       Rotate: node scripts/bait-select.mjs --generate 200 --seed <new> --pick specific:2,vague:2 --write src/sentiment/bait.json" -ForegroundColor Yellow
+}
+
 function Measure-SidecarProcess {
     # Called on every healthy check. Records who is actually listening and how
     # much memory it holds, so the moment before a death is described rather
@@ -368,6 +394,7 @@ if (-not (Update-SidecarBuild)) {
     Write-Host "  Falling back to dev mode (tsx) for this run." -ForegroundColor DarkGray
     $script:RunCmd = "run dev"
 }
+Test-BaitRot
 Write-Host ""
 
 # ── Bring-your-own-backend (non-Ollama) detection ────────────────────────────

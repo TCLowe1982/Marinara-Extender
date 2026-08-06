@@ -1,0 +1,47 @@
+#!/bin/sh
+# Marinara Extender — pre-push guard.
+#
+# CADENCE, RULED (Mari, 2026-08-06): "don't schedule it standalone. a cron nobody
+# reads is a prayer, same lexicon as the backups. hang it on two hooks that already
+# have an audience — CI on push, which already blocks and is already watched, and
+# sidecar start, which opie already runs and already reads."
+#
+# THERE IS NO CI IN THIS REPO. No .github/, no workflows, no runner — so the hook she
+# named as "already blocking and already watched" does not exist to hang anything on.
+# This is the local equivalent: it blocks a push, it needs no infrastructure, and it
+# is not a ritual because nobody has to remember to run it.
+#
+# Enable once per clone (git does not version .git/hooks):
+#     git config core.hooksPath .githooks
+#
+# Checks, in the order they fail cheapest-first:
+#   1. bait-rot   — a CURRENT warrant gone corroborable, or a live tripwire event
+#   2. tests      — includes bait-fixture and bait-tripwire property assertions
+#
+# Bypass with --no-verify only when you know why. If bait-rot is the thing failing,
+# the fix is a rotation, which takes seconds:
+#   node scripts/bait-select.mjs --generate 200 --seed <new> --pick specific:2,vague:2 --write src/sentiment/bait.json
+
+set -e
+cd "$(dirname "$0")/../memory-extender" || exit 0
+
+if [ ! -d dist ]; then
+  echo "pre-push: no dist/, skipping bait checks (run npm run build first)"
+  exit 0
+fi
+
+echo "pre-push: bait rot + contamination..."
+if ! node scripts/bait-rot.mjs > /tmp/bait-rot-prepush.txt 2>&1; then
+  echo ""
+  echo "  BLOCKED: bait rot or contamination on a CURRENT warrant."
+  # Verdict lines only. The report names ledger indices, never phrases — keep it
+  # that way here too, since a terminal scrollback is a channel like any other.
+  grep -E "ROTTED|contamination event|corroborable" /tmp/bait-rot-prepush.txt || true
+  echo ""
+  echo "  Rotate the fixture, rebuild, and push again."
+  exit 1
+fi
+echo "  ok"
+
+echo "pre-push: tests..."
+npm test --silent

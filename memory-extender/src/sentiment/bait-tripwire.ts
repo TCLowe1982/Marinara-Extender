@@ -33,6 +33,23 @@
 import { appendFileSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 
+/** Mirrors MIN_PROBE_LEN in scripts/bait-select.mjs. See detectBaitContamination. */
+const MIN_PROBE_LEN = 4;
+
+/**
+ * THE LOG IS QUARANTINED, AND IT HAS TO BE (Mari, 2026-08-06).
+ *
+ * The phrase never enters an event — only a ledger index and the probe words. But the
+ * EXCERPT does, by construction: it is a window around the hit, so it contains the
+ * hit. That makes bait-contamination.jsonl a file holding leaked bait in context, and
+ * therefore the next docs/PROMPTS.md if it is ever treated as ordinary output.
+ *
+ * So the rules, and they are the point of this comment: nothing imports it, nothing
+ * renders it, it never rides in a review artifact, and it is gitignored. The excerpt
+ * exists for a human opening the file deliberately to tell meta-talk from real talk —
+ * that is the only intended reader. A leak detector whose own output leaks is not a
+ * detector, it is a second copy of the problem.
+ */
 export interface ContaminationEvent {
   at: string;
   /** Index into the echo ledger, so the phrase itself never enters the log. */
@@ -62,6 +79,12 @@ export function detectBaitContamination(
   entries.forEach((e, i) => {
     if (!e.current || !e.probeAll?.length) return;
     const present = e.probeAll.filter((w) =>
+      // Length floor as a defensive backstop. bait-select is the real guarantee — it
+      // rejects any stem that prefixes a corpus word — but this file must not be
+      // capable of prefix-matching ordinary English on a fixture written by hand or
+      // by an older version of the selector. A tripwire that cries wolf gets muted,
+      // and a muted tripwire is indistinguishable from none.
+      w.length >= MIN_PROBE_LEN &&
       new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i").test(src),
     );
     // ANY hit is reportable, not just a full set. A single corpus-absent bait word in

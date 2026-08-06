@@ -12,7 +12,7 @@ up in review as readable prose rather than as a diff of string fragments.
 > They are withheld because this file gets pasted, and a pasted example lands in a
 > chat the sidecar ingests, which is how the previous pair rotted inside 48 hours.
 
-Build: `1.2.0+11bf861`
+Build: `1.2.0+12491f3`
 
 | Prompt | Fires |
 |---|---|

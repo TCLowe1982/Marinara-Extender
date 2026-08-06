@@ -1,25 +1,25 @@
 {
   "specific": [
     {
-      "text": "insists the wheelwright caulked the flange, not the shunter",
+      "text": "asks whether the apiary ever swaged the spillway",
       "probe": [
-        "wheelwright",
-        "caulk"
-      ],
-      "skeletonLen": 5
-    },
-    {
-      "text": "asks whether the byre ever splined the aqueduct",
-      "probe": [
-        "byre",
-        "splin"
+        "apiary",
+        "spillway"
       ],
       "skeletonLen": 6
+    },
+    {
+      "text": "insists the farrier limed the spillway, not the wheelwright",
+      "probe": [
+        "farrier",
+        "spillway"
+      ],
+      "skeletonLen": 5
     }
   ],
   "vague": [
     {
-      "text": "underscores the significance of what they are feeling here",
+      "text": "conveys her emotional turmoil about the situation",
       "probe": [],
       "skeletonLen": 4
     },

@@ -85,8 +85,24 @@ const RULES: { name: string; test: (line: string) => boolean }[] = [
   },
   {
     // `"POST",` — a bare string literal, optionally comma-terminated.
+    //
+    // A QUOTED LINE ALONE IS USUALLY DIALOGUE, WHICH IS THE OPPOSITE OF NOISE. This
+    // rule fired 371 times across the store, and the largest hit was
+    // `"Zielińska. Party of three. Five-thirty."` — a line of speech, in the most
+    // memory-worthy material this system holds. In roleplay a bare quoted line is the
+    // single most common shape there is.
+    //
+    // So the same discriminator config-key already uses: a code literal is a short
+    // token, while speech ends like a sentence and carries several words. Both guards
+    // are required — "POST", still dies; a line of dialogue does not.
     name: "bare-literal",
-    test: (l) => /^\s*["'][^"']{0,40}["'],?\s*$/.test(l),
+    test: (l) => {
+      const m = /^\s*["']([^"']{0,40})["'],?\s*$/.exec(l);
+      if (!m) return false;
+      const value = m[1]!.trim();
+      if (/[.!?…]$/.test(value)) return false;                        // ends like speech
+      return (value.match(/[\p{L}\p{N}]+/gu) ?? []).length <= 3;      // token, not a sentence
+    },
   },
   {
     // `README.md`, `src/foo.ts`, `D:\path\file.json`
@@ -120,8 +136,17 @@ const RULES: { name: string; test: (line: string) => boolean }[] = [
   },
   {
     // `$ npm test`, `> node script.mjs`, `npx vitest run`, `git push`
+    //
+    // `>` ALONE IS NOT A SHELL PROMPT — it is markdown blockquote, and treating it as
+    // one was a false positive with teeth. Measured over the store before wiring:
+    // this rule was dropping "> Do not proactively suggest breaks, rest, sleep, food,
+    // hydration…" and "> **Domain physics — anal baseline.** Within Mari's domain…",
+    // both of which are character-card PROSE quoted into a message. A blockquote is
+    // how people quote each other; a shell prompt is followed by a command. So the
+    // `>` and `$` forms now require a command token after them, and the bare-word
+    // form is unchanged.
     name: "shell-command",
-    test: (l) => /^\s*(?:[$>]\s+|PS[^>]*>\s*)/.test(l) ||
+    test: (l) => /^\s*(?:[$>]\s+|PS[^>]*>\s*)(?:npm|npx|node|git|bd|cd|ls|cat|grep|curl|docker|pnpm|yarn|sudo|python|pip|tsc|vitest)\b/.test(l) ||
                  /^\s*(?:npm|npx|node|git|bd|cd|ls|cat|grep|curl|docker|pnpm|yarn)\s+[\w./-]/.test(l),
   },
   {

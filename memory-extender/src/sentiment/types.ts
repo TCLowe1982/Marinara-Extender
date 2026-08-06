@@ -70,7 +70,16 @@ export interface ClassificationResult {
    * was merely dull, or the next person measuring "how much did we skip" cannot tell
    * a guard working from a guard misfiring.
    */
-  suppressedReason?: "content-floor" | "self-prompt";
+  suppressedReason?: "content-floor" | "self-prompt" | "ops-lane";
+  /**
+   * Lines routed to the ops sink (hjt9). Present whenever partitioning removed
+   * anything, INCLUDING when the chunk still passes — the prose around a paste stays
+   * memory, so a routed chunk is normally still a beat with fewer lines.
+   *
+   * The caller records these; classifyChunk stays pure and synchronous because it
+   * runs over every chunk of every import.
+   */
+  opsLines?: { line: string; rule: string }[];
 }
 
 // ── Stage 2: Deep Analysis ────────────────────────────────────────────────────

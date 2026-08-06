@@ -24,3 +24,4 @@ local-notes/
 
 # Tripwire log: local ingestion telemetry, not shared state.
 memory-extender/data/bait-contamination.jsonl
+memory-extender/data/ops-lane.jsonl

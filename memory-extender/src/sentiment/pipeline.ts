@@ -9,6 +9,7 @@ import type { DigestMessage } from "../digest.js";
 import type { EmotionalBeat, ClassificationResult } from "./types.js";
 import { chunkMessages } from "./chunker.js";
 import { classifyChunks } from "./classifier.js";
+import { recordOps } from "./ops-lane.js";
 import { analyzeChunk } from "./analyzer.js";
 import { encodeBeat, beatIdForChunk, readBeatIndex, readBeat, companionEntryFromBeat } from "./encoder.js";
 import { createEntryIfUnique } from "../dedup.js";
@@ -17,6 +18,7 @@ import { buildSubjectRoster, resolveNameToKey, matchesSessionName } from "../ide
 import { normalizeLabel } from "../aliases.js";
 import { addPending } from "../holding-pool.js";
 import { ingestSceneFacts } from "../facts.js";
+import { getDataDir } from "../storage.js";
 
 export interface PipelineOptions {
   sourceType?: "chat" | "story";
@@ -107,6 +109,29 @@ export async function runSentimentPipeline(
 
   // Stage 1: classify
   const classifications = classifyChunks(chunks, sourceType);
+
+  // OPS/META SINK (hjt9). MARK, DON'T DROP — routed structure is greppable forever
+  // and never deleted. Written here rather than inside classifyChunk so that stays
+  // pure and synchronous: it runs over every chunk of every import.
+  //
+  // A SINK, NOT A FOURTH LANE. storage.ts's Lane type means a RECALL lane, read back
+  // and injected into prompts; filing ops content there would classify it correctly
+  // and then feed it to the model anyway, which is the problem restated.
+  const opsRecords = classifications.flatMap((c) =>
+    (c.opsLines ?? []).map((d) => ({
+      at: new Date().toISOString(),
+      chatId: options.sourceChatId,
+      speaker: c.chunk.speaker,
+      rule: d.rule,
+      line: d.line,
+      pasteScore: 0,
+    })),
+  );
+  if (opsRecords.length) {
+    recordOps(getDataDir(), opsRecords);
+    console.info(`[ME:pipeline] ops lane: routed ${opsRecords.length} line(s) from ${classifications.filter((c) => c.opsLines?.length).length} chunk(s)`);
+  }
+
   const passing = classifications.filter((c) => c.passesThreshold);
 
   // Collect unique speakers for diagnostics.

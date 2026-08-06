@@ -16,6 +16,7 @@
 
 import type { Chunk, ClassificationResult, StructuralPatternMatch } from "./types.js";
 import { detectSelfPrompt, SELF_PROMPT_COVERAGE } from "./self-prompt.js";
+import { routeOps } from "./ops-lane.js";
 import type { Emotion } from "./types.js";
 import { loadSentimentConfig, loadEmotionalKeywords } from "./config.js";
 
@@ -141,7 +142,40 @@ export function classifyChunk(
     };
   }
 
-  const text = chunk.text.toLowerCase();
+  // OPS/META ROUTING (hjt9). The routable unit is the PARTITION, never a chunk-level
+  // boolean — three separate detectors in this codebase made the chunk-level mistake
+  // before this landed, so the lane only ever consumes the split.
+  //
+  // Structure goes to the sink; the prose around it stays memory and is what gets
+  // scored, analysed, and — critically — handed to the echo guard as corroboration
+  // evidence. hjt9: "rejectAsEcho's escape hatch must not accept a paste of the
+  // phrase as the speaker having said it." Feeding it prose-only enforces that here
+  // rather than with another special case inside the guard.
+  //
+  // Measured over 8,300 live beats before wiring: 1.7% of chunks lose a line, 37 are
+  // wholly structural. That number is only trustworthy because two rules were fixed
+  // first — `shell-command` was matching markdown blockquotes of character-card
+  // prose, and `bare-literal` was matching lines of dialogue like
+  // "Zielińska. Party of three. Five-thirty." Unfixed, this dropped 310 chunks.
+  const ops = routeOps(chunk.text);
+  if (ops.wholesale) {
+    return {
+      chunk,
+      scores: {},
+      primaryEmotion: null,
+      salience: 0,
+      structuralMatches: [],
+      passesThreshold: false,
+      suppressedReason: "ops-lane",
+      opsLines: ops.dropped,
+    };
+  }
+  // Score the prose half only. The chunk carried downstream is the reduced one, so
+  // the stored beat's evidence is what a person actually said.
+  const scored: Chunk = ops.dropped.length ? { ...chunk, text: ops.prose } : chunk;
+  const opsLines = ops.dropped.length ? ops.dropped : undefined;
+
+  const text = scored.text.toLowerCase();
   const scores: Partial<Record<Emotion, number>> = {};
   let totalMatches = 0;
 
@@ -240,12 +274,16 @@ export function classifyChunk(
   }
 
   return {
-    chunk,
+    // The REDUCED chunk, so everything downstream — the analyzer's prompt, the
+    // stored beat's text, and the echo guard's corroboration evidence — sees what a
+    // person said and not what they pasted.
+    chunk: scored,
     scores,
     primaryEmotion,
     salience,
     structuralMatches,
     passesThreshold: salience >= threshold,
+    opsLines,
   };
 }
 

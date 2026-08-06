@@ -204,6 +204,30 @@ Three gates run before scoring. Each sets `suppressedReason` on the result, beca
 
 **Ops/meta (`ops-lane.ts`, hjt9).** `routeOps` splits a chunk into prose and structure. Structure goes to `data/ops-lane.jsonl` — **a sink, not a fourth lane**: `storage.ts`'s `Lane` type means a *recall* lane, so filing ops content there would classify it correctly and then feed it to the model anyway. The prose half is what continues, and `classifyChunk` returns the **reduced** chunk, so the analyzer's prompt, the stored beat's text and the echo guard's corroboration evidence all see what a person said rather than what they pasted. That is how "the escape hatch must not accept a paste of the phrase as the speaker having said it" is enforced — structurally, not with another special case inside the guard.
 
+## House law: measure before you reason — and measure the measurement
+
+**A rule that reads correct is not evidence. Run it against the store before you write it.** Every defect prosecuted on 2026-08-05/06 was found by measurement and none by review, including three written that same day by the person reviewing them.
+
+The maxim alone changes nothing — this codebase's own objection to advisory guards applies to advice about guards. What makes it operational are the failure modes it names:
+
+**1. The candidate rule must meet the real census, not a hypothesis.** A shape rule for the speaker bug (reject digits / all-lowercase / SHOUTY) looked obviously right and would have **rejected `user` (1,721 beats) and `professor_mari` (810)** — the two most important speakers in the store — because those come from `msg.role` and `characterName`, never from `SPEAKER_PREFIX_RE`. It also cheerfully kept `"Extract the emotional beat as JSON"` and `"Co-Authored-By"`. Reasoning produced a rule wrong in both directions at once; one run against 570 real labels showed it in seconds.
+
+**2. Measure twice — the first measurement is the one that lies.** Three inflated counts in a single session, each looking like a bigger, scarier version of the true finding, which is exactly what makes them hard to catch:
+
+| Reported | True | What it actually counted |
+|---|---|---|
+| 1,100 | 65 | whole-YAML scanning matched stored **field values** (`subpattern: bpd_testing`) |
+| 683 | — | short bait fragments matched **quotations** of the phrase |
+| 636 | 34 | one retired bait phrase matched 596 records — the **known pifl echo population** |
+
+The generalisation: **when measuring contamination, the contamination's own artifacts are the largest false-positive source.** Only source text — `text` on a beat, `content` on an entry — answers "was this ingested". `bait-rot` hit the same wall and needed a `spoken` vs `derived` split before its number meant anything.
+
+**3. A precision number is only valid for the scope it was measured in.** `code-filter`'s rules were measured safe at chunk level, where they touch the ops-shaped 1%. Per-line routing applied them to *every* chunk, and they began dropping markdown blockquotes of character-card prose and lines of dialogue. Widening a detector's scope invalidates its measurement and requires re-measuring.
+
+**4. Measure at the granularity the code actually runs at.** The paste prior was declared "not doing decisive work" from a chunk-level scan. But the chunker joins turns with a space, so the evidence was destroyed before the detector saw it — mean score 0.061 whole-message against 0.003 at best chunk, a 20× collapse. The prior was never weak; the measurement was taken downstream of the shredder.
+
+**The cheap version, when a full corpus run is not possible:** state the gap rather than skipping the step. The `4ghy` residue rule cannot be corpus-measured because the store keeps the minted speaker but not the line that produced it — so the honest move is a conservative rule whose failure mode is *unattributed* rather than *wrong person*, with the gap written down.
+
 ## House law: return the split, never a boolean
 
 **A verdict about a whole chunk misfiles everything wrapped around the thing it detected.** A detector answers *"is this chunk X?"* when the honest question is *"which lines of it are X?"* Both read as correct code, and they diverge exactly on the material that matters most — real conversation with something pasted into the middle of it. The failure is silent: the prose dies with the paste and nobody sees it go.
@@ -247,6 +271,7 @@ The prompt's illustrations are **bait**: concrete enough to teach shape, absurd 
 - **Every beat needs a companion ledger entry.** The loader builds the injected `<memory>` block from the **entry index, not the beats store** (`pipeline.ts:255–259`). A beat with no companion entry is invisible to recall. Never encode a beat without `createEntryIfUnique`.
 - **Never guess a subject into a permanent ledger.** Unknown subject → holding pool (beats) or chat-scope `[about: …]` (facts). Guessing pollutes a character's memory irreversibly.
 - **Fire-and-forget must never block or throw into the response.** Each tier is wrapped in its own `try/catch` and `void`-ed. A failed tier logs a warning; the turn still returns its block.
+- **Measure before you reason, and measure the measurement.** A rule that reads correct is not evidence; the first count is usually inflated by the system's own artifacts. See *House law* above.
 - **Return the split, never a boolean.** Any detector deciding "is this chunk X?" must return which *lines* are X. Three separate incidents; see *House law* above.
 - **A precision number is only valid for the scope it was measured in.** Widening a detector's scope requires re-measuring it.
 - **Dedup is `kind`-aware** — `incident` (beats) vs `trait` (ambient facts) go through different bars in the dedup matrix (`dedup.ts`). Pass the right `kind` or dedup misfires.

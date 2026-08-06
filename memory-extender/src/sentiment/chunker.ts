@@ -22,6 +22,52 @@ import { embedModel } from "../embeddings.js";
 // Matches lines like "Name: text" or "Name (context): text"
 const SPEAKER_PREFIX_RE = /^([A-Za-z][A-Za-z0-9 _'-]{0,40})(?:\s*\([^)]*\))?\s*:\s*/;
 
+/**
+ * THE COLON MIGHT BELONG TO A CLOCK, NOT A SPEAKER (5dqr).
+ *
+ * The label charset above allows digits and spaces, so an exported line like
+ *
+ *     Thomas Today at 8:04 PM
+ *
+ * matches with label "Thomas Today at 8" — the regex split on the TIME's colon and
+ * absorbed the timestamp into the name. Measured across the store: 157 beats under 20
+ * mangled aliases, including Thomas01..12, NarratorNarrator05..12 and
+ * "ThomasToday at 8". "Thomas" proper held 8 beats while his variants held ~40, so
+ * the real character was more fragmented than intact.
+ *
+ * This is the inverse of 4ghy and worse. A minted fake speaker produces beats that
+ * are visibly junk. A mangled real speaker produces beats that look entirely correct
+ * and route to a person-shaped stranger, and subject attribution compounds it.
+ *
+ * The signature is unambiguous: the label ends in digits AND the text after the colon
+ * begins with two more. No name does that; every clock does.
+ */
+const TIME_SPLIT_RE = /\d$/;
+const MINUTES_RE = /^\d{2}\b/;
+
+/**
+ * Recover the speaker from a timestamp-mangled label.
+ *
+ * RE-ATTRIBUTE, DON'T DISCARD. Refusing the match would drop the line into the
+ * previous speaker's buffer, which trades a stranger for a misattribution — the same
+ * beat, still on the wrong person. "Thomas Today at 8" really is Thomas talking, so
+ * the name is recovered and the clock is dropped.
+ *
+ * Handles the doubled form too: exports that repeat the name produce
+ * "NarratorNarrator07", which is the single largest cluster in the census.
+ */
+export function unmangleSpeaker(label: string): string {
+  let s = label.trim();
+  s = s.replace(/\s*\d{1,2}$/, "");                 // trailing hour
+  s = s.replace(/\s*(?:Today|Yesterday)?\s*at$/i, ""); // "... Today at"
+  s = s.replace(/\s*(?:Today|Yesterday)$/i, "");
+  s = s.trim();
+  // "NarratorNarrator" -> "Narrator". Only an exact doubling, so "Anna Annabel" is safe.
+  const doubled = /^(.+?)\1$/.exec(s);
+  if (doubled) s = doubled[1]!;
+  return s.trim();
+}
+
 // Narration blocks delimited by asterisks: *does something*
 const NARRATION_RE = /^\*[^*]+\*$/;
 
@@ -57,8 +103,22 @@ export function parseTurns(messages: DigestMessage[], characterName: string): Di
       if (prefixMatch) {
         // Line starts a new speaker — flush what we have, then start fresh.
         flush();
-        currentSpeaker = prefixMatch[1]!.trim();
-        buffer.push(line.slice(prefixMatch[0].length).trim());
+        let label = prefixMatch[1]!.trim();
+        let rest = line.slice(prefixMatch[0].length).trim();
+
+        // 5dqr: the matched colon may belong to a clock. Recover the name and keep
+        // the rest of the line as this speaker's text, minus the timestamp.
+        if (TIME_SPLIT_RE.test(label) && MINUTES_RE.test(rest)) {
+          const recovered = unmangleSpeaker(label);
+          if (recovered) {
+            label = recovered;
+            // Drop the minutes and any am/pm that followed the clock.
+            rest = rest.replace(/^\d{2}\s*(?:[AaPp]\.?[Mm]\.?)?\s*/, "").trim();
+          }
+        }
+
+        currentSpeaker = label;
+        buffer.push(rest);
       } else if (NARRATION_RE.test(line)) {
         flush();
         // "Narrator" (capital) is the single canonical label across the chunker

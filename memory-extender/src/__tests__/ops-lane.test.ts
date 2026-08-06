@@ -86,6 +86,47 @@ describe("routeOps", () => {
   });
 });
 
+// WHY THE PIPELINE ROUTES BEFORE CHUNKING, pinned as a test rather than a comment.
+//
+// The chunker joins turns with a SPACE (chunker.ts `groupTexts.join(" ")`), and
+// parseTurns has already split the message on /\n+/. So every chunk it emits is one
+// line — and every code-filter rule is line-anchored, while partitionProse splits on
+// newlines. Routing at chunk level therefore has nothing to work with on the live
+// path, which is why ops routing runs at Stage -1 in runSentimentPipeline.
+//
+// Measured: mean paste score 0.061 whole-message vs 0.003 at best chunk, a 20x
+// collapse on the same texts. If someone later teaches the chunker to preserve
+// newlines, this test fails and the ordering assumption gets re-examined instead of
+// silently becoming wrong.
+describe("chunking destroys the line structure the rules need", () => {
+  it("emits single-line chunks from multi-line input", async () => {
+    const { chunkMessages } = await import("../sentiment/chunker.js");
+    const multiline = [
+      "here's what it printed:",
+      "[ME:loader] env parsed: 14 keys",
+      "[ME:dedup] 14 duplicates merged",
+      "and that's the third time this week.",
+    ].join("\n");
+
+    const chunks = await chunkMessages([{ role: "user", content: multiline }], "Mari");
+    expect(chunks.length).toBeGreaterThan(0);
+    for (const c of chunks) {
+      expect(c.text, "chunker should have joined turns with a space").not.toContain("\n");
+    }
+  });
+
+  it("routeOps on the raw message still finds the structure", () => {
+    const multiline = [
+      "here's what it printed:",
+      "[ME:loader] env parsed: 14 keys",
+      "and that's the third time this week.",
+    ].join("\n");
+    const r = routeOps(multiline);
+    expect(r.dropped).toHaveLength(1);
+    expect(r.prose).toContain("third time this week");
+  });
+});
+
 describe("classifier routing", () => {
   it("suppresses a wholly structural chunk and names the lane", () => {
     const r = classifyChunk(chunk([

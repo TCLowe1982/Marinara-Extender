@@ -9,7 +9,7 @@ import type { DigestMessage } from "../digest.js";
 import type { EmotionalBeat, ClassificationResult } from "./types.js";
 import { chunkMessages } from "./chunker.js";
 import { classifyChunks } from "./classifier.js";
-import { recordOps } from "./ops-lane.js";
+import { recordOps, routeOps, type OpsRecord } from "./ops-lane.js";
 import { analyzeChunk } from "./analyzer.js";
 import { encodeBeat, beatIdForChunk, readBeatIndex, readBeat, companionEntryFromBeat } from "./encoder.js";
 import { createEntryIfUnique } from "../dedup.js";
@@ -97,8 +97,50 @@ export async function runSentimentPipeline(
   const { sourceType = "chat", characters, povCharacter, progressLabel } = options;
   const report = new Progress(progressLabel ?? characterName, options.progress ?? progressEnabled());
 
+  // Stage -1: OPS ROUTING, BEFORE CHUNKING — and this ordering is the whole point.
+  //
+  // MEASURED 2026-08-06 (`node scripts/paste-scan-message.mjs`): the chunker joins
+  // turns with a SPACE (`groupTexts.join(" ")`, chunker.ts:118/159). parseTurns has
+  // already split the message on /\n+/, so by the time a chunk exists every newline
+  // is gone and the chunk is one line. Every code-filter rule is line-anchored
+  // (/^\s*.../) and partitionProse splits on /\r?\n/ — so routing at chunk level has
+  // nothing left to work with on the live path.
+  //
+  // The numbers, same texts measured both ways: mean paste score 0.061 whole-message
+  // against 0.003 at best chunk, a 20x collapse. That is not a weak signal, it is a
+  // shredded one, and it is why the chunk-level scan concluded the size prior "is not
+  // doing decisive work" — it was measuring after the evidence had been destroyed.
+  //
+  // So structure is routed here, where lines still exist, and the chunker receives
+  // prose. The chunk-level gate in classifyChunk stays as defence in depth for paths
+  // that reach it with newlines intact (story imports, re-analysis of stored text).
+  const opsRecords: OpsRecord[] = [];
+  const routedMessages = messages.map((m) => {
+    const content = String(m.content ?? "");
+    if (!content.includes("\n")) return m;
+    const routed = routeOps(content);
+    if (!routed.dropped.length) return m;
+    for (const d of routed.dropped) {
+      opsRecords.push({
+        at: new Date().toISOString(),
+        chatId: options.sourceChatId,
+        speaker: m.role,
+        rule: d.rule,
+        line: d.line,
+        pasteScore: routed.pasteScore,
+      });
+    }
+    // MARK, DON'T DROP: the lines are in the sink before the message is reduced.
+    return { ...m, content: routed.prose };
+  }).filter((m) => String(m.content ?? "").trim().length > 0);
+
+  if (opsRecords.length) {
+    recordOps(getDataDir(), opsRecords);
+    console.info(`[ME:pipeline] ops lane: routed ${opsRecords.length} line(s) from ${messages.length - routedMessages.length} dropped message(s) + reductions`);
+  }
+
   // Stage 0: chunk
-  let chunks = await chunkMessages(messages, characterName);
+  let chunks = await chunkMessages(routedMessages, characterName);
 
   // Relabel "Narrator" to the POV character name for first-person prose.
   if (povCharacter) {
@@ -110,14 +152,16 @@ export async function runSentimentPipeline(
   // Stage 1: classify
   const classifications = classifyChunks(chunks, sourceType);
 
-  // OPS/META SINK (hjt9). MARK, DON'T DROP — routed structure is greppable forever
-  // and never deleted. Written here rather than inside classifyChunk so that stays
-  // pure and synchronous: it runs over every chunk of every import.
+  // CHUNK-LEVEL SINK — defence in depth. The primary routing happened at Stage -1,
+  // above, where newlines still exist. This catches anything that reaches classify
+  // with structure intact, and writes it the same way. Kept separate rather than
+  // merged because the two run at different granularities and conflating them is the
+  // exact mistake this ticket is about.
   //
   // A SINK, NOT A FOURTH LANE. storage.ts's Lane type means a RECALL lane, read back
   // and injected into prompts; filing ops content there would classify it correctly
   // and then feed it to the model anyway, which is the problem restated.
-  const opsRecords = classifications.flatMap((c) =>
+  const chunkOpsRecords = classifications.flatMap((c) =>
     (c.opsLines ?? []).map((d) => ({
       at: new Date().toISOString(),
       chatId: options.sourceChatId,
@@ -127,9 +171,9 @@ export async function runSentimentPipeline(
       pasteScore: 0,
     })),
   );
-  if (opsRecords.length) {
-    recordOps(getDataDir(), opsRecords);
-    console.info(`[ME:pipeline] ops lane: routed ${opsRecords.length} line(s) from ${classifications.filter((c) => c.opsLines?.length).length} chunk(s)`);
+  if (chunkOpsRecords.length) {
+    recordOps(getDataDir(), chunkOpsRecords);
+    console.info(`[ME:pipeline] ops lane (chunk-level): routed ${chunkOpsRecords.length} line(s) from ${classifications.filter((c) => c.opsLines?.length).length} chunk(s)`);
   }
 
   const passing = classifications.filter((c) => c.passesThreshold);

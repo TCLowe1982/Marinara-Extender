@@ -71,8 +71,82 @@ export function unmangleSpeaker(label: string): string {
 // Narration blocks delimited by asterisks: *does something*
 const NARRATION_RE = /^\*[^*]+\*$/;
 
+/**
+ * A SPEAKER LABEL IS A NOUN PHRASE (Mari's rule, 4ghy).
+ *
+ * A fragment ending in a copula, preposition or conjunction is a sentence being cut
+ * in half — the chunker splitting ordinary prose on an ordinary colon. "so the plan
+ * is:", "the question is:", "What she's hearing is:". None of those is a person, and
+ * the shape says so without a blocklist.
+ */
+const FRAGMENT_TAIL = new Set([
+  "is", "are", "was", "were", "be", "been", "am",
+  "of", "in", "on", "at", "by", "for", "with", "from", "to", "into",
+  "about", "over", "under", "than", "then", "as", "like",
+  "and", "or", "but", "either", "so", "because", "if", "when", "while", "that", "which",
+]);
+
+/**
+ * Could this label be a person?
+ *
+ * MEASURED against all 542 labels in the store before it was written, per house law.
+ * 70 labels / 79 beats fail the fragment tail; a further 175 / 188 fail lowercase —
+ * and every real speaker survives both, including the walk-on "Driver".
+ *
+ * NOT A JUNK DETECTOR, and that distinction is the whole scope of this fix. It cannot
+ * see "BAD", "Format" or "Extract the emotional beat as JSON": those arrive inside
+ * pasted prompt and report text, which is hjt9's ops lane and pe4o's self-prompt gate.
+ * One rule, one job.
+ */
+export function isPlausibleSpeakerLabel(label: string): boolean {
+  const words = label.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return false;
+  if (words.length >= 2) {
+    // Names are capitalised; a lowercase multi-word label is a sentence fragment.
+    if (label === label.toLowerCase() && /[a-z]/.test(label)) return false;
+    const tail = words[words.length - 1]!.toLowerCase().replace(/[^a-z]/g, "");
+    if (FRAGMENT_TAIL.has(tail)) return false;
+  }
+  return true;
+}
+
+/**
+ * Labels with enough evidence to mint a speaker: seen at least twice IN THIS IMPORT.
+ *
+ * WITHIN-IMPORT, NOT STORE-WIDE, and the reason is determinism rather than recall.
+ * Counting against the store would catch walk-ons who speak once per chat, but it
+ * makes the result depend on what is already stored — the same chat imported on a
+ * different day would chunk differently. Reproducible beats marginally better recall.
+ *
+ * TAIL HYGIENE ONLY. Recurrence does NOT separate people from junk: `status` occurs
+ * 322 times, `summary` 17, `BAD` 8. Every structured junk label in this store is
+ * high-frequency by construction, because reports get pasted into the live capture
+ * channel. Ten of the twenty-five most frequent labels are not people. So this buys
+ * the 463 one-off labels and nothing else, and must never be mistaken for the junk
+ * filter — that is the ops lane's job.
+ */
+const MIN_LABEL_OCCURRENCES = 2;
+
+function countCandidateLabels(messages: DigestMessage[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const msg of messages) {
+    for (const line of String(msg.content ?? "").split(/\n+/)) {
+      const m = SPEAKER_PREFIX_RE.exec(line.trim());
+      if (!m) continue;
+      let label = m[1]!.trim();
+      const rest = line.trim().slice(m[0].length).trim();
+      if (TIME_SPLIT_RE.test(label) && MINUTES_RE.test(rest)) label = unmangleSpeaker(label);
+      if (!label || !isPlausibleSpeakerLabel(label)) continue;
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
 export function parseTurns(messages: DigestMessage[], characterName: string): DialogueTurn[] {
   const turns: DialogueTurn[] = [];
+  // Pass 1: which labels have earned the right to mint a speaker.
+  const labelCounts = countCandidateLabels(messages);
   let index = 0;
 
   for (const msg of messages) {
@@ -117,8 +191,29 @@ export function parseTurns(messages: DigestMessage[], characterName: string): Di
           }
         }
 
-        currentSpeaker = label;
-        buffer.push(rest);
+        // UNRECOGNISED LABEL DOES NOT OVERRIDE THE MESSAGE'S SPEAKER (4ghy).
+        //
+        // The failure costs are asymmetric, which is what decides this. A false
+        // positive mints a permanent phantom entity — the Kristen class: invisible,
+        // and it pollutes the entity index, which is the thing that actually opens
+        // recall. A false negative attributes the line to whoever sent the message,
+        // and the raw text still says "Driver:", so it stays re-derivable later.
+        // One error is permanent and silent; the other is recoverable and visible.
+        // Always take the recoverable one.
+        //
+        // So an unproven label leaves the line exactly where it was — attributed to
+        // the sender — rather than inventing a person to hang it on.
+        // Roster match is STRONGER evidence than recurrence, so it short-circuits it:
+        // the session character speaking once is still the session character.
+        const rosterKnown = !!characterName && label.toLowerCase() === characterName.trim().toLowerCase();
+        if (isPlausibleSpeakerLabel(label)
+            && (rosterKnown || (labelCounts.get(label) ?? 0) >= MIN_LABEL_OCCURRENCES)) {
+          currentSpeaker = label;
+          buffer.push(rest);
+        } else {
+          // Not a speaker line after all: keep the whole line as this speaker's text.
+          buffer.push(line);
+        }
       } else if (NARRATION_RE.test(line)) {
         flush();
         // "Narrator" (capital) is the single canonical label across the chunker

@@ -44,14 +44,23 @@ describe("unmangleSpeaker", () => {
 });
 
 describe("parseTurns with timestamped exports", () => {
+  // Thomas speaks TWICE in these fixtures, because 4ghy now requires a label to recur
+  // within the import before it mints a speaker. A real export always does; a
+  // one-line fixture never did.
   it("attributes a timestamped line to the real speaker", () => {
-    const turns = parseTurns(msg("Thomas Today at 8:04 PM\nstay. please."), "Mari");
+    const turns = parseTurns(
+      msg("Thomas Today at 8:04 PM\nstay. please.\nThomas Today at 8:06 PM\nplease."),
+      "Mari",
+    );
     expect(turns.map((t) => t.speaker)).toContain("Thomas");
     expect(turns.some((t) => /Today at|8:04|04 PM/.test(t.speaker))).toBe(false);
   });
 
   it("keeps the utterance and drops only the clock", () => {
-    const turns = parseTurns(msg("Thomas08:15 AM I am not going to explain myself again."), "Mari");
+    const turns = parseTurns(
+      msg("Thomas08:15 AM I am not going to explain myself again.\nThomas08:16 AM I mean it."),
+      "Mari",
+    );
     const t = turns.find((x) => x.speaker === "Thomas");
     expect(t).toBeDefined();
     expect(t!.text).toContain("not going to explain myself");

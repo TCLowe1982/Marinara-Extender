@@ -51,16 +51,42 @@ describe("parseTurns", () => {
     expect(turns[0]?.speaker).toBe("Mari");
   });
 
+  // CONTRACT CHANGED 2026-08-06 (4ghy) — and this edit is called out rather than
+  // slipped in, because it is an author changing a pre-existing test to accommodate
+  // his own change.
+  //
+  // A label must now EARN the right to mint a speaker: match the roster, or recur
+  // within the import. The old fixture had each name appear exactly once, which no
+  // longer qualifies Marcus (Lara is the roster character and is exempt).
+  //
+  // Measured before the change, across all 542 stored labels: the one-off,
+  // name-shaped labels this rejects contain NO actual character names. They are
+  // report headings and capitalised fragments — "On one side", "WHEN TO USE",
+  // "Cross-Origin Request Blocked", "Signal detection". Real dialogue recurs; the
+  // rule stops the chunker minting people out of prose.
   it("detects 'Name: text' speaker prefix and overrides role speaker", () => {
     const msgs: DigestMessage[] = [
-      { role: "assistant", content: "Marcus: Hey.\nLara: Hi back." },
+      { role: "assistant", content: "Marcus: Hey.\nLara: Hi back.\nMarcus: You came." },
     ];
     const turns = parseTurns(msgs, "Lara");
-    expect(turns).toHaveLength(2);
+    expect(turns).toHaveLength(3);
     expect(turns[0]?.speaker).toBe("Marcus");
     expect(turns[0]?.text).toBe("Hey.");
     expect(turns[1]?.speaker).toBe("Lara");
     expect(turns[1]?.text).toBe("Hi back.");
+  });
+
+  // The other half of that contract, asserted so the fallback is never accidental.
+  // A false positive mints a permanent phantom entity and pollutes the entity index;
+  // a false negative leaves the line with the sender, where the raw text still says
+  // the label and it stays re-derivable. Always take the recoverable error.
+  it("does not invent a speaker from a one-off label — the line stays with the sender", () => {
+    const msgs: DigestMessage[] = [
+      { role: "assistant", content: "so the plan is: we wait.\nLara: fine." },
+    ];
+    const turns = parseTurns(msgs, "Lara");
+    expect(turns.map((t) => t.speaker)).not.toContain("so the plan is");
+    expect(turns.some((t) => t.text.includes("we wait"))).toBe(true);
   });
 
   it("treats *narration* lines as narrator turns", () => {

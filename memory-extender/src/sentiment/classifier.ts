@@ -15,6 +15,7 @@
 //   - structural pattern detection (format-based signals keyword lists miss)
 
 import type { Chunk, ClassificationResult, StructuralPatternMatch } from "./types.js";
+import { detectSelfPrompt } from "./self-prompt.js";
 import type { Emotion } from "./types.js";
 import { loadSentimentConfig, loadEmotionalKeywords } from "./config.js";
 
@@ -98,6 +99,40 @@ export function classifyChunk(
       salience: 0,
       structuralMatches: [],
       passesThreshold: false,
+      suppressedReason: "content-floor",
+    };
+  }
+
+  // SELF-INGESTION GATE (pe4o). Our own system prompt is not conversation.
+  //
+  // Prompt text gets pasted into a chat for review — this project's own required
+  // workflow — and without this the sidecar chunks it, scores it for emotion, asks a
+  // model what the speaker was feeling, and files the answer under a character. 65
+  // live records were built that way, 47 of them in one day, 62 of them on a single
+  // character whose ledger now contains beats analysing OUR SCAFFOLDING as her
+  // feelings. It is also the root of the bait rot: the boat example's probe became
+  // corroborable because the prompt containing it was ingested, not because anyone
+  // discussed a boat.
+  //
+  // Gated HERE, before scoring, for the same reason as the content floor: a chunk of
+  // machine scaffolding is not a low-salience beat, it is not a beat. Scoring it first
+  // and suppressing later would still spend an LLM call and still let a structural
+  // match through.
+  //
+  // Measured before wiring, over all 23,343 stored chunks: 34 gated, every one dated
+  // to the prompt-rewrite session, ZERO hits on the other 23,309. The false-positive
+  // cost here is a real memory that is never recorded — worse than the bug — so the
+  // matcher demands a whole normalised line of our own prompt, not a phrase.
+  const selfPrompt = detectSelfPrompt(chunk.text);
+  if (selfPrompt) {
+    return {
+      chunk,
+      scores: {},
+      primaryEmotion: null,
+      salience: 0,
+      structuralMatches: [],
+      passesThreshold: false,
+      suppressedReason: "self-prompt",
     };
   }
 

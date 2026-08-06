@@ -60,6 +60,17 @@ export interface ClassificationResult {
   salience: number;              // highest individual emotion score
   structuralMatches: StructuralPatternMatch[];
   passesThreshold: boolean;      // salience >= config.salience_threshold
+  /**
+   * Why this chunk was gated before scoring, when it was. Absent means it was scored
+   * normally — this is never set for an ordinary low-salience result.
+   *
+   * MARK, DON'T SILENTLY DROP (s8qe / hjt9). The content floor already returns a
+   * zeroed result, which is the right shape, but it says nothing about WHY. A chunk
+   * refused for being our own prompt text needs to be distinguishable from one that
+   * was merely dull, or the next person measuring "how much did we skip" cannot tell
+   * a guard working from a guard misfiring.
+   */
+  suppressedReason?: "content-floor" | "self-prompt";
 }
 
 // ── Stage 2: Deep Analysis ────────────────────────────────────────────────────

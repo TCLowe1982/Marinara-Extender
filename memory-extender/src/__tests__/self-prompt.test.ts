@@ -103,4 +103,47 @@ describe("classifier gate", () => {
     ));
     expect(r.suppressedReason).toBeUndefined();
   });
+
+  // THE REGRESSION THAT MATTERS, and it is a bug this gate shipped with.
+  //
+  // The first version suppressed on ANY matching line. That killed 2,242 characters
+  // of someone working a problem out loud — "Read-only. Here's the smell, ranked, and
+  // the worst one is mine from today..." — because it quoted one schema line while
+  // making its point. hjt9 had already ruled on exactly this shape: a chunk-level
+  // route misfiles everything wrapped around the thing it detected.
+  //
+  // A chunk that QUOTES the prompt is shop talk and a real memory. A chunk that IS
+  // the prompt is not. Coverage is what tells them apart.
+  it("keeps shop talk that quotes the prompt while making a point", () => {
+    const shopTalk =
+      "ok here is the smell ranked and the worst one is mine from today. i told an 8b " +
+      "model to do something it has no channel for. my prompt says the chunk has no beat, " +
+      "say so rather than reaching for a remembered phrase, but the schema " +
+      '{"motivation":"...","relational_dynamics":"...","outcome":"..."} requires motivation ' +
+      "and the parser rejects any object without it. there is no way to say so, so the " +
+      "instruction is advisory and does no work. that is my fault and i shipped it before " +
+      "showing you.";
+    const r = classifyChunk(chunk(shopTalk));
+    expect(r.suppressedReason).toBeUndefined();
+  });
+
+  it("still suppresses a whole prompt, which is what coverage is for", () => {
+    const r = classifyChunk(chunk(buildSystemPrompt("dysregulation", ["dissociation"])));
+    expect(r.suppressedReason).toBe("self-prompt");
+  });
+
+  // docs/PROMPTS.md is generated FROM the prompts and exists to be pasted for review,
+  // so a paste of it is self-ingestion too. Its per-section prose is mostly catalog
+  // furniture rather than prompt text, which is why those template lines are
+  // registered as signatures — without them a section scores like conversation.
+  it("suppresses a PROMPTS.md section, not just the raw prompt", () => {
+    const section =
+      "## Tier 2 analyzer — shame\n\n" +
+      "**Source:** `src/sentiment/analyzer.ts — buildSystemPrompt()`  \n" +
+      "**When:** Fires per salient chunk whose primary emotion is shame. " +
+      "Local model first, external API on failure.\n\n" +
+      buildSystemPrompt("shame", []);
+    const r = classifyChunk(chunk(section));
+    expect(r.suppressedReason).toBe("self-prompt");
+  });
 });

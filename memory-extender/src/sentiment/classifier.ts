@@ -15,7 +15,7 @@
 //   - structural pattern detection (format-based signals keyword lists miss)
 
 import type { Chunk, ClassificationResult, StructuralPatternMatch } from "./types.js";
-import { detectSelfPrompt } from "./self-prompt.js";
+import { detectSelfPrompt, SELF_PROMPT_COVERAGE } from "./self-prompt.js";
 import type { Emotion } from "./types.js";
 import { loadSentimentConfig, loadEmotionalKeywords } from "./config.js";
 
@@ -123,8 +123,13 @@ export function classifyChunk(
   // to the prompt-rewrite session, ZERO hits on the other 23,309. The false-positive
   // cost here is a real memory that is never recorded — worse than the bug — so the
   // matcher demands a whole normalised line of our own prompt, not a phrase.
+  // GATED ON COVERAGE, NOT ON A HIT. The first version suppressed on a single
+  // matching line, which killed 2,242 characters of someone thinking out loud
+  // because it quoted one schema line — hjt9's "a chunk-level route would misfile
+  // all of it", reproduced exactly. A chunk that QUOTES the prompt is shop talk and
+  // a real memory; a chunk that IS the prompt is not.
   const selfPrompt = detectSelfPrompt(chunk.text);
-  if (selfPrompt) {
+  if (selfPrompt && selfPrompt.coverage >= SELF_PROMPT_COVERAGE) {
     return {
       chunk,
       scores: {},

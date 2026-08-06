@@ -76,6 +76,26 @@ Three things worth carrying:
 
 `SHORT+in-domain` returned *"admits she's afraid the memory loss means she was never real"* three times verbatim — the original disease, reproduced live under controlled conditions.
 
+### Three guards shipped alongside the verdict
+
+- **The decline path.** `{"no_beat": true}` is now a legal reply (`parseAnalysisJson`);
+  `reason` is tolerated, never required; the boolean is required (`"true"` and `1`
+  don't count). Before it, the prompt told the model to decline and the schema gave it
+  nowhere to say so — obeyable only by emitting malformed JSON. **`isDeclineResponse`
+  is exported and the bench counts `declined` apart from `no-beat`**, because "JSON
+  validity must not drop a point" is a sealed ship condition and a prompt that
+  declines correctly must not be scored as if it emitted garbage.
+- **The thread rule is conditional** on the user prompt carrying an `Active threads`
+  block. **The no-list variant keeps the MINTING half** — every chat starts at zero
+  threads, so minting is the only path by which a first thread is ever born, and
+  deleting the block outright would sterilise thread creation silently. Measured
+  saving is **23 tokens, not the ~120 estimated**, because the surviving label
+  teaching is most of the block.
+- **`bait-warrant.test.ts` enforces the arrest-warrant law.** It extracts every quoted
+  illustration from the *built* prompt across all ten emotions and fails on any the
+  echo ledger cannot arrest. Not a hand-maintained list — that rots. Thread-rule bait
+  is quarantined in `KNOWN_UNCOVERED`, which may only ever shrink (`n9bv`).
+
 ### Contamination routing (`hjt9`) — built, measured, **not wired**
 
 Two kinds, two instruments, and conflating them is the trap: `code-filter.ts` scores **code-shaped** content structurally (1.0% of the store, 8/8 hand-read genuine) but caught 3 echoes against 864 — it is *not* an echo fix. `paste-prior.ts` handles **prose-shaped** contamination by provenance, because "insists the boat was green" has no braces to find.
@@ -103,6 +123,41 @@ How the alternatives were ruled out, because two plausible theories were wrong f
 `PROMPT_EXAMPLE_ECHOES` deliberately **keeps retired examples**. The old wording is what the stored beats echo, so deleting a line silently re-opens the hole it closed.
 
 This also poisoned two other investigations before it was found: it manufactured apparent subject misrouting (when motivation collapses, the subject is assigned loosely, so beats scatter across ledgers — see `bwgh`) and it inflated the written-vs-played confound by an order of magnitude (`7pcm`, where aurora's 129 chat beats turned out to be 112 echoes + 17 real). **Measure the echo rate before trusting any beat-level statistic.**
+
+### ⚠ Fact provenance — the receipt is written by the model (`fqnl`)
+
+`classifyAmbient` asks the model for `{text: <original sentence>, fact: <claim>}` and
+the write path stores **`content: capContent(fact.text)`**. So an entry's body is the
+model's *claim about* its source, not a captured quotation. **A model that invents a
+fact invents its receipt with it** — fluent, internally consistent, and fictional.
+Never treat `content` on a fact entry as evidence without checking it against the
+Engine's chat log.
+
+`fact-support.ts` + `scripts/fact-support-scan.mjs` do that check. Four things learned
+the hard way, all of which cost a wrong answer first:
+
+- **A provenance failure is TRIAGE, not a verdict.** It proves the receipt didn't come
+  from the cited chat, which is equally consistent with a stale `sourceChatId`. Of 8
+  flagged entries, **7 were stale provenance with true content** — four Aurora facts
+  carrying the `professor_mari` chat she was migrated from. Retiring on the predicate
+  would have destroyed them. `scripts/retire-unsupported-facts.mjs` therefore takes a
+  hand-listed target set, never a predicate.
+- **Count the missing words; don't average them.** The Kraków receipt scores 0.83
+  corpus overlap because five of its six distinctive words are ordinary vocabulary
+  found in any long chat. The one word that matters drowns. `receiptMissingWords`
+  (count) convicts where `receiptCorpusOverlap` (ratio) acquits.
+- **Checking a fact against its own stored sentence does not work at this fidelity.**
+  The receipt is one sentence; the extractor saw the whole turn, so a fact
+  legitimately draws a name from a neighbour. Calibration went 2048 → 1697 → 1441 and
+  the residue was still mostly legitimate. The fix is storing more context at write
+  time, not a better matcher.
+- **The word existing is not the claim existing.** "neurolog" appears 11 times and
+  "Kraków" 31 — none as an assertion about Mari. Corpus-wide claim analysis is what
+  convicts; the provenance test only agrees.
+
+**The structural gap: 9109 live entries carry no `sourceChatId` at all** (5410 do).
+Silence there is not innocence, and no provenance guard is general until every write
+path records it.
 
 ### Tier 3 — Ambient facts (`api.ts:734`)
 `classifyAmbient` extracts durable identity/preference/history facts from throwaway lines. Same subject routing, with one difference: facts have **no holding-pool lane**, so an unknown subject is **demoted to chat scope** tagged `[about: subject]` rather than parked. Character-scope facts get `kind: "trait"` (the trait side of the dedup matrix vs. beats' `kind: "incident"`).

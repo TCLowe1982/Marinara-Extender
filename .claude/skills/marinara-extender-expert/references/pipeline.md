@@ -198,7 +198,9 @@ Separate from the per-turn path: `digest.ts`, via `/api/snapshot` / `/api/digest
 
 Three consequences a reader needs before touching this area:
 
-- **Every improvement to an interpretation moves ids.** `beatIdForChunk` hashes `speaker` and `text`, both readings of a chunk rather than facts about it. 5dqr (unmangled names), 4ghy (stopped minting phantoms) and hjt9 (Stage -1 ops routing reduces `content` *before* chunking) each renamed the beats they touched. **Measured: 731 of 8,841 stored beats (8.3%) already have an id that no longer matches their own content** — a re-import cannot recognise those and would write them again.
+- **Every improvement to an interpretation moves ids.** `beatIdForChunk` hashes `speaker` and `text`, both readings of a chunk rather than facts about it. **Measured: 171 stored beats carry a `beat-<hash>` id that no longer recomputes, and all 171 trace to a single afternoon's re-attribution** (`5dqr`, which unmangled `NarratorNarrator07` → `Narrator` and 19 other timestamp-mangled labels). `unmangle-speakers.mjs` declares it in its own header — the churn is not hypothetical, it is a documented cost someone accepted because the alternative was worse.
+
+  **Do not quote a larger number.** A further 560 beats also fail to recompute and have nothing to do with this: they carry random 10-char ids with no `beat-` prefix, written 2026-05-23 to 06-02 before deterministic ids existed, and travelled across `professor_mari`'s card migrations intact. They never derived from content. Counting the two together produces "8.3% of the store has drifted", which was claimed once in commit `0427ca5` and is wrong.
 - **Provenance flows: `DigestMessage.messageId/swipeIndex` → `DialogueTurn` (+ `ordinal`) → `Chunk` (+ `ordinalStart/End`).** `ordinal` is the position *within one message* and resets per message — that is the whole difference from `turnIndex`, and collapsing the two would inherit the flaw.
 
 ### What matching uses now (`r0kc`, shipped)

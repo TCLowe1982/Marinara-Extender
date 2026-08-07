@@ -25,7 +25,7 @@ Everything below is kicked off as `void (async () => …)()` **after** the block
 ## The fire-and-forget tiers (async, never block)
 
 ### Tier 2 — Sentiment / beats (`api.ts:623`, the richest path)
-1. Build chunks: the user message (unless it's a long-form story, below) and the AI message — each is **one chunk** (`turnStart/turnEnd` set from `turnNumber`).
+1. Build chunks: the user message (unless it's a long-form story, below) and the AI message — each is **one chunk**. `turnStart/turnEnd` come from `turnNumber`, **which the poller never sends** — see *Identity is provenance* below before you trust either field. Each chunk also carries its own `messageId` (2pbi); the two halves of a turn are two different engine messages and must not share one.
 2. `classifyChunks(chunks, "chat")` → keep only `passesThreshold` (the fast keyword/salience gate; nothing passes → return early, no LLM spend).
 3. `buildSubjectRoster` + `listActiveThreads` for context.
 4. `analyzeChunks(passing, …)` → per beat: **emotion, motivation, relational dynamics, outcome, subtext, subject, thread label**.
@@ -186,9 +186,27 @@ Separate from the per-turn path: `digest.ts`, via `/api/snapshot` / `/api/digest
 
 - **Stage 0 — chunk** (`chunkMessages`): break messages on dialogue/narrator boundaries. POV relabel turns first-person "Narrator" into a named character.
 - **Stage 1 — classify** (`classifyChunks`): fast keyword/salience filter → `passing`. For **chat** imports `analyzeAll` is true (the whole scene is one speaker label, so it can only be split by analyzed *subject*, not speaker); **story** imports keep the speaker pre-filter. **Three gates run before scoring**, each setting `suppressedReason` so a guard working and a guard misfiring are never indistinguishable — see *Stage-1 gates* below.
-- **Stages 2+3 — analyze & encode, one chunk at a time** (`pipeline.ts:167`): each chunk → `analyzeChunk` (with its true before/after neighbors + roster) → subject-route → `encodeBeat` + companion entry. **Persisted incrementally** — the on-disk beat store *is* the ledger: a cancel/crash keeps every completed beat, and a re-run resumes via deterministic `beatIdForChunk` (skipping done chunks while still ensuring their companion entry exists). `forceReanalyze` bypasses the resume skip when a re-import's purpose is re-routing subjects.
+- **Stages 2+3 — analyze & encode, one chunk at a time** (`pipeline.ts:167`): each chunk → `analyzeChunk` (with its true before/after neighbors + roster) → subject-route → `encodeBeat` + companion entry. **Persisted incrementally** — the on-disk beat store *is* the ledger: a cancel/crash keeps every completed beat, and a re-run resumes via deterministic `beatIdForChunk` (skipping done chunks while still ensuring their companion entry exists) — **but that determinism is over the chunk's *interpretation*, not its provenance; see *Identity is provenance* above before relying on it.** `forceReanalyze` bypasses the resume skip when a re-import's purpose is re-routing subjects.
 - **Narrative-position boost** (`pipeline.ts:60`, `×1.3`): the final 20% of a story carries climax/resolution weight, so its beats' salience is boosted.
 - **Durable-fact pass** (`ingestSceneFacts`, 1dn): runs over the **full** chunk set, not just salient ones — identity/lore facts live *below* the beat salience threshold, so they'd never become beats; captured separately. Guarded so a fact-pass failure can't fail an import that already saved beats.
+
+## ⚠ Identity is provenance — `turnStart` is not a position in the chat (`r0kc`/`2pbi`)
+
+**`turnIndex` counts across the array the caller passed in, not across the chat.** `parseTurns` starts at 0 every invocation, and the live path invokes the pipeline once per turn. The poller cannot do better — it reads a trailing window, not an absolute position — so `turnNumber` defaults to 0 and every live turn in every chat stamps `turnStart` −1 for the user line and 0 for the reply.
+
+**Measured over all 8,841 stored beats:** one chat holds **25 distinct beats on `turnStart` 0** and 11 on −1; another holds 22 and 7. Any key of the form `chatId + turnStart + turnEnd` merges them.
+
+Three consequences a reader needs before touching this area:
+
+- **`beatIdForChunk` hashes `speaker` and `text`, and `text` is currently load-bearing identity.** It is the only field keeping live-path beats apart. Removing it in favour of "provenance" without first supplying real provenance is a silent-overwrite bug, not a cleanup — which is why `r0kc` is blocked on `2pbi` rather than being a one-line change.
+- **Every improvement to an interpretation moves ids.** 5dqr (unmangled names), 4ghy (stopped minting phantoms) and hjt9 (Stage -1 ops routing reduces `content` *before* chunking) each changed what a re-import would hash. hjt9 shipped before anyone noticed; that disclosure lives in `r0kc`.
+- **Provenance now flows: `DigestMessage.messageId/swipeIndex` → `DialogueTurn` (+ `ordinal`) → `Chunk` (+ `ordinalStart/End`).** Nothing reads it yet. `ordinal` is the position *within one message* and resets per message — that is the whole difference from `turnIndex`, and collapsing the two would inherit the flaw.
+
+**The pair stays a pair.** A re-roll keeps the message id and moves only the swipe index, so an id alone cannot separate "the same turn read twice" from "the user threw that reply away". The entry layer settled this first (`06pq`/`s2lw`, `IndexEntry.sourceMessageId` + `sourceSwipeIndex`); the beat layer mirrors those names deliberately rather than inventing a second vocabulary for one idea.
+
+**A turn is TWO messages.** `/api/process-turn` historically knew only the assistant's id and stamped it on both halves — so a turn's user line and its reply counted as one moment for dedup, and a re-roll retired the user's entry although the user retracted nothing. `DetectedTurn.precedingUserMessageId` carries the other one; `poller.precedingUserMessageFor` finds the row that `precedingUserTextFor` used to read and discard.
+
+**Still unprovenanced, by construction:** the story importer (no chat, no messages) and the long-form user-story path (a synthetic one-message array). ~25% of stored beats have no `sourceChatId` at all. Tagging the long-form path is *not* inert — `removeEntriesBySourceChat` purges by that field on re-import, and the import path chunks one long message differently, so tagging it would make a re-import delete memories it will not reproduce.
 
 ## Stage-1 gates (`classifier.ts`) — what never reaches the analyzer
 

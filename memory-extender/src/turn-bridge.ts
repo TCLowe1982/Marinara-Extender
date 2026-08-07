@@ -136,6 +136,10 @@ export async function handleDetectedTurn(turn: DetectedTurn): Promise<BridgeResu
       // re-roll distinguishable from a re-read; see storage.ts.
       sourceMessageId: messageIdOf(turn.message),
       sourceSwipeIndex: swipeIndexOf(turn.message),
+      // 2pbi: the OTHER half of the turn is a different message. Without its own
+      // id the user chunk inherits the reply's, and both halves of one turn end
+      // up claiming the same moment.
+      userSourceMessageId: turn.precedingUserMessageId,
       regenerated: turn.regenerated,
     });
   } catch (e) {

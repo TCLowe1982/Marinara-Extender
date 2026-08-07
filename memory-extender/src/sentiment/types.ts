@@ -35,6 +35,23 @@ export interface DialogueTurn {
   speaker: string;     // "user" | character name | "Narrator"
   text: string;
   turnIndex: number;   // position in the original message list
+  /**
+   * Provenance carried down from the source message (2pbi). See DigestMessage
+   * for why the pair exists and why it must stay a pair.
+   *
+   * `ordinal` is the turn's position WITHIN its own message, counted from 0 and
+   * reset per message — unlike turnIndex, which counts across the whole array
+   * that happened to be passed in. That difference is the entire point: a
+   * message id plus an ordinal is stable no matter how the caller sliced the
+   * chat, and turnIndex is not.
+   *
+   * All three are optional and absent means UNKNOWN, never zero. An ordinal of 0
+   * with no message to count within is exactly the false certainty this ticket
+   * exists to remove.
+   */
+  messageId?: string;
+  swipeIndex?: number;
+  ordinal?: number;
 }
 
 export interface Chunk {
@@ -42,6 +59,24 @@ export interface Chunk {
   text: string;
   turnStart: number;   // first turn index merged into this chunk
   turnEnd: number;     // last turn index merged into this chunk
+  /**
+   * Where this chunk STARTS, in terms that survive re-slicing (2pbi).
+   *
+   * Taken from the chunk's FIRST turn. A chunk may span messages — consecutive
+   * same-speaker turns merge regardless of which message they came from, and
+   * that behaviour is deliberately unchanged here, because tightening it would
+   * re-chunk every import and move ids on the very path this exists to
+   * stabilise. So these name the chunk's starting point, not its extent, and
+   * that is enough: no two chunks of one import start at the same
+   * (messageId, ordinal).
+   *
+   * Absent on every path that has no message ids to give — the story importer,
+   * and any client that has not been updated to send them.
+   */
+  messageId?: string;
+  swipeIndex?: number;
+  ordinalStart?: number;
+  ordinalEnd?: number;
 }
 
 // ── Stage 1: Classification ───────────────────────────────────────────────────

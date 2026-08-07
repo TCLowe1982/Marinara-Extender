@@ -3288,6 +3288,15 @@ async function fetchChatMessages(chatId) {
           const name = nameById.get(String(m.characterId ?? d.characterId ?? ""));
           if (name) msg.speaker = name;
         }
+        // 2pbi: WHICH MESSAGE, and which swipe of it. The sidecar can otherwise
+        // only locate a chunk by its position in whatever array we happened to
+        // send, which is not a property of the chat — re-slice the import and
+        // every position moves. These two fields are the only stable handle on a
+        // moment, and the engine has had them on this endpoint all along.
+        const messageId = m.id ?? d.id;
+        if (messageId) msg.messageId = String(messageId);
+        const swipe = m.activeSwipeIndex ?? d.activeSwipeIndex;
+        if (swipe !== undefined && swipe !== null && !Number.isNaN(Number(swipe))) msg.swipeIndex = Number(swipe);
         return msg;
       })
       .filter(Boolean)

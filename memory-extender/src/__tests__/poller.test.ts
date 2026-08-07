@@ -425,6 +425,12 @@ describe("handleTurnNotification — push detection over stubbed engine", () => 
     expect(turns[0].regenerated).toBe(false);
     // Both halves of the turn reach ingestion, not just the reply.
     expect(turns[0].precedingUserText).toBe("text-u2");
+    // 2pbi: and the user half brings its OWN message id. It was always in the
+    // tail and always discarded, so the user's line was stamped with the reply's
+    // id — which made the two halves one moment for dedup, and let a re-roll
+    // retire an entry the user never retracted.
+    expect(turns[0].precedingUserMessageId).toBe("u2");
+    expect(turns[0].precedingUserMessageId).not.toBe(turns[0].message.id);
   });
 
   it("is a no-op on a repeated notification for the same message and swipe", async () => {

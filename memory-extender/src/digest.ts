@@ -29,6 +29,24 @@ export interface DigestMessage {
   // message with the character that actually sent it, not the primary. Inline
   // "Name:" prefixes within content still override per line.
   speaker?: string;
+  /**
+   * WHICH ENGINE MESSAGE this is, and WHICH SWIPE of it (2pbi).
+   *
+   * The same pair the entry layer already uses (storage.ts IndexEntry) and for
+   * the same reason, one layer down: turn indices are local to the array handed
+   * to the pipeline, so on the live path they restart every turn. Measured — one
+   * chat holds 25 distinct beats on turnStart 0 and 11 on turnStart -1, because
+   * the poller reads a 10-message tail and has no absolute position to send.
+   *
+   * THE PAIR STAYS A PAIR. A re-roll keeps the message id and moves only the
+   * swipe index, so the id alone cannot separate "the same turn read twice" from
+   * "the user threw that reply away and took another".
+   *
+   * Absent means unknown, never "no message" — the import and story paths supply
+   * neither today.
+   */
+  messageId?: string;
+  swipeIndex?: number;
 }
 
 interface ExtractedEntry {

@@ -163,11 +163,19 @@ export function parseTurns(messages: DigestMessage[], characterName: string): Di
 
     let currentSpeaker = rawSpeaker;
     let buffer: string[] = [];
+    // 2pbi: position within THIS message, reset per message. turnIndex keeps its
+    // own meaning (position across the array the caller passed in) — the two are
+    // different numbers on purpose and neither replaces the other.
+    let ordinal = 0;
+    const provenance = {
+      ...(msg.messageId ? { messageId: msg.messageId } : {}),
+      ...(typeof msg.swipeIndex === "number" ? { swipeIndex: msg.swipeIndex } : {}),
+    };
 
     const flush = () => {
       const text = buffer.join(" ").trim();
       if (text) {
-        turns.push({ speaker: currentSpeaker, text, turnIndex: index++ });
+        turns.push({ speaker: currentSpeaker, text, turnIndex: index++, ordinal: ordinal++, ...provenance });
       }
       buffer = [];
     };
@@ -218,7 +226,7 @@ export function parseTurns(messages: DigestMessage[], characterName: string): Di
         flush();
         // "Narrator" (capital) is the single canonical label across the chunker
         // and story parser, so the pipeline's povCharacter relabel matches both.
-        turns.push({ speaker: "Narrator", text: line, turnIndex: index++ });
+        turns.push({ speaker: "Narrator", text: line, turnIndex: index++, ordinal: ordinal++, ...provenance });
       } else {
         buffer.push(line);
       }
@@ -253,6 +261,28 @@ export function cosine(a: number[], b: number[]): number {
 
 // ── Merge turns into chunks ───────────────────────────────────────────────────
 
+/**
+ * Provenance for a chunk, taken from the turns it spans (2pbi).
+ *
+ * FROM THE FIRST TURN, deliberately. A same-speaker run merges across message
+ * boundaries — two consecutive replies from one character become one chunk — so
+ * a chunk does not belong to a single message and cannot pretend to. What it
+ * does have is an unambiguous STARTING point, and no two chunks of one import
+ * start at the same (messageId, ordinal).
+ *
+ * Emitted only when the source actually carried an id. Writing `messageId:
+ * undefined` into every chunk would make "we don't know" indistinguishable from
+ * "there is no message", which is the distinction the whole ticket rests on.
+ */
+function chunkProvenance(first: DialogueTurn, last: DialogueTurn) {
+  return {
+    ...(first.messageId ? { messageId: first.messageId } : {}),
+    ...(typeof first.swipeIndex === "number" ? { swipeIndex: first.swipeIndex } : {}),
+    ...(typeof first.ordinal === "number" ? { ordinalStart: first.ordinal } : {}),
+    ...(typeof last.ordinal === "number" ? { ordinalEnd: last.ordinal } : {}),
+  };
+}
+
 function mergeByEmbedding(
   turns: DialogueTurn[],
   embeddings: number[][],
@@ -273,6 +303,7 @@ function mergeByEmbedding(
       text: groupTexts.join(" "),
       turnStart: turns[groupStart]!.turnIndex,
       turnEnd: turns[endIndex]!.turnIndex,
+      ...chunkProvenance(turns[groupStart]!, turns[endIndex]!),
     });
   };
 
@@ -317,6 +348,7 @@ export function mergeByTurnOnly(turns: DialogueTurn[], maxTurns = 6): Chunk[] {
       text: groupTexts.join(" "),
       turnStart: turns[groupStart]!.turnIndex,
       turnEnd: turns[endIndex]!.turnIndex,
+      ...chunkProvenance(turns[groupStart]!, turns[endIndex]!),
     });
   };
 

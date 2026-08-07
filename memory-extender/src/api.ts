@@ -525,9 +525,13 @@ export function registerApiRoutes(app: FastifyInstance): void {
   // Body: { characterId, chatId, turnNumber, messageText }
 
   app.post<{
-    Body: { characterId: string; characterName?: string; participantIds?: string[]; personaName?: string; sceneTitle?: string; chatId: string; turnNumber?: number; messageText?: string; userMessageText?: string; sourceMessageId?: string; sourceSwipeIndex?: number; regenerated?: boolean };
+    Body: { characterId: string; characterName?: string; participantIds?: string[]; personaName?: string; sceneTitle?: string; chatId: string; turnNumber?: number; messageText?: string; userMessageText?: string; sourceMessageId?: string; sourceSwipeIndex?: number; userSourceMessageId?: string; regenerated?: boolean };
   }>("/api/process-turn", async (req, reply) => {
-    const { characterId, characterName, participantIds, personaName, sceneTitle, chatId, turnNumber = 0, messageText = "", userMessageText = "", sourceMessageId, sourceSwipeIndex, regenerated = false } = req.body ?? {};
+    // userSourceMessageId (2pbi): a turn is TWO engine messages and this endpoint
+    // only ever knew one of them. sourceMessageId is the ASSISTANT reply; the user
+    // half needs its own or the two are indistinguishable. Optional — older
+    // clients and the manual capture path send neither.
+    const { characterId, characterName, participantIds, personaName, sceneTitle, chatId, turnNumber = 0, messageText = "", userMessageText = "", sourceMessageId, sourceSwipeIndex, userSourceMessageId, regenerated = false } = req.body ?? {};
     if (!characterId || !chatId) {
       return reply.code(400).send({ error: "characterId and chatId are required" });
     }
@@ -687,8 +691,22 @@ export function registerApiRoutes(app: FastifyInstance): void {
         try {
           const chunks: Chunk[] = [];
           const charName = characterName ?? identityKey;
-          if (userMessageText && !longUserStory) chunks.push({ speaker: "user", text: userMessageText, turnStart: turnNumber - 1, turnEnd: turnNumber - 1 });
-          if (messageText)     chunks.push({ speaker: charName,  text: messageText,     turnStart: turnNumber,     turnEnd: turnNumber });
+          // 2pbi: turnStart is NOT provenance on this path. The poller sends no
+          // turnNumber (it reads a 10-message tail, not an absolute position), so
+          // it defaults to 0 and every live turn in every chat stamps -1 and 0 —
+          // measured, one chat holds 25 distinct beats on turnStart 0. The message
+          // id is the only thing here that identifies a moment, and the two halves
+          // of the turn are two different messages, so they carry different ids.
+          // One chunk per message on this path, so the ordinal is 0 either way.
+          // The id is what may be missing, and absent means unknown.
+          const userProv = { ordinalStart: 0, ordinalEnd: 0, ...(userSourceMessageId ? { messageId: userSourceMessageId } : {}) };
+          const replyProv = {
+            ordinalStart: 0, ordinalEnd: 0,
+            ...(sourceMessageId ? { messageId: sourceMessageId } : {}),
+            ...(typeof sourceSwipeIndex === "number" ? { swipeIndex: sourceSwipeIndex } : {}),
+          };
+          if (userMessageText && !longUserStory) chunks.push({ speaker: "user", text: userMessageText, turnStart: turnNumber - 1, turnEnd: turnNumber - 1, ...userProv });
+          if (messageText)     chunks.push({ speaker: charName,  text: messageText,     turnStart: turnNumber,     turnEnd: turnNumber, ...replyProv });
 
           const classified = classifyChunks(chunks, "chat");
           const passing = classified.filter(r => r.passesThreshold);
@@ -785,13 +803,24 @@ export function registerApiRoutes(app: FastifyInstance): void {
               ...(analysis.subtext ? [`Subtext: ${analysis.subtext}`] : []),
             ].join("\n");
 
+            // 06pq: the real same-moment key on the live path — turnStart is 0 for
+            // every polled turn, so it cannot separate two moments.
+            //
+            // 2pbi — TAKEN FROM THE CHUNK, not from the request. Both halves of a
+            // turn used to be stamped with the ASSISTANT's id, and that had two
+            // consequences: the halves counted as one moment for dedup, and a
+            // re-roll retired the USER's entry too, though the user retracted
+            // nothing. The chunk now knows which message it came from. Only the
+            // assistant half has swipes, so an absent swipe index on a chunk that
+            // does carry a message id means "user half", not "unknown".
+            const momentMessageId = result.chunk.messageId ?? sourceMessageId;
+            const momentSwipeIndex = result.chunk.messageId ? result.chunk.swipeIndex : sourceSwipeIndex;
+
             const entry = await createEntryIfUnique("character", targetKey, {
               lane: "character_topics", summary, content: capContent(rawContent), timeContext: timeCtx, kind: "incident",
               sourceChatId: chatId, turnStart: result.chunk.turnStart,
-              // 06pq: the real same-moment key on the live path. turnStart above
-              // is 0 for every polled turn, so it cannot separate two moments.
-              ...(sourceMessageId ? { sourceMessageId } : {}),
-              ...(typeof sourceSwipeIndex === "number" ? { sourceSwipeIndex } : {}),
+              ...(momentMessageId ? { sourceMessageId: momentMessageId } : {}),
+              ...(typeof momentSwipeIndex === "number" ? { sourceSwipeIndex: momentSwipeIndex } : {}),
               ...(threadId ? { threadId } : {}),
             });
             if (entry) {
@@ -869,7 +898,17 @@ export function registerApiRoutes(app: FastifyInstance): void {
       void (async () => {
         try {
           const r = await runSentimentPipeline(
-            [{ role: "user", content: userMessageText }],
+            // 2pbi: this path passed neither a chat nor a message, so every beat
+            // it has ever written is unidentifiable by provenance — one synthetic
+            // message means turnStart 0 for all of them, forever. The message id
+            // is in scope here and was simply never forwarded.
+            //
+            // sourceChatId is DELIBERATELY still absent. Tagging these would be
+            // more truthful but it is not inert: removeEntriesBySourceChat purges
+            // by that field on re-import, and the import path chunks one long
+            // message differently, so tagging them makes a re-import delete
+            // memories it will not reproduce. Separate decision, separate ticket.
+            [{ role: "user", content: userMessageText, ...(userSourceMessageId ? { messageId: userSourceMessageId } : {}) }],
             identityKey,
             characterName ?? identityKey,
             { sourceType: "chat" },

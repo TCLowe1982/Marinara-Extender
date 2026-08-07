@@ -59,8 +59,31 @@ export interface DetectedTurn {
    * only half the input.
    */
   precedingUserText: string;
+  /**
+   * The id of that user message (2pbi).
+   *
+   * Ingestion analyses BOTH halves of a turn and they are two different engine
+   * messages, but only the assistant's id was ever carried — so the user half
+   * was stamped with the reply's id, giving the two halves identical
+   * provenance. That is the collision beat identity is being rebuilt to remove.
+   *
+   * The id was always there and always thrown away: precedingUserTextFor found
+   * the row and returned only its content.
+   */
+  precedingUserMessageId?: string;
   /** All participants of the chat — group scenes have several. */
   participantIds: string[];
+}
+
+/** The last user message before `index` in an ascending tail, if any. */
+export function precedingUserMessageFor(
+  messages: Record<string, unknown>[],
+  index: number,
+): Record<string, unknown> | undefined {
+  for (let i = index - 1; i >= 0; i--) {
+    if (str(messages[i], "role") === "user") return messages[i];
+  }
+  return undefined;
 }
 
 /** Text of the last user message before `index` in an ascending tail. */
@@ -68,10 +91,8 @@ export function precedingUserTextFor(
   messages: Record<string, unknown>[],
   index: number,
 ): string {
-  for (let i = index - 1; i >= 0; i--) {
-    if (str(messages[i], "role") === "user") return str(messages[i], "content") ?? "";
-  }
-  return "";
+  const msg = precedingUserMessageFor(messages, index);
+  return msg ? (str(msg, "content") ?? "") : "";
 }
 
 /** Participant ids of a chat, tolerating the array / scalar / stringified forms. */
@@ -293,6 +314,7 @@ function buildTurns(
     // Locate the reply within the full tail so we can find the user line that
     // prompted it — ingestion needs both halves of the turn.
     const idx = tail.findIndex((m) => str(m, "id") === str(message, "id"));
+    const userMessage = idx >= 0 ? precedingUserMessageFor(tail, idx) : undefined;
     out.push({
       chatId,
       chatName: str(chat, "name") ?? chatId,
@@ -301,7 +323,8 @@ function buildTurns(
       characterId: str(message, "characterId") ?? getChatCharacterId(chat),
       message,
       regenerated,
-      precedingUserText: idx >= 0 ? precedingUserTextFor(tail, idx) : "",
+      precedingUserText: userMessage ? (str(userMessage, "content") ?? "") : "",
+      ...(userMessage && str(userMessage, "id") ? { precedingUserMessageId: str(userMessage, "id")! } : {}),
       participantIds: getChatParticipantIds(chat),
     });
   }

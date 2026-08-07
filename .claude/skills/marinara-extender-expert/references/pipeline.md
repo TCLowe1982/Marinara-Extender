@@ -219,6 +219,20 @@ Three consequences a reader needs before touching this area:
 
 **Still unprovenanced, by construction:** the story importer (no chat, no messages) and the long-form user-story path (a synthetic one-message array). ~25% of stored beats have no `sourceChatId` at all. Tagging the long-form path is *not* inert — `removeEntriesBySourceChat` purges by that field on re-import, and the import path chunks one long message differently, so tagging it would make a re-import delete memories it will not reproduce.
 
+## ⚠ Retiring a beat does not take it out of recall (`pe4o`/`41uo`)
+
+**The loader never reads the beat store for general recall.** It ranks over the ENTRY index and excludes on `deletedAt` / `discardedAt` / `supersededBy` / `provenance === "unplayed"`. `retiredAt` is not on that list and cannot be — it lives on the *beat*, and the beat was never the recallable copy.
+
+So `retireBeats` alone removes a record from statistics and arc promotion and leaves the half that reaches the model exactly where it was. **Measured across all 541 retired beats: 24 of 24 pe4o retirements and 366 of 517 s8qe sub-floor retirements still had a live companion entry.** pe4o is now fixed; the 366 are `41uo`.
+
+**Retire both halves.** `retireEntries` (`storage.ts`, 0y2i) is the entry-side tier move: cold, full fidelity, out of recall, reason recorded, never listed as user-deleted.
+
+**THE JOIN NEEDS A VETO, and this is the part that bites.** A companion is found by matching `companionEntryFromBeat(beat).summary` against the index — and summaries are *not* unique, because the model copies prompt illustrations verbatim. `"[fear] admits she's afraid the memory loss means she was never real"` is byte-identical across dozens of live beats. On pe4o's first dry run the naive join would have retired **32 entries belonging to beats nobody was retiring**. The rule: retire a companion only when **no beat you are keeping** would produce that summary; report the rest and leave them. Machine text left in recall is recoverable, a real memory removed is not.
+
+Same shape as *count utterances, never hits* — one string, many records — except here it destroys instead of miscounting.
+
+**Latent sibling (`dekl`, 0 instances today):** recap footnotes call `readBeat` directly, which does no retirement check, so a retired beat cited as a footnote is re-rendered into the prompt.
+
 ## Stage-1 gates (`classifier.ts`) — what never reaches the analyzer
 
 Three gates run before scoring. Each sets `suppressedReason` on the result, because a chunk refused for being machine text must be distinguishable from one that was merely dull — otherwise nobody measuring "how much are we skipping" can tell a guard working from a guard misfiring.

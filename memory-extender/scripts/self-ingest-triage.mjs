@@ -86,6 +86,17 @@ const SIGNATURES = [...ownPromptSignatures(), ...HISTORICAL]
   .map(norm)
   .filter((s) => s.length >= MIN_SIG);
 
+// --live  restrict to records that are still live (retired ones need no ruling)
+// --full  print the whole source text with the matched prompt spans marked, plus
+//         the analysis the pipeline hung on it
+//
+// A COVERAGE PERCENTAGE CANNOT BE TRIAGED. The MIXED bucket exists precisely
+// because the ratio does not say what the OTHER half of the chunk is — and that
+// is the only question that decides whether a record is a real memory. Reading
+// "54%" and ruling on it is deciding without looking.
+const LIVE_ONLY = process.argv.includes("--live");
+const FULL = process.argv.includes("--full");
+
 /** Fraction of the chunk covered by prompt text, by characters, without double-count. */
 function coverage(text) {
   const hay = norm(text);
@@ -103,11 +114,29 @@ function coverage(text) {
   if (!spans.length) return { ratio: 0, hits: 0 };
   spans.sort((a, b) => a[0] - b[0]);
   let covered = 0, end = -1;
+  const merged = [];
   for (const [s, e] of spans) {
-    if (s > end) { covered += e - s; end = e; }
-    else if (e > end) { covered += e - end; end = e; }
+    if (s > end) { covered += e - s; merged.push([s, e]); end = e; }
+    else if (e > end) { covered += e - end; merged[merged.length - 1][1] = e; end = e; }
   }
-  return { ratio: covered / hay.length, hits: spans.length };
+  return { ratio: covered / hay.length, hits: spans.length, merged, hay };
+}
+
+/**
+ * The chunk with our own prompt text bracketed, so what is LEFT is readable.
+ *
+ * Marked on the normalised text, which is what the spans index into — the
+ * original's line breaks are already gone by the time a chunk exists anyway
+ * (the chunker joins turns with a space), so nothing is lost by showing it.
+ */
+function marked(text) {
+  const { merged = [], hay = "" } = coverage(text);
+  let out = "", at = 0;
+  for (const [s, e] of merged) {
+    out += hay.slice(at, s) + "«PROMPT: " + hay.slice(s, e) + "»";
+    at = e;
+  }
+  return out + hay.slice(at);
 }
 
 const files = [];
@@ -143,19 +172,43 @@ for (const p of files) {
     genus,
     emotion: doc.emotion ?? "",
     motivation: String(doc.motivation ?? "").slice(0, 90),
+    // --full only. Kept off the summary line so the default output stays a list.
+    src,
+    speaker: doc.speaker ?? "",
+    fullMotivation: String(doc.motivation ?? ""),
+    relational: String(doc.relationalDynamics ?? ""),
+    outcome: String(doc.outcome ?? ""),
+    sourceChatId: doc.sourceChatId ?? "",
+    threadId: doc.threadId ?? "",
   });
 }
 
 const order = { SCAFFOLDING: 0, MIXED: 1, "ABOUT-WORK": 2 };
 rows.sort((a, b) => order[a.genus] - order[b.genus] || b.ratio - a.ratio);
 
-console.log(`self-ingested records: ${rows.length}   (live ${rows.filter((r) => !r.retired).length}, retired ${rows.filter((r) => r.retired).length})\n`);
+const liveN = rows.filter((r) => !r.retired).length;
+console.log(`self-ingested records: ${rows.length}   (live ${liveN}, retired ${rows.length - liveN})\n`);
+const shown = LIVE_ONLY ? rows.filter((r) => !r.retired) : rows;
+if (LIVE_ONLY) console.log(`--live: showing the ${shown.length} that still need a ruling.\n`);
+
 for (const g of ["SCAFFOLDING", "MIXED", "ABOUT-WORK"]) {
-  const set = rows.filter((r) => r.genus === g);
+  const set = shown.filter((r) => r.genus === g);
   console.log(`── ${g}: ${set.length} ──`);
   for (const r of set) {
-    console.log(`  ${String(r.ratio).padStart(3)}% ${r.lane.padEnd(16)} ${r.created}  ${r.character.slice(0, 16).padEnd(16)} ${r.id}`);
-    if (r.motivation) console.log(`        motivation: ${JSON.stringify(r.motivation)}`);
+    const flag = r.retired ? " [RETIRED]" : "";
+    console.log(`  ${String(r.ratio).padStart(3)}% ${r.lane.padEnd(16)} ${r.created}  ${r.character.slice(0, 16).padEnd(16)} ${r.id}${flag}`);
+    if (!FULL) {
+      if (r.motivation) console.log(`        motivation: ${JSON.stringify(r.motivation)}`);
+      continue;
+    }
+    console.log(`        chat ${r.sourceChatId || "-"}   thread ${r.threadId || "-"}   speaker ${JSON.stringify(r.speaker)}   ${r.len} chars`);
+    console.log(`        TEXT (prompt spans bracketed):`);
+    for (const line of (marked(r.src).match(/.{1,96}(\s|$)/g) ?? [])) console.log(`          ${line.trim()}`);
+    console.log(`        the analysis hung on it:`);
+    console.log(`          motivation: ${r.fullMotivation}`);
+    if (r.relational) console.log(`          relational: ${r.relational}`);
+    if (r.outcome)    console.log(`          outcome:    ${r.outcome}`);
+    console.log();
   }
   console.log();
 }

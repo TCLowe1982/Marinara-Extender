@@ -11,7 +11,7 @@ import { chunkMessages } from "./chunker.js";
 import { classifyChunks } from "./classifier.js";
 import { recordOps, routeOps, type OpsRecord } from "./ops-lane.js";
 import { analyzeChunk } from "./analyzer.js";
-import { encodeBeat, beatIdForChunk, readBeatIndex, readBeat, companionEntryFromBeat } from "./encoder.js";
+import { encodeBeat, beatIdForChunk, provenanceKeyForChunk, readBeatIndex, readBeat, companionEntryFromBeat } from "./encoder.js";
 import { createEntryIfUnique } from "../dedup.js";
 import { Progress, progressEnabled } from "../progress.js";
 import { buildSubjectRoster, resolveNameToKey, matchesSessionName } from "../identity.js";
@@ -204,12 +204,36 @@ export async function runSentimentPipeline(
   console.info(`[ME:pipeline] matching against: "${characterName}" — ${filtered.length}/${passing.length} chunks kept`);
 
   // Resume support: beats already on disk (from a prior interrupted run) are
-  // skipped. Beat ids are deterministic per chunk, so a re-run of the same
-  // import continues where it stopped instead of re-analyzing everything.
+  // skipped, so a re-run continues where it stopped instead of re-analyzing
+  // everything.
   // (Beats subject-routed to a DIFFERENT character are not in this bucket's
   // index, so a re-run re-analyzes those chunks — idempotent on disk, just
   // re-spends the analyzer call.)
-  const existingBeatIds = new Set((await readBeatIndex(characterId))?.entries.map((e) => e.id) ?? []);
+  //
+  // MATCHED ON PROVENANCE FIRST (r0kc). beatIdForChunk hashes speaker and text,
+  // which are readings of the chunk rather than facts about it — so improving
+  // attribution (5dqr, 4ghy) or filtering (hjt9) renamed every affected beat and
+  // the next import wrote it again under the new name. The duplicates then read
+  // as independent corroborations of a single utterance, which is the failure
+  // "count utterances, never hits" exists to prevent.
+  //
+  // The id fallback is not legacy debt to pay off later: pre-2pbi beats recorded
+  // no message id and there is nothing to backfill one from, so it is their
+  // permanent identity and stays here for good.
+  const beatIndex = await readBeatIndex(characterId);
+  const existingBeatIds = new Set(beatIndex?.entries.map((e) => e.id) ?? []);
+  const idByProvenance = new Map<string, string>();
+  for (const e of beatIndex?.entries ?? []) {
+    if (e.provenanceKey) idByProvenance.set(e.provenanceKey, e.id);
+  }
+  /** The stored beat this chunk already produced, by provenance or by id. */
+  const storedIdFor = (chunk: ClassificationResult["chunk"]): string | undefined => {
+    const key = provenanceKeyForChunk(chunk);
+    const byProvenance = key ? idByProvenance.get(key) : undefined;
+    if (byProvenance) return byProvenance;
+    const legacy = beatIdForChunk(chunk);
+    return existingBeatIds.has(legacy) ? legacy : undefined;
+  };
 
   // Known-identity roster for per-beat subject attribution — global, because
   // imports routinely involve the whole cast.
@@ -220,7 +244,7 @@ export async function runSentimentPipeline(
   const totalTurns = chunks.length > 0 ? chunks[chunks.length - 1].turnEnd + 1 : 0;
   const boostThresholdTurn = Math.floor(totalTurns * 0.8);
 
-  const alreadyHave = filtered.filter((c) => existingBeatIds.has(beatIdForChunk(c.chunk))).length;
+  const alreadyHave = filtered.filter((c) => storedIdFor(c.chunk)).length;
   report.stage(
     `parsing complete, analyzing sentiment — ${filtered.length} of ${chunks.length} chunks` +
     (alreadyHave ? ` (resuming — ${alreadyHave} already done)` : ""),
@@ -247,8 +271,8 @@ export async function runSentimentPipeline(
     // retrievable entry. Re-derive it from the stored beat (no re-analysis).
     // forceReanalyze (deliberate re-import) bypasses this: the skip would also
     // bypass subject routing and silently undo a redistribution.
-    const beatId = beatIdForChunk(result.chunk);
-    if (!options.forceReanalyze && existingBeatIds.has(beatId)) {
+    const beatId = storedIdFor(result.chunk);
+    if (!options.forceReanalyze && beatId) {
       skipped++;
       const existing = await readBeat(characterId, beatId);
       if (existing) {
@@ -318,7 +342,13 @@ export async function runSentimentPipeline(
       }
     }
 
-    const beat = await encodeBeat(targetKey, attributed, analysis, sourceType, options.sourceChatId);
+    // r0kc: a forced re-import re-analyses on purpose, but it must land ON the
+    // beat this chunk already produced rather than beside it. Only safe when the
+    // beat is staying in this bucket — `beatId` was looked up in THIS character's
+    // index, and a subject-routed beat is going to a ledger that index cannot
+    // speak for.
+    const reuseId = beatId && targetKey === characterId ? beatId : undefined;
+    const beat = await encodeBeat(targetKey, attributed, analysis, sourceType, options.sourceChatId, undefined, reuseId);
     beats.push(beat);
 
     // Also write a retrievable ledger entry. The loader builds the injected

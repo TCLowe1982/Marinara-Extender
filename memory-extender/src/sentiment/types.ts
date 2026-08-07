@@ -153,6 +153,23 @@ export interface BeatAnalysis {
 
 export interface EmotionalBeat {
   id: string;
+  /**
+   * WHERE THIS CAME FROM — `<messageId>:<swipe>:<ordinal>` (r0kc).
+   *
+   * `id` hashes speaker and text, both of which are readings of the chunk rather
+   * than facts about it, so every improvement to attribution or filtering
+   * renames the beat and a re-import writes it again. This field does not move
+   * when the reading changes, so it — not `id` — is what resume and dedup match
+   * on. `id` stays the filename: renaming stored beats would orphan the
+   * companion ledger entries that point at them.
+   *
+   * Absent on every beat written before the message id reached the chunker
+   * (2pbi), and on the story importer, which has no messages to name. Those
+   * still match by id, and always will — there is nothing to backfill from.
+   *
+   * See encoder.ts provenanceKeyForChunk for what is deliberately NOT in it.
+   */
+  provenanceKey?: string;
   speaker: string;
   emotion: Emotion;              // primary emotion (highest weight)
   subpattern?: string;

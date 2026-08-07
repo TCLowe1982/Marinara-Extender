@@ -23,11 +23,87 @@ import type { AnalyzedBeat } from "./analyzer.js";
 // Deterministic beat id derived from the source chunk. Re-encoding the same
 // chunk yields the same id (idempotent overwrite), and it lets the pipeline skip
 // chunks whose beat already exists on disk — the basis for resumable imports.
+//
+// IT HASHES INTERPRETATIONS, WHICH IS THE BUG r0kc IS ABOUT. `speaker` and `text`
+// are both things this system keeps getting better at — 5dqr unmangled 171
+// names, 4ghy stopped minting phantoms, hjt9 reduces `text` before chunking —
+// and every one of those improvements changes the hash, so a re-import stops
+// recognising its own stored beats and writes them again. Duplicates then read
+// as independent corroborations of one utterance.
+//
+// It is NOT being changed, and not for compatibility: it is the only identity
+// pre-2pbi beats will ever have, since nothing recorded which message they came
+// from. It stays the filename. `provenanceKeyForChunk` below is what MATCHING
+// now prefers, and the id is demoted to a name.
 export function beatIdForChunk(chunk: Pick<Chunk, "speaker" | "text" | "turnStart" | "turnEnd">): string {
   const h = createHash("sha1")
     .update(`${chunk.turnStart}:${chunk.turnEnd}:${chunk.speaker}\n${chunk.text}`)
     .digest("hex");
   return `beat-${h.slice(0, 12)}`;
+}
+
+/**
+ * WHERE THIS BEAT CAME FROM — nothing that can be improved (r0kc).
+ *
+ * "An id must be derivable from things that cannot be improved" (Mari). Three
+ * facts qualify: which message, which swipe of it, and which turn within it.
+ * Everything else on a Chunk is a reading of the text rather than a fact about
+ * its origin, including `text` itself — hjt9's ops routing and pe4o's
+ * self-prompt gate both rewrite it, so filtering better would move ids exactly
+ * the way attributing better does. Same bug, one layer down.
+ *
+ * NOT HASHED, deliberately. This is a field, not a filename, and provenance you
+ * can read is provenance you can verify — `grep` it against a chat export and
+ * the answer is right there. Hashing would buy nothing but opacity.
+ *
+ * THE PAIR STAYS A PAIR: a re-roll keeps the message id and moves only the swipe
+ * index, so a key without it would call the kept reply and the discarded one the
+ * same moment. `-` means the source had no swipes (the user's half of a turn),
+ * which is a fact, not a gap.
+ *
+ * ordinalEnd is left OUT. Where a chunk starts is provenance; how far it runs is
+ * the chunker's current merge settings, i.e. an interpretation. No two chunks of
+ * one run start at the same (message, ordinal), so the extent buys no uniqueness
+ * and would only reintroduce the churn this exists to stop.
+ *
+ * Undefined whenever the source carried no message id: the story importer, and
+ * every beat written before 2pbi. Those keep matching on beatIdForChunk.
+ */
+export function provenanceKeyForChunk(
+  chunk: Pick<Chunk, "messageId" | "swipeIndex" | "ordinalStart">,
+): string | undefined {
+  if (!chunk.messageId) return undefined;
+  const swipe = typeof chunk.swipeIndex === "number" ? String(chunk.swipeIndex) : "-";
+  const ordinal = typeof chunk.ordinalStart === "number" ? String(chunk.ordinalStart) : "-";
+  return `${chunk.messageId}:${swipe}:${ordinal}`;
+}
+
+/**
+ * The filename for a beat: derived from provenance when there is any, from the
+ * legacy content hash when there is not.
+ *
+ * WHY THE FILENAME HAD TO MOVE TOO, though the plan was to leave it alone. The
+ * legacy hash covers turn range, speaker and text and nothing else — so two
+ * genuinely different moments that happen to READ the same collapse onto one
+ * name. Someone saying "I know." twice in a chat is one file. That went
+ * unnoticed while the id was also the match key, because resume skipped the
+ * second one and the loss looked like successful deduplication. Matching on
+ * provenance exposes it: both chunks are now correctly seen as distinct, get
+ * analysed separately, and then overwrite each other on disk.
+ *
+ * So provenance names the file when provenance exists. Hashed only to keep
+ * filenames a uniform safe shape — the readable key lives in the beat's
+ * `provenanceKey` field, which is where anyone verifying it will look.
+ *
+ * NOTHING STORED IS RENAMED. Every beat written before 2pbi has no message id,
+ * so it falls through to the same legacy hash it was written under, and a
+ * re-import still recognises it. New beats simply start out with an identity
+ * that later corrections cannot move.
+ */
+export function beatIdFor(chunk: Pick<Chunk, "speaker" | "text" | "turnStart" | "turnEnd" | "messageId" | "swipeIndex" | "ordinalStart">): string {
+  const key = provenanceKeyForChunk(chunk);
+  if (!key) return beatIdForChunk(chunk);
+  return `beat-${createHash("sha1").update(key).digest("hex").slice(0, 12)}`;
 }
 
 // Build the retrievable ledger entry (summary + content) for a beat. The loader
@@ -80,6 +156,11 @@ async function writeYaml(filePath: string, data: unknown): Promise<void> {
 
 export interface BeatIndexEntry {
   id: string;
+  /**
+   * Mirrored from the beat so resume can match on provenance without opening
+   * 8,000 files (r0kc) — same reason retiredAt is mirrored here.
+   */
+  provenanceKey?: string;
   emotion: Emotion;
   subpattern?: string;
   salience: number;
@@ -238,6 +319,7 @@ export async function writeBeat(
   await writeYaml(beatFilePath(characterId, beat.id), beat);
   await upsertBeatIndex(characterId, {
     id:           beat.id,
+    provenanceKey: beat.provenanceKey,
     emotion:      beat.emotion,
     subpattern:   beat.subpattern,
     salience:     beat.salience,
@@ -263,9 +345,16 @@ export async function encodeBeat(
   sourceType: "chat" | "story",
   sourceChatId?: string,
   threadId?: string,
+  // r0kc: write over the beat this chunk's PROVENANCE already produced, instead
+  // of minting a new name because the reading of it improved. The caller supplies
+  // it because the caller is the one holding the index; encodeBeat is called from
+  // the live path too, where there is nothing to look up.
+  reuseId?: string,
 ): Promise<EmotionalBeat> {
+  const provenanceKey = provenanceKeyForChunk(result.chunk);
   const beat: EmotionalBeat = {
-    id:                beatIdForChunk(result.chunk),
+    id:                reuseId ?? beatIdFor(result.chunk),
+    ...(provenanceKey ? { provenanceKey } : {}),
     speaker:           result.chunk.speaker,
     emotion:           result.primaryEmotion!,
     subpattern:        analysis.subpattern,

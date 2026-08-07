@@ -198,9 +198,18 @@ Separate from the per-turn path: `digest.ts`, via `/api/snapshot` / `/api/digest
 
 Three consequences a reader needs before touching this area:
 
-- **`beatIdForChunk` hashes `speaker` and `text`, and `text` is currently load-bearing identity.** It is the only field keeping live-path beats apart. Removing it in favour of "provenance" without first supplying real provenance is a silent-overwrite bug, not a cleanup — which is why `r0kc` is blocked on `2pbi` rather than being a one-line change.
-- **Every improvement to an interpretation moves ids.** 5dqr (unmangled names), 4ghy (stopped minting phantoms) and hjt9 (Stage -1 ops routing reduces `content` *before* chunking) each changed what a re-import would hash. hjt9 shipped before anyone noticed; that disclosure lives in `r0kc`.
-- **Provenance now flows: `DigestMessage.messageId/swipeIndex` → `DialogueTurn` (+ `ordinal`) → `Chunk` (+ `ordinalStart/End`).** Nothing reads it yet. `ordinal` is the position *within one message* and resets per message — that is the whole difference from `turnIndex`, and collapsing the two would inherit the flaw.
+- **Every improvement to an interpretation moves ids.** `beatIdForChunk` hashes `speaker` and `text`, both readings of a chunk rather than facts about it. 5dqr (unmangled names), 4ghy (stopped minting phantoms) and hjt9 (Stage -1 ops routing reduces `content` *before* chunking) each renamed the beats they touched. **Measured: 731 of 8,841 stored beats (8.3%) already have an id that no longer matches their own content** — a re-import cannot recognise those and would write them again.
+- **Provenance flows: `DigestMessage.messageId/swipeIndex` → `DialogueTurn` (+ `ordinal`) → `Chunk` (+ `ordinalStart/End`).** `ordinal` is the position *within one message* and resets per message — that is the whole difference from `turnIndex`, and collapsing the two would inherit the flaw.
+
+### What matching uses now (`r0kc`, shipped)
+
+`provenanceKeyForChunk` → `<messageId>:<swipe>:<ordinal>`, stored on the beat as `provenanceKey` and mirrored into the beat index. **Resume and dedup match on it first, falling back to `beatIdForChunk`.** That fallback is permanent, not debt: pre-2pbi beats and the story importer recorded no message id, and there is nothing to backfill one from.
+
+- **`-` for the swipe means "this source has no swipes"** (the user's half of a turn) — a fact, not a gap.
+- **`ordinalEnd` is deliberately out of the key.** Where a chunk starts is provenance; how far it runs is the chunker's merge settings.
+- **`beatIdFor` derives the FILENAME from provenance when there is any.** The plan was to leave filenames alone entirely, and it could not survive contact: the legacy hash gives one filename to two different moments that happen to read the same — someone saying "I know." twice in a chat. Resume hid that by skipping the second as a duplicate, so the loss looked like deduplication. Nothing stored is renamed; only new beats get provenance-derived names.
+- **`encodeBeat(..., reuseId)`** lets a forced re-import land *on* the beat a chunk already produced instead of beside it. The pipeline passes it only when the beat is staying in the same bucket — a subject-routed beat is going to a ledger this character's index cannot speak for.
+- **Still on the legacy key:** the holding pool (`addPending` keys records by `beatIdForChunk`). Switching it would risk double-stacking the records already in `holding-pool.yaml`, so it is a separate decision.
 
 **The pair stays a pair.** A re-roll keeps the message id and moves only the swipe index, so an id alone cannot separate "the same turn read twice" from "the user threw that reply away". The entry layer settled this first (`06pq`/`s2lw`, `IndexEntry.sourceMessageId` + `sourceSwipeIndex`); the beat layer mirrors those names deliberately rather than inventing a second vocabulary for one idea.
 

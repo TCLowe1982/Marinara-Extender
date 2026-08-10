@@ -60,6 +60,9 @@ const PAGE = String.raw`<!DOCTYPE html>
     display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .01em; }
   header .sub { color: var(--muted); font-size: 12px; }
+  header nav { margin-left: auto; display: flex; gap: 14px; }
+  header nav a { color: var(--accent); font-size: 12px; text-decoration: none; }
+  header nav a:hover { text-decoration: underline; }
   .wrap { display: grid; grid-template-columns: 260px 1fr; min-height: calc(100vh - 52px); }
   aside { border-right: 1px solid var(--edge); padding: 14px; overflow: auto; }
   main { padding: 18px 22px; overflow: auto; }
@@ -174,6 +177,7 @@ const PAGE = String.raw`<!DOCTYPE html>
 <header>
   <h1>Marinara Extender</h1>
   <span class="sub" id="hdr">loading…</span>
+  <nav><a href="/setup">setup</a><a href="/prompts">prompts</a></nav>
 </header>
 <div class="wrap">
   <aside>

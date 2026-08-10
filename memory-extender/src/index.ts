@@ -223,6 +223,11 @@ app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
   const apiKey = process.env.MARINARA_EXTENDER_API_KEY;
   console.log(`\nMarinara Extender memory server running on http://127.0.0.1:${PORT}`);
   console.log(`Setup page:   http://127.0.0.1:${PORT}/setup`);
+  // Interim access point (c2wd). The memory browser is served at / and /memory but
+  // nothing outside it links there, so it was reachable only by knowing the URL.
+  // Until hwlj's in-Engine surface lands, the banner IS the discovery path — and it
+  // stays the fallback afterwards, since it works with no package installed.
+  console.log(`Memories:     http://127.0.0.1:${PORT}/memory   (browse, edit, restore)`);
   console.log(`Data dir:     ${getDataDir()}`);
   console.log(`Local model:  ${localEnabled() ? `${localModel()} @ ${localUrl()}` : "disabled (external only)"}`);
   console.log(`External API: ${apiKey ? `${externalModel()} @ ${externalUpstream()}` : "no key — local only"}`);

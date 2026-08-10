@@ -551,6 +551,7 @@ if ($sidecarOk) {
         # Already onboarded: a quiet one-liner, no auto-open.
         Write-Host "  Extension: reinstall or refresh anytime from  $setupUrl" -ForegroundColor DarkGray
     }
+    Write-Host "  Memories:  browse and edit them at  $SIDECAR_URL/memory  (or press M below)" -ForegroundColor DarkGray
     Write-Host ""
 }
 
@@ -558,7 +559,7 @@ if ($sidecarOk) {
 
 $autoState = if (Test-Path $autostartFile) { "ON" } else { "off" }
 $logPath = Join-Path $sidecarDir "logs\sidecar.log"
-Write-Host "  Commands:  [R] Restart   [L] View log   [A] Auto-start ($autoState)" -ForegroundColor Cyan
+Write-Host "  Commands:  [M] Memories   [R] Restart   [L] View log   [A] Auto-start ($autoState)" -ForegroundColor Cyan
 Write-Host "             [Q] Quit - stops the Memory Extender too   [D] Detach - leave it running" -ForegroundColor Cyan
 Write-Host ""
 if ($firstRun) {
@@ -649,6 +650,16 @@ while ($true) {
             # down for the night.
             $script:LeaveSidecarRunning = $true
             break
+        } elseif ($cmd -eq 'm') {
+            # Interim access point (c2wd). The memory browser had no entry point
+            # anywhere - you had to know the URL. This console is already open
+            # whenever the sidecar is, so it is the cheapest reliable door, and it
+            # keeps working when no capability package is installed.
+            $memUrl = "$SIDECAR_URL/memory"
+            Write-Host "  Opening $memUrl ..." -ForegroundColor DarkGray
+            try { Start-Process $memUrl } catch {
+                Write-Host "  [!!] Could not open a browser. Go to $memUrl manually." -ForegroundColor Yellow
+            }
         } elseif ($cmd -eq 'r') {
             Restart-Sidecar
             $lastCheck = Get-Date; $portDown = 0; $healthDown = 0
@@ -676,7 +687,7 @@ while ($true) {
                 }
             }
         } else {
-            Write-Host "  Unknown command. [R] restart  [L] view log  [A] auto-start  [Q] quit (stops server)  [D] detach." -ForegroundColor DarkGray
+            Write-Host "  Unknown command. [M] memories  [R] restart  [L] view log  [A] auto-start  [Q] quit (stops server)  [D] detach." -ForegroundColor DarkGray
         }
         Write-Prompt
     }

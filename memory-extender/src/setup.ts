@@ -155,6 +155,12 @@ function buildSetupHtml(port: number): string {
       font-size:14px;font-weight:500;cursor:pointer;padding:9px 20px;
       text-decoration:none;display:inline-block;font-family:inherit}
     .btn-primary:hover{background:#ea6a00}
+    .browse{margin-top:24px;background:#1c1917;border:1px solid #3d3a36;border-radius:6px;
+      padding:14px 16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+      justify-content:space-between}
+    .browse strong{display:block;color:#f97316;font-size:14px;margin-bottom:3px}
+    .browse span{color:#9ca3af;font-size:12px;line-height:1.5}
+    .browse>div{flex:1;min-width:220px}
     .note{margin-top:24px;background:#0d1f12;border:1px solid #1a4228;
       border-radius:6px;padding:12px 14px;color:#86efac;font-size:13px}
     .note strong{color:#4ade80}
@@ -258,6 +264,19 @@ function buildSetupHtml(port: number): string {
       </div>
     </div>
 
+  </div>
+
+  <!-- Interim access point (c2wd). The memory browser is served at / and /memory and
+       nothing outside it linked there, so it was reachable only by typing the URL.
+       This is the fallback surface: it works with no package installed and survives
+       whatever hwlj's in-Engine UI turns into. -->
+  <div class="browse">
+    <div>
+      <strong>Your memories</strong>
+      <span>Browse, search, edit, delete and restore everything the Extender has stored
+        &#8212; with the reason each memory was recalled.</span>
+    </div>
+    <a class="btn-primary" href="/memory">Open memory browser</a>
   </div>
 
   <div class="note">

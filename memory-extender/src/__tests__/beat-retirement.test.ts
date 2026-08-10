@@ -18,8 +18,10 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { writeBeat, readBeat, readBeatIndex, readAllBeats, retireBeats } from "../sentiment/encoder.js";
+import { writeBeat, readBeat, readBeatIndex, readAllBeats, retireBeats, companionEntryFromBeat } from "../sentiment/encoder.js";
 import { recordStatsEvent, readStatsEvents } from "../stats-events.js";
+import { readIndex, readColdIndex } from "../storage.js";
+import { createEntryIfUnique } from "../dedup.js";
 import type { EmotionalBeat } from "../sentiment/types.js";
 
 let dir: string;
@@ -115,6 +117,87 @@ describe("retireBeats", () => {
     const marked = await retireBeats("mari", ["beat-nope"], REASON);
     expect(marked).toEqual([]);
     expect((await readBeat("mari", "beat-a"))!.retiredAt).toBeUndefined();
+  });
+});
+
+// The companion entry retires with the beat (41uo). The loader ranks over the
+// ENTRY index and excludes on deletedAt/discardedAt/supersededBy/unplayed —
+// retiredAt is not among them and cannot be, because it lives on the beat. So a
+// retirement that stops at the beat removes the record from statistics and arc
+// promotion and leaves the recallable copy in place. Every caller so far made
+// exactly that mistake (24/24 pe4o, 366/517 s8qe): the function must do it.
+describe("retireBeats — the companion entry", () => {
+  // Mirrors the import pipeline: write the beat, then its companion entry.
+  async function writePair(ch: string, b: EmotionalBeat) {
+    await writeBeat(ch, b);
+    const { summary, content } = companionEntryFromBeat(b);
+    const e = await createEntryIfUnique("character", ch, { lane: "character_topics", summary, content, kind: "incident" });
+    return e!.id;
+  }
+
+  it("retires the companion entry alongside the beat — out of the live index, into cold, saying why", async () => {
+    await writePair("mari", beat("beat-open", { text: "open", motivation: "invents feelings about the word open" }));
+    await writePair("mari", beat("beat-real", { text: "I love you,", motivation: "finally says it out loud" }));
+
+    await retireBeats("mari", ["beat-open"], REASON);
+
+    // The recallable half is gone from the live index…
+    const live = (await readIndex("character", "mari"))!.entries.filter((e) => !e.discardedAt);
+    expect(live.map((e) => e.summary)).toEqual([expect.stringContaining("finally says it")]);
+
+    // …and sits in cold at full fidelity with the reason, never listed as a user delete.
+    const cold = (await readColdIndex("character", "mari"))!.entries;
+    expect(cold).toHaveLength(1);
+    expect(cold[0]!.summary).toContain("word open");
+    expect(cold[0]!.retiredReason).toBe(REASON);
+    expect(cold[0]!.deletedAt).toBeUndefined();
+  });
+
+  it("VETOES the companion when a surviving beat produces the same summary — pifl echoes are byte-identical", async () => {
+    // Two beats, one shared formulaic motivation. The entry matched by summary
+    // cannot be attributed to the retired beat alone, so retiring beat-a must
+    // not take what may be the only recallable copy of beat-b's memory. NOTHING
+    // goes cold — the incident lane can hold several rows with this summary and
+    // the veto fires before the join ever reaches the index.
+    const shared = { motivation: "admits she's afraid the memory loss means she was never real" };
+    await writePair("mari", beat("beat-a", { ...shared, text: "chunk a" }));
+    await writePair("mari", beat("beat-b", { ...shared, text: "chunk b" }));
+
+    await retireBeats("mari", ["beat-a"], REASON);
+
+    const live = (await readIndex("character", "mari"))!.entries.filter((e) => !e.discardedAt);
+    expect(live.length).toBeGreaterThan(0);
+    for (const e of live) expect(e.summary).toContain("never real");
+    expect((await readColdIndex("character", "mari"))?.entries ?? []).toHaveLength(0);
+  });
+
+  it("retires the shared companion when BOTH beats behind it retire", async () => {
+    const shared = { motivation: "invents a motivation about the word open" };
+    await writePair("mari", beat("beat-a", { ...shared, text: "open" }));
+    await writePair("mari", beat("beat-b", { ...shared, text: "open" }));
+
+    await retireBeats("mari", ["beat-a", "beat-b"], REASON);
+
+    const live = (await readIndex("character", "mari"))!.entries.filter((e) => !e.discardedAt);
+    expect(live).toHaveLength(0);
+  });
+
+  it("honours { companions: false } for callers that handle entries themselves", async () => {
+    await writePair("mari", beat("beat-open", { text: "open" }));
+    await retireBeats("mari", ["beat-open"], REASON, { companions: false });
+
+    const live = (await readIndex("character", "mari"))!.entries.filter((e) => !e.discardedAt);
+    expect(live).toHaveLength(1);
+  });
+
+  it("touches nothing on the entry side when the summary matches no live entry", async () => {
+    // Rendering drift (r0kc): if companionEntryFromBeat now renders a different
+    // summary than the one the entry was written under, the join must miss —
+    // leaving the entry alone — rather than guess.
+    await writeBeat("mari", beat("beat-open", { text: "open" }));  // no companion written
+    const marked = await retireBeats("mari", ["beat-open"], REASON);
+    expect(marked).toEqual(["beat-open"]);
+    expect((await readColdIndex("character", "mari"))?.entries ?? []).toHaveLength(0);
   });
 });
 

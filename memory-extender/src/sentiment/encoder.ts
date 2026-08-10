@@ -15,7 +15,7 @@ import { readFile, access, rm } from "fs/promises";
 import { join } from "path";
 import { createHash } from "crypto";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
-import { getDataDir, assertSafeId, atomicWriteFile } from "../storage.js";
+import { getDataDir, assertSafeId, atomicWriteFile, readIndex, retireEntries } from "../storage.js";
 import type { Emotion } from "./types.js";
 import type { EmotionalBeat, ClassificationResult, BeatAnalysis, Chunk } from "./types.js";
 import type { AnalyzedBeat } from "./analyzer.js";
@@ -274,11 +274,32 @@ export async function readAllBeats(
  *
  * Returns the ids actually marked: already-retired beats are skipped rather than
  * re-stamped, so a re-run cannot rewrite history with a later date.
+ *
+ * THE COMPANION ENTRY RETIRES WITH THE BEAT (41uo). The loader never reads the
+ * beat store for recall — it ranks over the ENTRY index, and retiredAt is not
+ * among its exclusions because it cannot be: it lives on the beat. So a beat
+ * retirement that stops here removes the record from statistics and arc
+ * promotion and leaves the recallable copy in place. That is not a
+ * hypothetical: EVERY caller of this function forgot the companion (24 of 24
+ * pe4o, 366 of 517 s8qe), because "retire the beat" reads like it retires the
+ * memory and did not. The function now does what its name says.
+ *
+ * THE VETO RIDES ALONG, because the join is a summary match and summaries are
+ * NOT unique — the pifl illustration is byte-identical across dozens of live
+ * beats. A companion entry is retired ONLY when no beat that survives this
+ * retirement would produce the same summary; anything ambiguous is left alone
+ * and logged. Machine text left in recall is recoverable; a real memory
+ * removed is not. (On pe4o's first dry run the naive join would have retired
+ * 32 entries belonging to beats nobody was retiring.)
+ *
+ * Pass { companions: false } only when the caller handles entries itself with
+ * different reasons per entry — never because the companion "doesn't matter".
  */
 export async function retireBeats(
   characterId: string,
   beatIds: string[],
   reason: string,
+  opts: { companions?: boolean } = {},
 ): Promise<string[]> {
   const targets = new Set(beatIds);
   const marked: string[] = [];
@@ -303,7 +324,58 @@ export async function retireBeats(
     await writeYaml(beatIndexPath(characterId), index);
   });
 
+  if (marked.length > 0 && opts.companions !== false) {
+    await retireCompanionEntries(characterId, marked, reason);
+  }
+
   return marked;
+}
+
+const collapseSummary = (s: string): string => String(s ?? "").replace(/\s+/g, " ").trim();
+
+/**
+ * The entry-side half of retireBeats — see its header. Runs AFTER the beats are
+ * marked, so "a beat that survives" is simply "a beat still live now", and the
+ * veto set cannot drift from what was actually retired. Outside the beat write
+ * lock deliberately: retireEntries takes the entry index's own mutateIndex
+ * path, and holding both locks at once is how deadlocks are built.
+ */
+async function retireCompanionEntries(
+  characterId: string,
+  retiredBeatIds: string[],
+  reason: string,
+): Promise<void> {
+  // Every summary a surviving beat would produce. Rendered through
+  // companionEntryFromBeat at READ time — if rendering has drifted since the
+  // entry was written, the drifted summary just won't match anything, and the
+  // entry is left alone rather than mis-joined (r0kc's lesson, inverted).
+  const kept = new Set<string>();
+  for (const b of await readAllBeats(characterId, { includeRetired: false })) {
+    kept.add(collapseSummary(companionEntryFromBeat(b).summary));
+  }
+
+  const wanted = new Map<string, string>(); // collapsed summary -> beatId (first)
+  let vetoed = 0;
+  for (const id of retiredBeatIds) {
+    const beat = await readBeat(characterId, id);
+    if (!beat) continue;
+    const want = collapseSummary(companionEntryFromBeat(beat).summary);
+    if (!want) continue;
+    if (kept.has(want)) { vetoed++; continue; }
+    if (!wanted.has(want)) wanted.set(want, id);
+  }
+  if (vetoed > 0) {
+    console.info(`[ME:retire] ${characterId} — ${vetoed} companion(s) VETOED: summary shared with a surviving beat, entry left alone`);
+  }
+  if (wanted.size === 0) return;
+
+  const index = await readIndex("character", characterId).catch(() => null);
+  const ids = (index?.entries ?? [])
+    .filter((e) => !e.discardedAt && !e.deletedAt && wanted.has(collapseSummary(e.summary)))
+    .map((e) => e.id);
+  if (ids.length > 0) {
+    await retireEntries("character", characterId, ids, reason);
+  }
 }
 
 // ── Beat write ─────────────────────────────────────────────────────────────

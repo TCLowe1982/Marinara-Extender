@@ -250,7 +250,18 @@ app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
     console.log(`               (disable with MARINARA_EXTENDER_POLLER=0 if the extension is also running)`);
     startPoller({ intervalMs, onTurn: (turn) => void handleDetectedTurn(turn) });
   } else {
-    console.log(`Engine poller: off (set MARINARA_EXTENDER_POLLER=1 to enable)`);
+    // Not a neutral "off". The extension is dead (Engine 2.3.4) and the turn
+    // hook is opt-in, so with the poller off there is NO live capture path at
+    // all — and that exact state ran silently for six days after the 08-04
+    // bench quarantine was never lifted. Say what it means, not just what it is.
+    const hook = process.env.MARINARA_EXTENDER_TURN_HOOK === "1";
+    if (hook) {
+      console.log(`Engine poller: off (turn hook is on — capture rides notifications only; swipes covered, missed turns are not)`);
+    } else {
+      console.warn(`Engine poller: OFF — NOTHING IS CAPTURING. The extension is gone and the turn hook is off,`);
+      console.warn(`               so chats are NOT being remembered. Set MARINARA_EXTENDER_POLLER=1 in .env`);
+      console.warn(`               unless this is a deliberate quarantine (bench run / second instance).`);
+    }
   }
 
   // ── Engine turn hook (opt-in) ───────────────────────────────────────────────

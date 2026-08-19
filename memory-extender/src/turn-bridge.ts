@@ -21,6 +21,7 @@
 
 import { listCharacters, parseData } from "./engine-client.js";
 import { syncMemoryToLorebook } from "./lorebook-writer.js";
+import { recordCapture } from "./capture-status.js";
 import { swipeIndexOf, type DetectedTurn } from "./poller.js";
 
 // The engine's message id. Reused from the raw record rather than added to
@@ -99,13 +100,26 @@ export interface BridgeResult {
   skippedReason?: string;
 }
 
+export interface BridgeOptions {
+  /**
+   * Skip the per-turn lorebook write. For bulk replay (backfill.ts): syncing
+   * after every one of hundreds of sequential turns rewrites the same lorebook
+   * hundreds of times for one final state. The CALLER owns syncing at the end
+   * when it sets this — a backfill that skips sync and never finishes with one
+   * leaves the lorebook stale until the next live turn.
+   */
+  skipLorebookSync?: boolean;
+  /** Stamped into capture-status so a backfill cannot masquerade as live capture health. */
+  source?: "live" | "backfill";
+}
+
 /**
  * Handle one detected turn end to end.
  *
  * Never throws: the poller runs this on a timer and a single bad turn must not
  * stop the loop. Failures are logged and reported in the result.
  */
-export async function handleDetectedTurn(turn: DetectedTurn): Promise<BridgeResult> {
+export async function handleDetectedTurn(turn: DetectedTurn, opts: BridgeOptions = {}): Promise<BridgeResult> {
   const messageText = String(turn.message.content ?? "");
 
   if (!turn.characterId) {
@@ -147,11 +161,20 @@ export async function handleDetectedTurn(turn: DetectedTurn): Promise<BridgeResu
     return { ingested: false, lorebookId: null, skippedReason: "process-turn failed" };
   }
 
+  // The EVENT signal: a turn really made it into memory, live or backfill.
+  // Recorded before the lorebook write on purpose — capture is the ingest, and
+  // a failed lorebook sync must not make a captured turn look uncaptured.
+  void recordCapture({ chatId: turn.chatId, characterId: turn.characterId, source: opts.source ?? "live" });
+
   const memoryBlock = result.memoryBlock ?? "";
   if (!memoryBlock) {
     // Ingestion ran (facts may have been stored) but there is nothing to
     // inject yet — don't clear a populated lorebook over it.
     return { ingested: true, lorebookId: null, skippedReason: "no memory block to write" };
+  }
+
+  if (opts.skipLorebookSync) {
+    return { ingested: true, lorebookId: null, skippedReason: "lorebook sync deferred by caller" };
   }
 
   const lorebookId = await syncMemoryToLorebook({

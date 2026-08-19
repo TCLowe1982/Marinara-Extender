@@ -83,6 +83,7 @@ import {
   titleNamesAPerson,
 } from "./threads.js";
 import { csrfRejection, csrfToken, CSRF_HEADER } from "./csrf.js";
+import { runBackfill, backfillProgress } from "./backfill.js";
 import { ingestSceneRecap, readArcs, readArcMemberships } from "./arcs.js";
 import { runArcPromotion } from "./arc-promotion.js";
 import { spawnUpdater } from "./update.js";
@@ -2133,5 +2134,41 @@ export function registerApiRoutes(app: FastifyInstance): void {
     } catch (err) {
       return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
     }
+  });
+
+  // ── Backfill (outage recovery) ────────────────────────────────────────────
+  // Replay a window of engine history through the live ingestion path. Runs
+  // IN-PROCESS on purpose — a separate script would be a second uncoordinated
+  // writer to the store and lorebooks (1akw). See backfill.ts for the design.
+  //
+  // POST /api/backfill  { from, to?, chatId?, dryRun? }  — starts (or dry-runs)
+  //   Dry runs execute inline and return the report. Real runs go async —
+  //   274 turns of local-model analysis is an hours-shaped job, not a request —
+  //   and return 202 immediately.
+  // GET  /api/backfill  — progress + the last report.
+
+  app.post<{
+    Body: { from?: string; to?: string; chatId?: string; dryRun?: boolean };
+  }>("/api/backfill", async (req, reply) => {
+    const { from, to, chatId, dryRun } = req.body ?? {};
+    if (!from || Number.isNaN(Date.parse(from))) {
+      return reply.code(400).send({ error: "body.from must be an ISO timestamp (the window's inclusive lower bound)" });
+    }
+    if (to !== undefined && Number.isNaN(Date.parse(to))) {
+      return reply.code(400).send({ error: "body.to must be an ISO timestamp when present" });
+    }
+    if (backfillProgress().running) {
+      return reply.code(409).send({ error: "a backfill is already running — poll GET /api/backfill" });
+    }
+    if (dryRun) {
+      const report = await runBackfill({ from, to, chatId, dryRun: true });
+      return reply.send(report);
+    }
+    void runBackfill({ from, to, chatId }).catch((e) => console.error(`[ME:backfill] failed — ${String(e)}`));
+    return reply.code(202).send({ started: true, note: "poll GET /api/backfill for progress" });
+  });
+
+  app.get("/api/backfill", { logLevel: "silent" }, async (_req, reply) => {
+    return reply.send(backfillProgress());
   });
 }

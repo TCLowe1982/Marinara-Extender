@@ -300,8 +300,14 @@ export function _resetChatLocks(): void {
   chatLocks.clear();
 }
 
-/** Assemble DetectedTurns for the assistant messages among `candidates`. */
-function buildTurns(
+/**
+ * Assemble DetectedTurns for the assistant messages among `candidates`.
+ *
+ * Exported for the backfill path (`backfill.ts`), which replays an outage
+ * window through the same assembly — a second implementation of "which user
+ * line prompted this reply" would drift from this one silently.
+ */
+export function buildTurns(
   chat: Record<string, unknown>,
   chatId: string,
   tail: Record<string, unknown>[],

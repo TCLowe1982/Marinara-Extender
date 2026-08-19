@@ -21,6 +21,7 @@ import { registerUiRoutes } from "./ui.js";
 import { updateStatus } from "./update.js";
 import { embeddingsStatus, describeEmbeddingsStatus } from "./embeddings.js";
 import { isEideticMode } from "./loader.js";
+import { readCaptureStatus } from "./capture-status.js";
 
 await loadDotEnv();
 
@@ -68,8 +69,19 @@ app.get("/api/health", { logLevel: "silent" }, async (_req, reply) => {
       ollama = "unavailable";
     }
   }
-  const [update, embeddings] = await Promise.all([updateStatus(), embeddingsStatus()]);
-  return reply.send({ ok: true, ollama, embeddings, ...update });
+  const [update, embeddings, capture] = await Promise.all([updateStatus(), embeddingsStatus(), readCaptureStatus()]);
+  // Capture liveness (the 08-04 outage lesson): state AND event, together.
+  // pollerOn says whether a capture path exists; lastCaptureAt says when one
+  // last did real work. Either alone let six days of silence look healthy.
+  return reply.send({
+    ok: true, ollama, embeddings, ...update,
+    capture: {
+      pollerOn: process.env.MARINARA_EXTENDER_POLLER === "1",
+      turnHookOn: process.env.MARINARA_EXTENDER_TURN_HOOK === "1",
+      lastCaptureAt: capture?.lastCaptureAt ?? null,
+      lastCaptureSource: capture?.source ?? null,
+    },
+  });
 });
 
 // ── OpenAI-compatible inference proxy ─────────────────────────────────────────

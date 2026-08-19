@@ -60,6 +60,9 @@ const PAGE = String.raw`<!DOCTYPE html>
     display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .01em; }
   header .sub { color: var(--muted); font-size: 12px; }
+  .cap { font-size: 12px; padding: 2px 10px; border-radius: 999px; border: 1px solid transparent; }
+  .cap-ok { color: var(--muted); border-color: var(--edge); }
+  .cap-dead { color: #fff; background: #b91c1c; font-weight: 600; }
   header nav { margin-left: auto; display: flex; gap: 14px; }
   header nav a { color: var(--accent); font-size: 12px; text-decoration: none; }
   header nav a:hover { text-decoration: underline; }
@@ -177,6 +180,7 @@ const PAGE = String.raw`<!DOCTYPE html>
 <header>
   <h1>Marinara Extender</h1>
   <span class="sub" id="hdr">loading…</span>
+  <span class="cap" id="capture"></span>
   <nav><a href="/setup">setup</a><a href="/prompts">prompts</a></nav>
 </header>
 <div class="wrap">
@@ -308,8 +312,36 @@ async function boot() {
 
   await buildVerdicts(rs.slice(0, 8));
   $("hdr").textContent = chars.length + " character(s) · " + rs.length + " recorded turn(s)";
+  await loadCaptureStatus().catch(() => {});
   await loadHeldCount().catch(() => {});
   render();
+}
+
+// Capture liveness (the 08-04 outage: six days of silence that looked healthy
+// from every page anyone was reading). Two facts, one line: does a capture
+// path EXIST (poller/hook state), and when did one last DO anything (event).
+// Red only for the true outage state — no path at all. A stale timestamp with
+// the poller on just means nobody has chatted, and crying wolf about idle
+// time is how warnings get ignored.
+async function loadCaptureStatus() {
+  const h = await fetch("/api/health").then((r) => r.json());
+  const c = h.capture ?? {};
+  const el = $("capture");
+  const last = c.lastCaptureAt ? new Date(c.lastCaptureAt) : null;
+  const ago = last ? Math.round((Date.now() - last.getTime()) / 60000) : null;
+  const agoText = ago === null ? "never"
+    : ago < 1 ? "just now"
+    : ago < 60 ? ago + "m ago"
+    : ago < 2880 ? Math.round(ago / 60) + "h ago"
+    : Math.round(ago / 1440) + "d ago";
+  if (!c.pollerOn && !c.turnHookOn) {
+    el.className = "cap cap-dead";
+    el.textContent = "NOT CAPTURING — no poller, no hook · last turn " + agoText;
+  } else {
+    el.className = "cap cap-ok";
+    el.textContent = "capturing (" + (c.pollerOn ? "poller" : "hook") + ") · last turn " + agoText +
+      (c.lastCaptureSource === "backfill" ? " (backfill)" : "");
+  }
 }
 
 // Newest first, so the first verdict written for an entry is the freshest and

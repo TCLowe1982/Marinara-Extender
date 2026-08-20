@@ -4,27 +4,27 @@
 
 ## Two entry points, one memory store
 
-1. **Live, per-turn** — `POST /api/process-turn` (`api.ts:507`), fired by the extension after each AI response. Fast: a short synchronous spine, then everything expensive runs **fire-and-forget**.
-2. **Batch import** — `runSentimentPipeline` (`sentiment/pipeline.ts:89`), reached via `/api/analyze-beats`, story import, and the long-form path. Windowed, resumable, the full Ledger-Pattern treatment.
+1. **Live, per-turn** — `POST /api/process-turn` (`api.ts`), fired by the extension after each AI response. Fast: a short synchronous spine, then everything expensive runs **fire-and-forget**.
+2. **Batch import** — `runSentimentPipeline` (`sentiment/pipeline.ts`), reached via `/api/analyze-beats`, story import, and the long-form path. Windowed, resumable, the full Ledger-Pattern treatment.
 
 Both produce the same artifacts: **beats** (emotional moments), **companion ledger entries** (what the loader actually injects), **facts**, **threads**, and tier/promotion bookkeeping.
 
 ## The synchronous spine of a turn (what blocks the response)
 
-Only these run before `/api/process-turn` returns (`api.ts:513–591`):
+Only these run before `/api/process-turn` returns (`api.ts`):
 
 1. **`resolveIdentity(characterId, characterName)`** → stable `identityKey`.
 2. **Soft clock** *(gated; off by default)* — `updateSoftClock` → `timeCtx` attached to new entries.
 3. **`extractRememberTags(messageText)`** (`writer.ts`) → create entries **synchronously**, deduped per scope+lane via `isDuplicate` with a per-message `indexCache` so two `[remember:]` tags in one message can't double-write. Summaries under 10 chars are skipped; `truncateSummary` caps length.
 4. **`processResponse`** → extract `[bookmark:]` tags + **decay all bookmarks ×0.97**.
 5. **`loadContext({ recentText: userMessageText + "\n" + messageText })`** → assemble the `<memory>` block. `recentText` drives Current relevance ranking.
-6. **Return** `{ memoryBlock, created, bookmarksExtracted, surfaced }` (`api.ts:803`).
+6. **Return** `{ memoryBlock, created, bookmarksExtracted, surfaced }` (`api.ts`).
 
 Everything below is kicked off as `void (async () => …)()` **after** the block is computed — it never delays the response.
 
 ## The fire-and-forget tiers (async, never block)
 
-### Tier 2 — Sentiment / beats (`api.ts:623`, the richest path)
+### Tier 2 — Sentiment / beats (`api.ts`, the richest path)
 1. Build chunks: the user message (unless it's a long-form story, below) and the AI message — each is **one chunk**. `turnStart/turnEnd` come from `turnNumber`, **which the poller never sends** — see *Identity is provenance* below before you trust either field. Each chunk also carries its own `messageId` (2pbi); the two halves of a turn are two different engine messages and must not share one.
 2. `classifyChunks(chunks, "chat")` → keep only `passesThreshold` (the fast keyword/salience gate; nothing passes → return early, no LLM spend).
 3. `buildSubjectRoster` + `listActiveThreads` for context.
@@ -159,7 +159,7 @@ the hard way, all of which cost a wrong answer first:
 Silence there is not innocence, and no provenance guard is general until every write
 path records it.
 
-### Tier 3 — Ambient facts (`api.ts:734`)
+### Tier 3 — Ambient facts (`api.ts`)
 `classifyAmbient` extracts durable identity/preference/history facts from throwaway lines. Same subject routing, with one difference: facts have **no holding-pool lane**, so an unknown subject is **demoted to chat scope** tagged `[about: subject]` rather than parked. Character-scope facts get `kind: "trait"` (the trait side of the dedup matrix vs. beats' `kind: "incident"`).
 
 **A sentence can carry two facts about different people** (2tro). Given *"I was in the Army, and Mari is Polish."* the extractor kept `"Mari is Polish"` and dropped the user's clause outright — fact loss, not phrasing, because **retrieval scores the summary** and tp5's `bodyTerms` only rescues body-only *names* (`"my fourth sapper stakes"` has none). Both prompts (`SYSTEM_PROMPT`, `SCENE_FACTS_SYSTEM_PROMPT`) now teach the split explicitly; `user-clause.ts` is the deterministic net under them, applied in `classifyAmbient` and `classifySceneFacts`, restoring the clause as a verbatim `[user: …]` **prefix** (prefix, because the summary is truncated at 120 chars downstream).
@@ -169,12 +169,12 @@ Its trigger conditions are all narrow on purpose — it writes an *attribution* 
 - **Only the user's own words count.** A character's dialogue is first-person too; the clause is claimed only when every content word in it appears in what the *user* said (`userSpokenLines` splits the `User:`/`Scene:` labels in the scene path).
 - **The survivor must be positively about someone else** — an explicit non-user `subject`, or a summary that *opens with* a roster name. Measured, not assumed: without this test a live-store scan produced 169 hits, nearly all summaries that carried the user perfectly well and simply never named them (*"Speaks three languages"*, *"Was medicated through high school"*). Accepting a third-party *mention* anywhere still left 39. Subject position only → 4, two of which are the issue's verified cases. `scripts/user-clause-scan.mjs` re-runs that measurement read-only.
 
-### Long-form story (`api.ts:787`)
+### Long-form story (`api.ts`)
 When `userMessageText.length > LONG_USER_MSG_CHARS` (default 1500), the single user chunk is **skipped by Tier 2** and instead routed through the full `runSentimentPipeline` (windowed, every passing window analyzed, subject-routed) — so a multi-page memory told in one message lands with import-parity richness instead of collapsing to ~1 beat.
 
 ### Promotion & arc passes (cadenced)
-- **Promotion — every 20 turns** (`api.ts:602`): `runPromotion("character")` + `runPromotion("chat")` + `autoCloseStaleThreads()`.
-- **Arc promotion — every 60 turns** (`api.ts:612`): `runArcPromotion` clusters beats into/onto through-line arcs; spends one renderer LLM call per touched arc (hence the slower cadence).
+- **Promotion — every 20 turns** (`api.ts`): `runPromotion("character")` + `runPromotion("chat")` + `autoCloseStaleThreads()`.
+- **Arc promotion — every 60 turns** (`api.ts`): `runArcPromotion` clusters beats into/onto through-line arcs; spends one renderer LLM call per touched arc (hence the slower cadence).
 
 ## Tier 1 — Snapshot (the periodic digest)
 
@@ -186,8 +186,8 @@ Separate from the per-turn path: `digest.ts`, via `/api/snapshot` / `/api/digest
 
 - **Stage 0 — chunk** (`chunkMessages`): break messages on dialogue/narrator boundaries. POV relabel turns first-person "Narrator" into a named character.
 - **Stage 1 — classify** (`classifyChunks`): fast keyword/salience filter → `passing`. For **chat** imports `analyzeAll` is true (the whole scene is one speaker label, so it can only be split by analyzed *subject*, not speaker); **story** imports keep the speaker pre-filter. **Three gates run before scoring**, each setting `suppressedReason` so a guard working and a guard misfiring are never indistinguishable — see *Stage-1 gates* below.
-- **Stages 2+3 — analyze & encode, one chunk at a time** (`pipeline.ts:167`): each chunk → `analyzeChunk` (with its true before/after neighbors + roster) → subject-route → `encodeBeat` + companion entry. **Persisted incrementally** — the on-disk beat store *is* the ledger: a cancel/crash keeps every completed beat, and a re-run resumes via deterministic `beatIdForChunk` (skipping done chunks while still ensuring their companion entry exists) — **but that determinism is over the chunk's *interpretation*, not its provenance; see *Identity is provenance* above before relying on it.** `forceReanalyze` bypasses the resume skip when a re-import's purpose is re-routing subjects.
-- **Narrative-position boost** (`pipeline.ts:60`, `×1.3`): the final 20% of a story carries climax/resolution weight, so its beats' salience is boosted.
+- **Stages 2+3 — analyze & encode, one chunk at a time** (`runSentimentPipeline`, `sentiment/pipeline.ts`): each chunk → `analyzeChunk` (with its true before/after neighbors + roster) → subject-route → `encodeBeat` + companion entry. **Persisted incrementally** — the on-disk beat store *is* the ledger: a cancel/crash keeps every completed beat, and a re-run resumes via deterministic `beatIdForChunk` (skipping done chunks while still ensuring their companion entry exists) — **but that determinism is over the chunk's *interpretation*, not its provenance; see *Identity is provenance* above before relying on it.** `forceReanalyze` bypasses the resume skip when a re-import's purpose is re-routing subjects.
+- **Narrative-position boost** (`NARRATIVE_POSITION_BOOST`, `sentiment/pipeline.ts`): the final 20% of a story carries climax/resolution weight, so its beats' salience is boosted.
 - **Durable-fact pass** (`ingestSceneFacts`, 1dn): runs over the **full** chunk set, not just salient ones — identity/lore facts live *below* the beat salience threshold, so they'd never become beats; captured separately. Guarded so a fact-pass failure can't fail an import that already saved beats.
 
 ## ⚠ Identity is provenance — `turnStart` is not a position in the chat (`r0kc`/`2pbi`)
@@ -306,16 +306,16 @@ The prompt's illustrations are **bait**: concrete enough to teach shape, absurd 
 
 | Thing | Value | Where |
 |---|---|---|
-| Promotion pass | every **20** turns | `api.ts:602` |
-| Arc promotion | every **60** turns | `api.ts:612` |
+| Promotion pass | every **20** turns | `api.ts` |
+| Arc promotion | every **60** turns | `api.ts` |
 | Snapshot/digest | ~every **30 min** active | `digest.ts` |
 | Long-form trip | user msg > **1500** chars | `LONG_USER_MSG_CHARS` |
 | Bookmark decay | **×0.97** per turn | `writer.ts` / `storage.ts` |
-| Narrative boost | **×1.3**, final 20% | `pipeline.ts:60` |
+| Narrative boost | **×1.3**, final 20% | `NARRATIVE_POSITION_BOOST` (`sentiment/pipeline.ts`) |
 
 ## Invariants & gotchas
 
-- **Every beat needs a companion ledger entry.** The loader builds the injected `<memory>` block from the **entry index, not the beats store** (`pipeline.ts:255–259`). A beat with no companion entry is invisible to recall. Never encode a beat without `createEntryIfUnique`.
+- **Every beat needs a companion ledger entry.** The loader builds the injected `<memory>` block from the **entry index, not the beats store** (`runSentimentPipeline`, `sentiment/pipeline.ts`). A beat with no companion entry is invisible to recall. Never encode a beat without `createEntryIfUnique`.
 - **Never guess a subject into a permanent ledger.** Unknown subject → holding pool (beats) or chat-scope `[about: …]` (facts). Guessing pollutes a character's memory irreversibly.
 - **Fire-and-forget must never block or throw into the response.** Each tier is wrapped in its own `try/catch` and `void`-ed. A failed tier logs a warning; the turn still returns its block.
 - **Measure before you reason, and measure the measurement.** A rule that reads correct is not evidence; the first count is usually inflated by the system's own artifacts. See *House law* above.

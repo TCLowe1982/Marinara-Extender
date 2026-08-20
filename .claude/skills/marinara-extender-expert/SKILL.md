@@ -37,8 +37,11 @@ Read the relevant reference before giving detailed advice in that area. They con
 | Internals — identity/aliases, arcs/threads, the dedup matrix, FR3 reconcile/apply-gate, the holding pool, supersession | `references/internals.md` |
 | Env vars, token budgets, choosing a local model, ports, the `/setup` page, troubleshooting an install | `references/config-and-ops.md` |
 | The client side — the loader, the two constant lorebook entries, `[remember:]`/`[bookmark:]` stripping, recitation detection | `references/extension.md` |
+| **The in-Engine surface** — capability-package manifest, `ui`/`network` permissions, contribution slots (`home-browser-tab`), hash-pinned `files[]`, catalog provenance, engine/API version gates | `references/capability-package.md` |
 
 Don't answer from memory on specifics (field names, thresholds, tier scores, env-var names) — check the reference or the code.
+
+> **Cite contracts, never coordinates** (`umz1`, ruling 2026-08-02, applied 2026-08-20). References name a **symbol, field, endpoint, enum member or manifest key** — never `file.ts:123`. Line numbers rot silently: they keep pointing *somewhere*, so a stale cite reads as authoritative while landing on a closing brace. When the 29 coordinate cites in this skill were checked, **all 22 named symbols still existed, while most of the line numbers had drifted** — landing on a closing brace, a blank line, or a mid-expression fragment, and two on the wrong file entirely (`pipeline.ts` → `sentiment/pipeline.ts`). A few still happened to be right, which is the trap: you cannot tell the survivors from the rot without checking every one. That asymmetry — prose durable, coordinates not — is the whole argument. If a file must be named, name the module and the exported symbol.
 
 ## Triage: "the character didn't remember X"
 

@@ -2,7 +2,7 @@
 
 *Grounded in `memory-extender/src/storage.ts`. Field names, tier thresholds, and the on-disk layout are taken from the code — open `storage.ts` when a detail must be exact.*
 
-## The five core types (`storage.ts:12–110`)
+## The five core types (`storage.ts`)
 
 ```ts
 type Scope           = "global" | "character" | "chat";
@@ -26,12 +26,12 @@ type EntryProvenance = "played" | "unplayed";
 
 Each record exists in two forms, deliberately:
 
-- **`IndexEntry`** (`storage.ts:42`) — lightweight metadata row kept in the per-scope `index.yaml`. The loader scans **only these** every turn, so the hot path stays bounded. Holds: `id`, `path`, `summary` (≤120 chars), `tokens`, `lane`, `status`, `lastAccessed`, the tier fields, `sourceChatId`, `citesChatId`, `threadId`, `turnStart`, `provenance`, `bodyTerms`, and the supersede/delete markers.
+- **`IndexEntry`** (`storage.ts`) — lightweight metadata row kept in the per-scope `index.yaml`. The loader scans **only these** every turn, so the hot path stays bounded. Holds: `id`, `path`, `summary` (≤120 chars), `tokens`, `lane`, `status`, `lastAccessed`, the tier fields, `sourceChatId`, `citesChatId`, `threadId`, `turnStart`, `provenance`, `bodyTerms`, and the supersede/delete markers.
 
   **`sourceChatId` vs `citesChatId` (fqnl, 2026-08-19) — two meanings, two fields.** `sourceChatId` means *"this import OWNS me"*: `removeEntriesBySourceChat` purges by it on re-import, so it may only be stamped on entries a re-import will recreate (pipeline companions). `citesChatId` means *"this chat is my receipt"* and the purge **never reads it** — so paths whose entries a re-import would purge-and-not-recreate can finally record provenance: `[remember:]` tags, `/api/ingest-commands`, and the long-form story path (whose `sourceChatId` absence is a recorded deliberate decision at its pipeline call in `api.ts`). The provenance guard (`fact-support-scan.mjs`) reads `citesChatId ?? sourceChatId`. Inertness is pinned by `cites-chat-id.test.ts`; if the purge ever learns to read `citesChatId`, stamping remember-tags becomes a data-loss bug. Backfilling the 9,109 legacy unprovenanced entries is separate and mostly impossible (their receipts were never recorded); the fix is forward-looking.
 
   **`bodyTerms`** (`tp5`, 2026-08-04) — up to 12 lowercase names harvested from the entry's **body**, so a subject mentioned only there is still matchable without the loader opening the file. Written by `harvestBodyTerms` (`relevance.ts`) at entry creation; existing rows are populated by `scripts/backfill-body-terms.mjs`. **Absent means "not yet harvested", never "this entry has no names"** — the backfill deliberately skips unreadable entry files rather than recording an empty list. Costs ~23% index growth, which is the price of the hot path staying index-only.
-- **`Entry`** (`storage.ts:75`) — the full record (adds `content`, `created`, `timeContext`), stored in its own file and loaded **on demand** only when the entry is selected for injection.
+- **`Entry`** (`storage.ts`) — the full record (adds `content`, `created`, `timeContext`), stored in its own file and loaded **on demand** only when the entry is selected for injection.
 
 Tier fields **and `provenance`** are **mirrored** onto both so the loader never has to open entry files to rank or to filter.
 
@@ -39,9 +39,9 @@ Tier fields **and `provenance`** are **mirrored** onto both so the loader never 
 >
 > What shipped instead (`tp5`, 2026-08-04) is the **searchable residue**: `bodyTerms`, the names a body mentions, harvested at ingest. Reachability on the measured corpus went 43% → 84% for ~23% index growth. So the rule for anyone adding a new signal is unchanged — **put a bounded, derived field on the row; never the source text.**
 
-- **`Bookmark`** (`storage.ts:100`) — a decaying soft signal: `topic`, `summary`, `weight` (0.0–1.0), `why` (unresolved|important|emotional|promised|curious|follow-up), `createdTurn`, `lastSeenTurn`, `decayRate` (default **0.97**). Weight ×= decayRate each turn; surfaced into the block by a weighted random roll.
+- **`Bookmark`** (`storage.ts`) — a decaying soft signal: `topic`, `summary`, `weight` (0.0–1.0), `why` (unresolved|important|emotional|promised|curious|follow-up), `createdTurn`, `lastSeenTurn`, `decayRate` (default **0.97**). Weight ×= decayRate each turn; surfaced into the block by a weighted random roll.
 
-## The tier lifecycle (`storage.ts:17–28`)
+## The tier lifecycle (the `Tier` and `EntryStatus` unions in `storage.ts`)
 
 Score = **`retrievalCount + (recitationCount × 3)`**. Constants are exported from `storage.ts`:
 
@@ -60,9 +60,9 @@ Promotion runs every 20 turns (see `promotion.ts` / the pipeline reference). `co
 
 A central design choice: **demotion is a tier move, not a delete.** Entry *files* are essentially never moved or removed on the automatic path — only the index **row** moves between hot and cold.
 
-- **Cold archive** (`index.cold.yaml`, `storage.ts:318`) — a second per-scope index for stale non-core rows. The loader does **not** read it each turn — only on a recall miss — so the per-turn scan stays bounded. `moveToCold` adds to cold *first* then removes from hot (a crash can't lose the row). `promoteFromCold` rehydrates one row on recall.
-- **Supersession (FR2)** (`supersedeEntry`, `storage.ts:373`) — a newer fact replaces an older one: the old row gets `supersededBy`/`supersededAt` (mirrored onto the entry file so the fact carries its own history) and is moved to cold. Still queryable ("you said Mei before — did you mean Lin?"), out of Current. `restoreSupersededEntry` reverses it.
-- **User delete** (`softDeleteEntry`, `storage.ts:447`) — also a tier move to cold, marked `deletedAt` (and, unlike supersede, **no** `supersededBy`). Shows in the "Recently deleted" view; cold recall skips `deletedAt` rows. `restoreDeletedEntry` brings it back; `purgeColdEntry` is the separate, dig-for-it permanent removal.
+- **Cold archive** (`index.cold.yaml`, `storage.ts`) — a second per-scope index for stale non-core rows. The loader does **not** read it each turn — only on a recall miss — so the per-turn scan stays bounded. `moveToCold` adds to cold *first* then removes from hot (a crash can't lose the row). `promoteFromCold` rehydrates one row on recall.
+- **Supersession (FR2)** (`supersedeEntry`, `storage.ts`) — a newer fact replaces an older one: the old row gets `supersededBy`/`supersededAt` (mirrored onto the entry file so the fact carries its own history) and is moved to cold. Still queryable ("you said Mei before — did you mean Lin?"), out of Current. `restoreSupersededEntry` reverses it.
+- **User delete** (`softDeleteEntry`, `storage.ts`) — also a tier move to cold, marked `deletedAt` (and, unlike supersede, **no** `supersededBy`). Shows in the "Recently deleted" view; cold recall skips `deletedAt` rows. `restoreDeletedEntry` brings it back; `purgeColdEntry` is the separate, dig-for-it permanent removal.
 
 > Note: `supersededBy` is a **separate field, not an `EntryStatus` value** — there's a code comment warning that widening a serialized enum breaks empirical consumers silently. Respect that when adding states.
 
@@ -78,7 +78,7 @@ Inside a scope dir:
 
 - **`index.yaml`** — the hot `ScopeIndex` (array of `IndexEntry`).
 - **`index.cold.yaml`** — the cold archive index.
-- **Entry files in lane-named subdirs** (`writeEntry`, `storage.ts:596`): `open_threads → threads/`, `user_topics → user-topics/`, `character_topics → char-topics/`, each holding `{entryId}.yaml`. **Not** a flat `entries/` dir.
+- **Entry files in lane-named subdirs** (`writeEntry`, `storage.ts`): `open_threads → threads/`, `user_topics → user-topics/`, `character_topics → char-topics/`, each holding `{entryId}.yaml`. **Not** a flat `entries/` dir.
 - **`bookmarks.yaml`** — `Bookmark[]`.
 - Character scope also holds beats (`beats.yaml` + `beats/`) and arcs (`arcs.yaml`, `arc-memberships.yaml`).
 
@@ -86,11 +86,11 @@ Cross-cutting standalone files (under `data/`, via `mutateYamlFile`): `threads/r
 
 ## Write discipline (don't bypass it)
 
-- **All writes are atomic + durable** — `atomicWriteFile` (`storage.ts:184`): write a temp file → `fsync` the writable handle → `rename` over the target (atomic; replaces on Windows). The `fsync` is what survives a hard crash; it must be on the *writable* handle (an `fsync` on a read handle fails EPERM on Windows — the bug that lost engine tables on 2026-06-10). Windows `rename` retries transient `EPERM`/`EBUSY`/`EACCES` with backoff.
-- **Per-path write serialization** — `serializedWrite` (`storage.ts:254`) chains writes to the same file so concurrent read-modify-write (e.g. two `upsertIndexEntry`) can't corrupt the index. Use `upsertIndexEntry` / `mutateIndex` / `mutateBookmarks` / `mutateYamlFile`, never a raw write.
+- **All writes are atomic + durable** — `atomicWriteFile` (`storage.ts`): write a temp file → `fsync` the writable handle → `rename` over the target (atomic; replaces on Windows). The `fsync` is what survives a hard crash; it must be on the *writable* handle (an `fsync` on a read handle fails EPERM on Windows — the bug that lost engine tables on 2026-06-10). Windows `rename` retries transient `EPERM`/`EBUSY`/`EACCES` with backoff.
+- **Per-path write serialization** — `serializedWrite` (`storage.ts`) chains writes to the same file so concurrent read-modify-write (e.g. two `upsertIndexEntry`) can't corrupt the index. Use `upsertIndexEntry` / `mutateIndex` / `mutateBookmarks` / `mutateYamlFile`, never a raw write.
 - **Guard against blind overwrite** — `upsertIndexEntry` refuses to overwrite an *unreadable* index (would orphan every other row); it throws and points at `scripts/repair-indexes.mjs`.
-- **Input safety** — `assertSafeId` (`storage.ts:113`) rejects ids containing path separators / `..` / null bytes before they're interpolated into a filesystem path. `stripLoneSurrogates` removes torn UTF-16 halves from truncated text so a split emoji can't make the whole LLM request body fail to encode.
-- **Tokens** — `estimateTokens` is `ceil(len/4)` (`storage.ts:661`); a rough chars÷4 estimate, used for budget accounting.
+- **Input safety** — `assertSafeId` (`storage.ts`) rejects ids containing path separators / `..` / null bytes before they're interpolated into a filesystem path. `stripLoneSurrogates` removes torn UTF-16 halves from truncated text so a split emoji can't make the whole LLM request body fail to encode.
+- **Tokens** — `estimateTokens` is `ceil(len/4)` (`storage.ts`); a rough chars÷4 estimate, used for budget accounting.
 
 ## Quick map: which function for which job
 

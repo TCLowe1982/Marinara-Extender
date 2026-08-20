@@ -114,7 +114,7 @@ Raise `BUDGET_CHAT` / `BUDGET_CHARACTER` / `BUDGET_GLOBAL` to inject more memory
 
 ## Boot output & health
 
-The boot banner (`index.ts:235`) prints the server URL, `/setup` link, data dir, local-model + external-API status, eidetic/progress state, and embeddings status — a fast "is it configured right?" check. `GET /api/health` returns `{ ok, ollama: ok|unavailable|not_configured, embeddings, <update> }` (pings the local provider root with a 1s timeout).
+The boot banner (`index.ts`) prints the server URL, `/setup` link, data dir, local-model + external-API status, eidetic/progress state, and embeddings status — a fast "is it configured right?" check. `GET /api/health` returns `{ ok, ollama: ok|unavailable|not_configured, embeddings, <update> }` (pings the local provider root with a 1s timeout).
 
 ## Troubleshooting tree
 

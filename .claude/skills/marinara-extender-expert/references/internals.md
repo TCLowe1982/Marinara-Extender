@@ -4,13 +4,13 @@
 
 ## The write gate: the dedup matrix (`dedup.ts`)
 
-**Every capture path writes through `createEntryIfUnique`** — it's the single gate that stops the automated tiers from regenerating duplicates faster than cleanup removes them. `createEntry` (unconditional, `force`) exists only for callers that have *already* adjudicated (the FR3 curator). The decision is **lane- and kind-aware** (`decide`, `dedup.ts:187`):
+**Every capture path writes through `createEntryIfUnique`** — it's the single gate that stops the automated tiers from regenerating duplicates faster than cleanup removes them. `createEntry` (unconditional, `force`) exists only for callers that have *already* adjudicated (the FR3 curator). The decision is **lane- and kind-aware** (`decide`, `dedup.ts`):
 
 - **`character_topics` + `kind:"incident"`** (beats) — *feelings accumulate.* An incident **never collapses into a trait** (an event resembling a standing pattern is the arc growing, not a dupe). Incident-vs-incident dedups at a **higher** bar (`INCIDENT_DEDUP_THRESHOLD = 0.6`) **and** requires proof of the *same moment*: same `sourceChatId` and within `SAME_MOMENT_TURN_WINDOW = 5` turns. Without that proof both persist — because the analyzer emits identical boilerplate for genuinely distinct moments (measured: 78 byte-identical summaries collapsing distinct beats). → `skip` only on a real re-capture (swipe/regen).
-- **`user_topics`** (facts) — *facts supersede.* A similarity hit whose symmetric difference is a few **content** words is the **correction signature** ("sister is Mei" → "sister is Lin") — the meaning-carrying token is exactly what Jaccard ignores. `correctionSignature` (`dedup.ts:91`): Jaccard ≥ `CORRECTION_MIN_JACCARD = 0.5`, symdiff of 1–4 non-function content words → `create-correction`. Plain restatements → `skip`.
+- **`user_topics`** (facts) — *facts supersede.* A similarity hit whose symmetric difference is a few **content** words is the **correction signature** ("sister is Mei" → "sister is Lin") — the meaning-carrying token is exactly what Jaccard ignores. `correctionSignature` (`dedup.ts`): Jaccard ≥ `CORRECTION_MIN_JACCARD = 0.5`, symdiff of 1–4 non-function content words → `create-correction`. Plain restatements → `skip`.
 - **traits / `open_threads` / legacy (kind-less)** — aggressive default: any hit ≥ `DEDUP_SIMILARITY_THRESHOLD = 0.35` → `skip`.
 
-Similarity is `jaccardSimilarity` on lowercased word bags (`dedup.ts:65`). **Pass the right `kind`** (`incident` vs `trait`) or the matrix misfires.
+Similarity is `jaccardSimilarity` on lowercased word bags (`dedup.ts`). **Pass the right `kind`** (`incident` vs `trait`) or the matrix misfires.
 
 ## The fact-reconciliation chain: FR1 → FR2 → FR3
 
@@ -68,7 +68,7 @@ When a beat's subject resolves to **no** known character, it is **held, not drop
 ## Threads & arcs (`threads.ts`, `arcs.ts`, `arc-promotion.ts`)
 
 - **Narrative threads** — minted at Tier-2 ingest, **scene-scoped per chat**, via fuzzy label resolution (`resolveOrMintThread`) so label drift doesn't double-mint. Used by the loader to lift co-mentioned beats into Current via thread-sibling relevance. `autoCloseStaleThreads` runs in the promotion pass.
-- **Thread-unit cold archival** (`promotion.ts:106`) — members of an **active** thread never go cold; a **closed** thread's members archive **together**, only once *every* member is stale. The arc is never split across hot and cold.
+- **Thread-unit cold archival** (`promotion.ts`) — members of an **active** thread never go cold; a **closed** thread's members archive **together**, only once *every* member is stale. The arc is never split across hot and cold.
 - **Arcs** — *scene* (floor) and *through-line* (ceiling). `arc-promotion` (every 60 turns) clusters beats into/onto through-line arcs via the renderer (one LLM call per touched arc — hence the slow cadence). Through-line recaps are surfaced by `recap-activation` (semantic, embedding-based) even when keywords don't match.
 
 ## Promotion engine (`promotion.ts`)

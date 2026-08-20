@@ -118,7 +118,10 @@ for (const { scope, scopeId } of await scopes()) {
       unsupported: v0.unsupported.filter((n) => !ACRONYM.test(n)),
     };
     v.supported = v.unsupported.length === 0;
-    rows.push({ scope, scopeId, id: r.id, fact, source, sourceChatId: r.sourceChatId, verdict: v });
+    // citesChatId first (fqnl): the citation-only field carries the receipt
+    // meaning without re-import ownership; sourceChatId doubles as a citation
+    // where it exists. Either makes the entry convictable.
+    rows.push({ scope, scopeId, id: r.id, fact, source, sourceChatId: r.citesChatId ?? r.sourceChatId, verdict: v });
   }
 }
 

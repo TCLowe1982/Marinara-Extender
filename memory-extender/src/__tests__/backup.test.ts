@@ -43,6 +43,20 @@ describe("backupDataDir", () => {
     // Backup lives outside the data dir (a sibling), not nested inside it.
     expect(dest.includes(join("marinara-extender-backups"))).toBe(true);
   });
+
+  it("skips in-flight atomic-write temp files instead of racing them", async () => {
+    // A LIVE sidecar renames <file>.tmp-<pid>-<ts>-<rand> away mid-walk; copying
+    // them means lstat ENOENT aborts the whole backup, which then blocks the
+    // cleanup the backup was protecting (bit for real: the neurologist
+    // retirement vs the running backfill, 2026-08-19).
+    await seedScope();
+    await writeFile(join(data(), "characters", "c", "index.yaml.tmp-1234-1787180000000-42"), "half-written\n");
+
+    const { dir: dest } = await backupDataDir();
+
+    expect(await exists(join(dest, "characters", "c", "index.yaml"))).toBe(true);
+    expect(await exists(join(dest, "characters", "c", "index.yaml.tmp-1234-1787180000000-42"))).toBe(false);
+  });
 });
 
 describe("snapshotScope", () => {

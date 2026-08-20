@@ -39,6 +39,12 @@ export interface PipelineOptions {
   // Tag companion ledger entries with the chat they came from, so a re-import
   // of that chat can cleanly replace them.
   sourceChatId?: string;
+  // Citation WITHOUT re-import ownership (fqnl). For paths whose entries a
+  // re-import would purge but never recreate — the long-form user-story path —
+  // this records which chat the content came from while staying invisible to
+  // removeEntriesBySourceChat. Ignored when sourceChatId is set (owning implies
+  // citing; the provenance guard reads citesChatId ?? sourceChatId).
+  citesChatId?: string;
   // Deliberate re-import: skip the existing-beat resume shortcut and re-analyze
   // every chunk. The resume skip bypasses subject routing (it recreates
   // companions under the bucket without analysis), which silently defeats a
@@ -277,7 +283,7 @@ export async function runSentimentPipeline(
       const existing = await readBeat(characterId, beatId);
       if (existing) {
         const { summary, content } = companionEntryFromBeat(existing);
-        if (summary) await createEntryIfUnique("character", characterId, { lane: "character_topics", summary, content, sourceChatId: options.sourceChatId, kind: "incident", turnStart: existing.turnStart });
+        if (summary) await createEntryIfUnique("character", characterId, { lane: "character_topics", summary, content, sourceChatId: options.sourceChatId, citesChatId: options.sourceChatId ?? options.citesChatId, kind: "incident", turnStart: existing.turnStart });
       }
       tick(current);
       continue;
@@ -355,7 +361,7 @@ export async function runSentimentPipeline(
     // <memory> block from the entry index, NOT the beats store — so without this
     // companion entry the character could never recall an imported beat.
     const { summary, content } = companionEntryFromBeat(beat);
-    if (summary) await createEntryIfUnique("character", targetKey, { lane: "character_topics", summary, content, sourceChatId: options.sourceChatId, kind: "incident", turnStart: beat.turnStart });
+    if (summary) await createEntryIfUnique("character", targetKey, { lane: "character_topics", summary, content, sourceChatId: options.sourceChatId, citesChatId: options.sourceChatId ?? options.citesChatId, kind: "incident", turnStart: beat.turnStart });
 
     tick(current);
   }

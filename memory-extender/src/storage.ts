@@ -54,6 +54,17 @@ export interface IndexEntry {
   cycleCount?: number;
   lastRetrievedAt?: string; // ISO datetime of last retrieval
   sourceChatId?: string;    // chat this entry was imported/derived from (for clean re-import)
+  /**
+   * Chat this entry CITES as its receipt (fqnl provenance guard). Distinct from
+   * sourceChatId on purpose: sourceChatId means "this import OWNS me" and
+   * enrolls the entry in removeEntriesBySourceChat's purge-on-reimport, which
+   * is wrong for entries a re-import will not recreate ([remember:] tags, the
+   * long-form story path — the exact objection recorded at api.ts's pipeline
+   * call). citesChatId carries the verification meaning alone: the purge never
+   * reads it, so stamping it is inert by construction. The provenance guard
+   * reads citesChatId ?? sourceChatId.
+   */
+  citesChatId?: string;
   threadId?: string;        // narrative thread membership (nthr-* — see threads.ts)
   turnStart?: number;       // where in the source chat the moment happened (same-moment dedup)
   /**
@@ -146,6 +157,17 @@ export interface Entry {
   cycleCount?: number;
   lastRetrievedAt?: string; // ISO datetime of last retrieval
   sourceChatId?: string;    // chat this entry was imported/derived from (for clean re-import)
+  /**
+   * Chat this entry CITES as its receipt (fqnl provenance guard). Distinct from
+   * sourceChatId on purpose: sourceChatId means "this import OWNS me" and
+   * enrolls the entry in removeEntriesBySourceChat's purge-on-reimport, which
+   * is wrong for entries a re-import will not recreate ([remember:] tags, the
+   * long-form story path — the exact objection recorded at api.ts's pipeline
+   * call). citesChatId carries the verification meaning alone: the purge never
+   * reads it, so stamping it is inert by construction. The provenance guard
+   * reads citesChatId ?? sourceChatId.
+   */
+  citesChatId?: string;
   threadId?: string;        // narrative thread membership (nthr-* — see threads.ts)
   turnStart?: number;       // where in the source chat the moment happened (same-moment dedup)
   sourceMessageId?: string; // 06pq/s2lw — see the IndexEntry note; the PAIR is the moment's identity

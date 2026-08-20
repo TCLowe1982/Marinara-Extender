@@ -40,6 +40,15 @@ async function countFiles(dir: string): Promise<number> {
   return n;
 }
 
+// Atomic-write intermediates (storage.ts atomicWriteFile): born and renamed away
+// within one write. Never wanted in a backup, and the reason to filter them is
+// harder than tidiness: cp() walks the tree, a LIVE sidecar renames these out
+// from under the walk, and the resulting lstat ENOENT aborts the whole backup —
+// which then blocks whatever cleanup the backup was protecting. Bit for real on
+// 2026-08-19: the neurologist retirement could not take its backup while the
+// backfill was writing chats/.
+const TMP_FILE_RE = /\.tmp-\d+-\d+-\d+$/;
+
 // Full copy of the data dir to <data>/../marinara-extender-backups/backup-<ts>.
 // Excludes our own snapshot dir so backups don't nest/bloat.
 export async function backupDataDir(): Promise<{ dir: string; files: number }> {
@@ -48,9 +57,12 @@ export async function backupDataDir(): Promise<{ dir: string; files: number }> {
   await mkdir(dirname(dest), { recursive: true });
   await cp(data, dest, {
     recursive: true,
+    // force+errorOnExist defaults tolerate nothing; the filter is the guard.
     filter: (src) => {
       const rel = relative(data, src);
-      return !rel.startsWith(".snapshots"); // don't copy snapshots into the backup
+      if (rel.startsWith(".snapshots")) return false; // don't copy snapshots into the backup
+      if (TMP_FILE_RE.test(src)) return false;        // in-flight atomic writes: skip, don't race
+      return true;
     },
   });
   return { dir: dest, files: await countFiles(dest) };

@@ -638,6 +638,11 @@ export function registerApiRoutes(app: FastifyInstance): void {
         content: rem.content,
         tokens: estimateTokens(`${summary} ${rem.content}`),
         ...(timeCtx ? { timeContext: timeCtx } : {}),
+        // citesChatId, NOT sourceChatId (fqnl): a [remember:] entry cites the
+        // chat it was spoken in, but a re-import of that chat would purge a
+        // sourceChatId-tagged entry and never recreate it — the digest does not
+        // process remember tags. The citation field is invisible to the purge.
+        citesChatId: chatId,
       };
       const relativePath = await writeEntry(rem.scope, scopeId, entry);
       await upsertIndexEntry(rem.scope, scopeId, {
@@ -645,6 +650,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
         tokens: entry.tokens, lane: rem.lane,
         bodyTerms: harvestBodyTerms(entry.content, summary),
         status: "open", lastAccessed: now,
+        citesChatId: chatId,
       });
       // Add to cache so later tags in the same message don't duplicate each other.
       existing.push({ id, path: relativePath, summary, tokens: entry.tokens, lane: rem.lane, status: "open", lastAccessed: now });
@@ -908,11 +914,15 @@ export function registerApiRoutes(app: FastifyInstance): void {
             // more truthful but it is not inert: removeEntriesBySourceChat purges
             // by that field on re-import, and the import path chunks one long
             // message differently, so tagging them makes a re-import delete
-            // memories it will not reproduce. Separate decision, separate ticket.
+            // memories it will not reproduce.
+            //
+            // citesChatId is the resolution of that dilemma (fqnl): it records
+            // which chat these entries came from — making them convictable by
+            // the provenance guard — while the purge never reads it.
             [{ role: "user", content: userMessageText, ...(userSourceMessageId ? { messageId: userSourceMessageId } : {}) }],
             identityKey,
             characterName ?? identityKey,
-            { sourceType: "chat" },
+            { sourceType: "chat", ...(chatId ? { citesChatId: chatId } : {}) },
           );
           console.info(`[ME:longform] user story (${userMessageText.length} chars) → ${r.beats.length} beat(s)`);
         } catch (err) {
@@ -1091,6 +1101,8 @@ export function registerApiRoutes(app: FastifyInstance): void {
         lastAccessed: now,
         content: cmd.content,
         tokens: estimateTokens(`${summary} ${cmd.content}`),
+        // Citation, not ownership (fqnl) — see the remember path above.
+        citesChatId: chatId,
       };
       const relativePath = await writeEntry(scope, scopeId, entry);
       await upsertIndexEntry(scope, scopeId, {
@@ -1102,6 +1114,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
         lane,
         status: "open",
         lastAccessed: now,
+        citesChatId: chatId,
       });
       existing.push({
         id,

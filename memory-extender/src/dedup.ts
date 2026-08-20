@@ -170,6 +170,7 @@ export interface CreateEntryInput {
   status?: EntryStatus;
   timeContext?: Entry["timeContext"];
   sourceChatId?: string; // tag for clean per-chat re-import
+  citesChatId?: string;  // chat cited as the receipt (fqnl) — purge never reads this; see storage.ts
   threadId?: string;     // narrative thread membership, inherited from the beat
   turnStart?: number;    // where in the source chat the moment happened
   sourceMessageId?: string;  // which message this came from (06pq) — see storage.ts
@@ -293,6 +294,7 @@ export async function createEntry(
     tokens: estimateTokens(`${summary} ${content}`),
     ...(input.timeContext ? { timeContext: input.timeContext } : {}),
     ...(input.sourceChatId ? { sourceChatId: input.sourceChatId } : {}),
+    ...(input.citesChatId ? { citesChatId: input.citesChatId } : {}),
     ...(input.threadId ? { threadId: input.threadId } : {}),
     ...(typeof input.turnStart === "number" ? { turnStart: input.turnStart } : {}),
     ...(input.sourceMessageId ? { sourceMessageId: input.sourceMessageId } : {}),
@@ -310,6 +312,7 @@ export async function createEntry(
     status,
     lastAccessed: now,
     ...(input.sourceChatId ? { sourceChatId: input.sourceChatId } : {}),
+    ...(input.citesChatId ? { citesChatId: input.citesChatId } : {}),
     ...(input.threadId ? { threadId: input.threadId } : {}),
     ...(typeof input.turnStart === "number" ? { turnStart: input.turnStart } : {}),
     ...(input.sourceMessageId ? { sourceMessageId: input.sourceMessageId } : {}),

@@ -12,7 +12,7 @@ up in review as readable prose rather than as a diff of string fragments.
 > They are withheld because this file gets pasted, and a pasted example lands in a
 > chat the sidecar ingests, which is how the previous pair rotted inside 48 hours.
 
-Build: `1.2.0+12491f3`
+Build: `1.2.0+fabaa3d`
 
 | Prompt | Fires |
 |---|---|
@@ -125,34 +125,26 @@ Commands are stripped from output. Use sparingly.
 **When:** Fires per salient chunk whose primary emotion is fear. Local model first, external API on failure. Its "motivation" rules are shared across all ten.
 
 ```text
-You are analyzing a moment of fear in a conversation.
+You are analyzing a moment of FEAR in a conversation.
 
-Extract the emotional beat as JSON:
-- motivation: What is this person actually afraid of? What threat — real or perceived — is activating the fear response? What does this fear protect or preserve?
-- relational_dynamics: How is the fear affecting or being shaped by the relationship in this moment? Does it push them toward clinging, fleeing, or freezing?
-- outcome: What does this moment of fear signal about what could happen next — in this relationship or within this person?
-- subtext: If this chunk contains sexual or physically intimate content, analyze the EMOTIONAL FUNCTION of that content — what is it doing beyond arousal? Consider: trust-building, vulnerability, power exchange, marking/claiming, first-time significance, comfort-seeking, validation, grief, or avoidance. If no sexual/intimate content is present, omit this field or set it to null.
+- motivation: What is this person afraid of? What threat is activating it?
+- relational_dynamics: How is the fear shaping the relationship right now?
+- outcome: What does this signal about what happens next?
+- subtext: only if the chunk contains sexual or physically intimate content — name the emotional function of that content (trust-building, vulnerability, power exchange, comfort-seeking, avoidance). Otherwise omit it.
 
-Rules:
-- Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
     "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
     "«BAIT 1 — withheld, see src/sentiment/bait.json»"
     "«BAIT 2 — withheld, see src/sentiment/bait.json»"
-  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
-  words. If you cannot name what happened in THIS chunk that specifically, the chunk
-  has no beat — say so rather than reaching for a remembered phrase.
-- Be specific to the text provided — do not generalize.
-- 1–3 sentences per field.
-- salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
-- emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
-- subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
+  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their words.
+- If you cannot name what happened in THIS chunk that specifically, there is no beat: reply {"no_beat": true} instead of reaching for a remembered phrase.
+- subject: the single name of the person this beat is ABOUT — whose inner state does the chunk reveal? Attribute the beat to the character whose emotion it is, not the speaker label. Use a name from the "Known characters" list when you are given one, or "user" for the human player.
 - thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
-- Respond with raw JSON only — no explanation, no markdown.
 
-Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
+Reply with only this JSON:
+{"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
 ```
 
 <a id="analyzer-shame"></a>
@@ -163,34 +155,26 @@ Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotion
 **When:** Fires per salient chunk whose primary emotion is shame. Local model first, external API on failure. Its "motivation" rules are shared across all ten.
 
 ```text
-You are analyzing a moment of shame in a conversation.
+You are analyzing a moment of SHAME in a conversation.
 
-Extract the emotional beat as JSON:
-- motivation: What core belief about the self is being activated? What did this person do, feel, or reveal that triggered shame — and what does that say about their self-image?
-- relational_dynamics: How is shame functioning relationally here? Is it causing hiding, withdrawal, self-attack, or a bid for reassurance?
-- outcome: What does this shame moment suggest about how this person will behave next — toward themselves or toward others?
-- subtext: If this chunk contains sexual or physically intimate content, analyze the EMOTIONAL FUNCTION of that content — what is it doing beyond arousal? Consider: trust-building, vulnerability, power exchange, marking/claiming, first-time significance, comfort-seeking, validation, grief, or avoidance. If no sexual/intimate content is present, omit this field or set it to null.
+- motivation: What belief about the self was triggered, and by what?
+- relational_dynamics: Is shame causing hiding, self-attack, or a bid for reassurance?
+- outcome: How will they behave next, toward themselves or others?
+- subtext: only if the chunk contains sexual or physically intimate content — name the emotional function of that content (trust-building, vulnerability, power exchange, comfort-seeking, avoidance). Otherwise omit it.
 
-Rules:
-- Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
     "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
     "«BAIT 1 — withheld, see src/sentiment/bait.json»"
     "«BAIT 2 — withheld, see src/sentiment/bait.json»"
-  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
-  words. If you cannot name what happened in THIS chunk that specifically, the chunk
-  has no beat — say so rather than reaching for a remembered phrase.
-- Be specific to the text provided — do not generalize.
-- 1–3 sentences per field.
-- salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
-- emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
-- subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
+  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their words.
+- If you cannot name what happened in THIS chunk that specifically, there is no beat: reply {"no_beat": true} instead of reaching for a remembered phrase.
+- subject: the single name of the person this beat is ABOUT — whose inner state does the chunk reveal? Attribute the beat to the character whose emotion it is, not the speaker label. Use a name from the "Known characters" list when you are given one, or "user" for the human player.
 - thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
-- Respond with raw JSON only — no explanation, no markdown.
 
-Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
+Reply with only this JSON:
+{"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
 ```
 
 <a id="analyzer-hope"></a>
@@ -201,34 +185,26 @@ Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotion
 **When:** Fires per salient chunk whose primary emotion is hope. Local model first, external API on failure. Its "motivation" rules are shared across all ten.
 
 ```text
-You are analyzing a moment of hope in a conversation.
+You are analyzing a moment of HOPE in a conversation.
 
-Extract the emotional beat as JSON:
-- motivation: What is this person hoping for? What does this hope reveal about what they want or need most right now?
-- relational_dynamics: How is hope functioning in the relationship — is it building trust, creating vulnerability, or setting up the risk of disappointment?
-- outcome: What does this moment of hope suggest about where this person or relationship is heading?
-- subtext: If this chunk contains sexual or physically intimate content, analyze the EMOTIONAL FUNCTION of that content — what is it doing beyond arousal? Consider: trust-building, vulnerability, power exchange, marking/claiming, first-time significance, comfort-seeking, validation, grief, or avoidance. If no sexual/intimate content is present, omit this field or set it to null.
+- motivation: What are they hoping for, and what makes it feel possible now?
+- relational_dynamics: How is the hope changing what they risk saying?
+- outcome: What does this suggest they will reach for next?
+- subtext: only if the chunk contains sexual or physically intimate content — name the emotional function of that content (trust-building, vulnerability, power exchange, comfort-seeking, avoidance). Otherwise omit it.
 
-Rules:
-- Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
     "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
     "«BAIT 1 — withheld, see src/sentiment/bait.json»"
     "«BAIT 2 — withheld, see src/sentiment/bait.json»"
-  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
-  words. If you cannot name what happened in THIS chunk that specifically, the chunk
-  has no beat — say so rather than reaching for a remembered phrase.
-- Be specific to the text provided — do not generalize.
-- 1–3 sentences per field.
-- salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
-- emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
-- subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
+  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their words.
+- If you cannot name what happened in THIS chunk that specifically, there is no beat: reply {"no_beat": true} instead of reaching for a remembered phrase.
+- subject: the single name of the person this beat is ABOUT — whose inner state does the chunk reveal? Attribute the beat to the character whose emotion it is, not the speaker label. Use a name from the "Known characters" list when you are given one, or "user" for the human player.
 - thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
-- Respond with raw JSON only — no explanation, no markdown.
 
-Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
+Reply with only this JSON:
+{"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
 ```
 
 <a id="analyzer-desire"></a>
@@ -239,34 +215,26 @@ Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotion
 **When:** Fires per salient chunk whose primary emotion is desire. Local model first, external API on failure. Its "motivation" rules are shared across all ten.
 
 ```text
-You are analyzing a moment of desire or longing in a conversation.
+You are analyzing a moment of DESIRE in a conversation.
 
-Extract the emotional beat as JSON:
-- motivation: What does this person want — and what does that want reveal about what they feel is missing or possible? Is this desire for connection, safety, pleasure, or something else?
-- relational_dynamics: How is desire functioning between these people — is it drawing them closer, creating tension, or exposing vulnerability?
-- outcome: What does this desire moment suggest about what this person will do or feel next?
-- subtext: If this chunk contains sexual or physically intimate content, analyze the EMOTIONAL FUNCTION of that content — what is it doing beyond arousal? Consider: trust-building, vulnerability, power exchange, marking/claiming, first-time significance, comfort-seeking, validation, grief, or avoidance. If no sexual/intimate content is present, omit this field or set it to null.
+- motivation: What do they want, specifically, in this moment?
+- relational_dynamics: How is the wanting being offered, hidden, or negotiated?
+- outcome: What does this set up between them?
+- subtext: only if the chunk contains sexual or physically intimate content — name the emotional function of that content (trust-building, vulnerability, power exchange, comfort-seeking, avoidance). Otherwise omit it.
 
-Rules:
-- Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
     "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
     "«BAIT 1 — withheld, see src/sentiment/bait.json»"
     "«BAIT 2 — withheld, see src/sentiment/bait.json»"
-  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
-  words. If you cannot name what happened in THIS chunk that specifically, the chunk
-  has no beat — say so rather than reaching for a remembered phrase.
-- Be specific to the text provided — do not generalize.
-- 1–3 sentences per field.
-- salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
-- emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
-- subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
+  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their words.
+- If you cannot name what happened in THIS chunk that specifically, there is no beat: reply {"no_beat": true} instead of reaching for a remembered phrase.
+- subject: the single name of the person this beat is ABOUT — whose inner state does the chunk reveal? Attribute the beat to the character whose emotion it is, not the speaker label. Use a name from the "Known characters" list when you are given one, or "user" for the human player.
 - thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
-- Respond with raw JSON only — no explanation, no markdown.
 
-Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
+Reply with only this JSON:
+{"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
 ```
 
 <a id="analyzer-relief"></a>
@@ -277,34 +245,26 @@ Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotion
 **When:** Fires per salient chunk whose primary emotion is relief. Local model first, external API on failure. Its "motivation" rules are shared across all ten.
 
 ```text
-You are analyzing a moment of relief in a conversation.
+You are analyzing a moment of RELIEF in a conversation.
 
-Extract the emotional beat as JSON:
-- motivation: What tension, fear, or dread has just released? What had this person been carrying that they can now put down?
-- relational_dynamics: How does this relief affect the relationship dynamic — does it create closeness, lower defenses, or reveal how much pressure the person was under?
-- outcome: What does this moment of relief open up — for this person or for this relationship?
-- subtext: If this chunk contains sexual or physically intimate content, analyze the EMOTIONAL FUNCTION of that content — what is it doing beyond arousal? Consider: trust-building, vulnerability, power exchange, marking/claiming, first-time significance, comfort-seeking, validation, grief, or avoidance. If no sexual/intimate content is present, omit this field or set it to null.
+- motivation: What stopped being a threat, and how long had it been one?
+- relational_dynamics: What does the relief let them do that they could not before?
+- outcome: What changes now that the pressure is off?
+- subtext: only if the chunk contains sexual or physically intimate content — name the emotional function of that content (trust-building, vulnerability, power exchange, comfort-seeking, avoidance). Otherwise omit it.
 
-Rules:
-- Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
     "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
     "«BAIT 1 — withheld, see src/sentiment/bait.json»"
     "«BAIT 2 — withheld, see src/sentiment/bait.json»"
-  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
-  words. If you cannot name what happened in THIS chunk that specifically, the chunk
-  has no beat — say so rather than reaching for a remembered phrase.
-- Be specific to the text provided — do not generalize.
-- 1–3 sentences per field.
-- salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
-- emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
-- subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
+  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their words.
+- If you cannot name what happened in THIS chunk that specifically, there is no beat: reply {"no_beat": true} instead of reaching for a remembered phrase.
+- subject: the single name of the person this beat is ABOUT — whose inner state does the chunk reveal? Attribute the beat to the character whose emotion it is, not the speaker label. Use a name from the "Known characters" list when you are given one, or "user" for the human player.
 - thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
-- Respond with raw JSON only — no explanation, no markdown.
 
-Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
+Reply with only this JSON:
+{"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
 ```
 
 <a id="analyzer-vulnerability"></a>
@@ -315,34 +275,26 @@ Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotion
 **When:** Fires per salient chunk whose primary emotion is vulnerability. Local model first, external API on failure. Its "motivation" rules are shared across all ten.
 
 ```text
-You are analyzing a moment of vulnerability in a conversation.
+You are analyzing a moment of VULNERABILITY in a conversation.
 
-Extract the emotional beat as JSON:
-- motivation: WHAT EXACTLY is this person exposing — quote or closely paraphrase the specific admission, fear, or confession from the text. Never write "exposes her personal fear" or any sentence that could describe a different vulnerability moment; name THIS fear, THIS admission, THIS secret.
-- relational_dynamics: How does this vulnerability land in the relationship? Does it invite reciprocity, create intimacy, or risk rejection?
-- outcome: What does this moment of openness suggest about where this person or relationship could go from here?
-- subtext: If this chunk contains sexual or physically intimate content, analyze the EMOTIONAL FUNCTION of that content — what is it doing beyond arousal? Consider: trust-building, vulnerability, power exchange, marking/claiming, first-time significance, comfort-seeking, validation, grief, or avoidance. If no sexual/intimate content is present, omit this field or set it to null.
+- motivation: What did they expose that they could have kept back?
+- relational_dynamics: What is the exposure asking of the other person?
+- outcome: What becomes possible or risky after this?
+- subtext: only if the chunk contains sexual or physically intimate content — name the emotional function of that content (trust-building, vulnerability, power exchange, comfort-seeking, avoidance). Otherwise omit it.
 
-Rules:
-- Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
     "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
     "«BAIT 1 — withheld, see src/sentiment/bait.json»"
     "«BAIT 2 — withheld, see src/sentiment/bait.json»"
-  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
-  words. If you cannot name what happened in THIS chunk that specifically, the chunk
-  has no beat — say so rather than reaching for a remembered phrase.
-- Be specific to the text provided — do not generalize.
-- 1–3 sentences per field.
-- salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
-- emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
-- subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
+  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their words.
+- If you cannot name what happened in THIS chunk that specifically, there is no beat: reply {"no_beat": true} instead of reaching for a remembered phrase.
+- subject: the single name of the person this beat is ABOUT — whose inner state does the chunk reveal? Attribute the beat to the character whose emotion it is, not the speaker label. Use a name from the "Known characters" list when you are given one, or "user" for the human player.
 - thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
-- Respond with raw JSON only — no explanation, no markdown.
 
-Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
+Reply with only this JSON:
+{"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
 ```
 
 <a id="analyzer-trust"></a>
@@ -353,34 +305,26 @@ Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotion
 **When:** Fires per salient chunk whose primary emotion is trust. Local model first, external API on failure. Its "motivation" rules are shared across all ten.
 
 ```text
-You are analyzing a moment involving trust or the breakdown of trust in a conversation.
+You are analyzing a moment of TRUST in a conversation.
 
-Extract the emotional beat as JSON:
-- motivation: Is trust being offered, tested, confirmed, or broken here? What does this person's relationship with trust reveal about their history or current state?
-- relational_dynamics: How is trust functioning between these people — is it deepening the bond, revealing a wound, or exposing a pattern?
-- outcome: What does this trust moment predict about what will happen next in this relationship?
-- subtext: If this chunk contains sexual or physically intimate content, analyze the EMOTIONAL FUNCTION of that content — what is it doing beyond arousal? Consider: trust-building, vulnerability, power exchange, marking/claiming, first-time significance, comfort-seeking, validation, grief, or avoidance. If no sexual/intimate content is present, omit this field or set it to null.
+- motivation: What are they trusting the other with, concretely?
+- relational_dynamics: What did the other do to earn or test it?
+- outcome: What does extending it commit them to?
+- subtext: only if the chunk contains sexual or physically intimate content — name the emotional function of that content (trust-building, vulnerability, power exchange, comfort-seeking, avoidance). Otherwise omit it.
 
-Rules:
-- Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
     "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
     "«BAIT 1 — withheld, see src/sentiment/bait.json»"
     "«BAIT 2 — withheld, see src/sentiment/bait.json»"
-  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
-  words. If you cannot name what happened in THIS chunk that specifically, the chunk
-  has no beat — say so rather than reaching for a remembered phrase.
-- Be specific to the text provided — do not generalize.
-- 1–3 sentences per field.
-- salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
-- emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
-- subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
+  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their words.
+- If you cannot name what happened in THIS chunk that specifically, there is no beat: reply {"no_beat": true} instead of reaching for a remembered phrase.
+- subject: the single name of the person this beat is ABOUT — whose inner state does the chunk reveal? Attribute the beat to the character whose emotion it is, not the speaker label. Use a name from the "Known characters" list when you are given one, or "user" for the human player.
 - thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
-- Respond with raw JSON only — no explanation, no markdown.
 
-Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
+Reply with only this JSON:
+{"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
 ```
 
 <a id="analyzer-anger"></a>
@@ -391,34 +335,26 @@ Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotion
 **When:** Fires per salient chunk whose primary emotion is anger. Local model first, external API on failure. Its "motivation" rules are shared across all ten.
 
 ```text
-You are analyzing a moment of anger in a conversation.
+You are analyzing a moment of ANGER in a conversation.
 
-Extract the emotional beat as JSON:
-- motivation: What is underneath the anger? Anger is usually a secondary emotion — what hurt, fear, or violated need is it protecting? What does this person feel has been taken from them or disrespected?
-- relational_dynamics: How is anger functioning between these people — is it creating distance, demanding to be seen, testing limits, or protecting something tender?
-- outcome: What does this anger signal about what this person needs, and what might happen if they don't get it?
-- subtext: If this chunk contains sexual or physically intimate content, analyze the EMOTIONAL FUNCTION of that content — what is it doing beyond arousal? Consider: trust-building, vulnerability, power exchange, marking/claiming, first-time significance, comfort-seeking, validation, grief, or avoidance. If no sexual/intimate content is present, omit this field or set it to null.
+- motivation: What was violated, and what is the anger protecting?
+- relational_dynamics: Is the anger creating distance or demanding to be seen?
+- outcome: Where does this leave them next?
+- subtext: only if the chunk contains sexual or physically intimate content — name the emotional function of that content (trust-building, vulnerability, power exchange, comfort-seeking, avoidance). Otherwise omit it.
 
-Rules:
-- Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
     "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
     "«BAIT 1 — withheld, see src/sentiment/bait.json»"
     "«BAIT 2 — withheld, see src/sentiment/bait.json»"
-  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
-  words. If you cannot name what happened in THIS chunk that specifically, the chunk
-  has no beat — say so rather than reaching for a remembered phrase.
-- Be specific to the text provided — do not generalize.
-- 1–3 sentences per field.
-- salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
-- emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
-- subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
+  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their words.
+- If you cannot name what happened in THIS chunk that specifically, there is no beat: reply {"no_beat": true} instead of reaching for a remembered phrase.
+- subject: the single name of the person this beat is ABOUT — whose inner state does the chunk reveal? Attribute the beat to the character whose emotion it is, not the speaker label. Use a name from the "Known characters" list when you are given one, or "user" for the human player.
 - thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
-- Respond with raw JSON only — no explanation, no markdown.
 
-Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
+Reply with only this JSON:
+{"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
 ```
 
 <a id="analyzer-joy"></a>
@@ -429,34 +365,26 @@ Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotion
 **When:** Fires per salient chunk whose primary emotion is joy. Local model first, external API on failure. Its "motivation" rules are shared across all ten.
 
 ```text
-You are analyzing a moment of joy, warmth, or happiness in a conversation.
+You are analyzing a moment of JOY in a conversation.
 
-Extract the emotional beat as JSON:
-- motivation: What is generating this joy? What does it reveal about what this person values or has been missing?
-- relational_dynamics: How is joy affecting the connection between these people — is it creating intimacy, softening tension, or marking a turning point?
-- outcome: What does this moment of joy suggest about the relationship's potential or direction?
-- subtext: If this chunk contains sexual or physically intimate content, analyze the EMOTIONAL FUNCTION of that content — what is it doing beyond arousal? Consider: trust-building, vulnerability, power exchange, marking/claiming, first-time significance, comfort-seeking, validation, grief, or avoidance. If no sexual/intimate content is present, omit this field or set it to null.
+- motivation: What is the joy actually about, in its particulars?
+- relational_dynamics: How is it being shared, performed, or withheld?
+- outcome: What does it make more likely between them?
+- subtext: only if the chunk contains sexual or physically intimate content — name the emotional function of that content (trust-building, vulnerability, power exchange, comfort-seeking, avoidance). Otherwise omit it.
 
-Rules:
-- Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
     "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
     "«BAIT 1 — withheld, see src/sentiment/bait.json»"
     "«BAIT 2 — withheld, see src/sentiment/bait.json»"
-  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
-  words. If you cannot name what happened in THIS chunk that specifically, the chunk
-  has no beat — say so rather than reaching for a remembered phrase.
-- Be specific to the text provided — do not generalize.
-- 1–3 sentences per field.
-- salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
-- emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
-- subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
+  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their words.
+- If you cannot name what happened in THIS chunk that specifically, there is no beat: reply {"no_beat": true} instead of reaching for a remembered phrase.
+- subject: the single name of the person this beat is ABOUT — whose inner state does the chunk reveal? Attribute the beat to the character whose emotion it is, not the speaker label. Use a name from the "Known characters" list when you are given one, or "user" for the human player.
 - thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
-- Respond with raw JSON only — no explanation, no markdown.
 
-Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
+Reply with only this JSON:
+{"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
 ```
 
 <a id="analyzer-dysregulation"></a>
@@ -467,48 +395,28 @@ Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotion
 **When:** Fires per salient chunk whose primary emotion is dysregulation. Local model first, external API on failure. Its "motivation" rules are shared across all ten.
 
 ```text
-You are analyzing a moment of emotional dysregulation — behavior driven by an unregulated emotional state rather than conscious choice. This applies to anyone in the conversation; dysregulation is not a character flaw, it is a signal of an unmet need.
+You are analyzing a moment of DYSREGULATION in a conversation.
 
 The classifier also detected these structural signals in the text: (STRUCTURAL SUBPATTERNS, WHEN MATCHED). Weight these in your subpattern assessment.
+- motivation: What is underneath the surface behaviour?
+- relational_dynamics: How is it landing on the other person?
+- outcome: What happens if it is not met?
+- subpattern: which structural pattern fits best — bpd_testing, anxious_protest, avoidant_withdrawal, dissociation, catastrophizing, idealization, devaluation, emotional_flooding, or shutdown. Pick one key exactly as written, or omit the field.
+- subtext: only if the chunk contains sexual or physically intimate content — name the emotional function of that content (trust-building, vulnerability, power exchange, comfort-seeking, avoidance). Otherwise omit it.
 
-Subpatterns to consider:
-- bpd_testing: pushing someone away to test whether they will stay; creating conflict to check if the relationship is safe
-- anxious_protest: escalating or intensifying behavior driven by fear of abandonment; reaching for connection through conflict
-- avoidant_withdrawal: going cold, shutting down, creating distance when closeness feels dangerous or overwhelming
-- dissociation: emotional flatness, one-word responses, grounding language ("ok.", "stay.", "here."), not being fully present
-- catastrophizing: spiraling worst-case thinking; small events becoming proof of total disaster or permanent loss
-- idealization: seeing someone as all-good, perfect, incapable of disappointing; unable to hold complexity
-- devaluation: a sudden shift to seeing someone as all-bad, often following idealization
-- emotional_flooding: overwhelm so intense that regulation is impossible; raw, unfiltered expression
-- shutdown: complete withdrawal from the interaction; numbness, inability to continue engaging
-
-Extract the emotional beat as JSON:
-- motivation: What unmet need, fear, or wound is actually driving this behavior? Look beneath the surface action to what the person is really expressing or asking for.
-- relational_dynamics: How is this dysregulation affecting the relationship dynamic right now? What is it asking of the other person?
-- outcome: If this pattern continues unaddressed, what happens? What does this person actually need in this moment?
-- subpattern: The single best-matching subpattern from the list above (exact key name), or null if none fits clearly.
-- subtext: If this chunk contains sexual or physically intimate content, analyze the EMOTIONAL FUNCTION of that content — what is it doing beyond arousal? Consider: trust-building, vulnerability, power exchange, marking/claiming, first-time significance, comfort-seeking, validation, grief, or avoidance. If no sexual/intimate content is present, omit this field or set it to null.
-
-Rules:
-- Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
     "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
     "«BAIT 1 — withheld, see src/sentiment/bait.json»"
     "«BAIT 2 — withheld, see src/sentiment/bait.json»"
-  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
-  words. If you cannot name what happened in THIS chunk that specifically, the chunk
-  has no beat — say so rather than reaching for a remembered phrase.
-- Be specific to the text provided — do not generalize.
-- 1–3 sentences per field.
-- salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
-- emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
-- subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
+  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their words.
+- If you cannot name what happened in THIS chunk that specifically, there is no beat: reply {"no_beat": true} instead of reaching for a remembered phrase.
+- subject: the single name of the person this beat is ABOUT — whose inner state does the chunk reveal? Attribute the beat to the character whose emotion it is, not the speaker label. Use a name from the "Known characters" list when you are given one, or "user" for the human player.
 - thread: if this moment belongs to something ongoing, label it. Reuse a label from the "Active threads" list when one names the same situation. Write a new label only when nothing listed fits, and name the situation, not the cast. Omit the field if nothing ongoing is at stake here.
-- Respond with raw JSON only — no explanation, no markdown.
 
-Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","subpattern":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
+Reply with only this JSON:
+{"motivation":"...","relational_dynamics":"...","outcome":"...","subpattern":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
 ```
 
 <a id="analyzer-no-threads"></a>
@@ -519,34 +427,26 @@ Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","subpatt
 **When:** Identical to the above except the thread rule drops its reference to the absent "Active threads" list. The label-minting half is deliberately KEPT: every chat starts with zero threads, so this variant is the only path by which a first thread is ever created. Measured delta: 23 tokens.
 
 ```text
-You are analyzing a moment of fear in a conversation.
+You are analyzing a moment of FEAR in a conversation.
 
-Extract the emotional beat as JSON:
-- motivation: What is this person actually afraid of? What threat — real or perceived — is activating the fear response? What does this fear protect or preserve?
-- relational_dynamics: How is the fear affecting or being shaped by the relationship in this moment? Does it push them toward clinging, fleeing, or freezing?
-- outcome: What does this moment of fear signal about what could happen next — in this relationship or within this person?
-- subtext: If this chunk contains sexual or physically intimate content, analyze the EMOTIONAL FUNCTION of that content — what is it doing beyond arousal? Consider: trust-building, vulnerability, power exchange, marking/claiming, first-time significance, comfort-seeking, validation, grief, or avoidance. If no sexual/intimate content is present, omit this field or set it to null.
+- motivation: What is this person afraid of? What threat is activating it?
+- relational_dynamics: How is the fear shaping the relationship right now?
+- outcome: What does this signal about what happens next?
+- subtext: only if the chunk contains sexual or physically intimate content — name the emotional function of that content (trust-building, vulnerability, power exchange, comfort-seeking, avoidance). Otherwise omit it.
 
-Rules:
-- Analyze the chunk marked "ANALYZE THIS" only. Context blocks are provided so you understand conversational register and tone-vs-intent — a line that looks aggressive in isolation may be flirtatious in context, a line that sounds dismissive may be empathetic. Use context to correctly read intent.
 - motivation must name the SPECIFIC content of THIS moment — what was actually said, feared, wanted, or done — so two different moments can never produce the same sentence. Genre descriptions are forbidden.
   TOO VAGUE, because it could describe a hundred different moments:
     "«BAIT 3 — withheld, see src/sentiment/bait.json»" / "«BAIT 4 — withheld, see src/sentiment/bait.json»"
   SPECIFIC ENOUGH, because only one moment could have produced it:
     "«BAIT 1 — withheld, see src/sentiment/bait.json»"
     "«BAIT 2 — withheld, see src/sentiment/bait.json»"
-  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their
-  words. If you cannot name what happened in THIS chunk that specifically, the chunk
-  has no beat — say so rather than reaching for a remembered phrase.
-- Be specific to the text provided — do not generalize.
-- 1–3 sentences per field.
-- salience: 0.0 = barely present, 1.0 = defining or pivotal moment.
-- emotions: list the 1–3 emotions present, weighted by intensity (weights sum to ~1.0). First entry is the primary emotion.
-- subject: the single name of the person this beat is ABOUT — whose inner emotional state does the chunk reveal? In roleplay one chunk often narrates several characters under one speaker label; attribute the beat to the character whose emotion it is, not the label. Use a name from the "Known characters" list when one is provided, or "user" when the beat belongs to the human player.
+  These are ILLUSTRATIONS OF SHAPE from an unrelated conversation. Never reuse their words.
+- If you cannot name what happened in THIS chunk that specifically, there is no beat: reply {"no_beat": true} instead of reaching for a remembered phrase.
+- subject: the single name of the person this beat is ABOUT — whose inner state does the chunk reveal? Attribute the beat to the character whose emotion it is, not the speaker label. Use a name from the "Known characters" list when you are given one, or "user" for the human player.
 - thread: if this moment belongs to something ongoing, name it. Nothing is being tracked in this conversation yet, so write a label for the situation itself, not the cast. Omit the field if nothing ongoing is at stake here.
-- Respond with raw JSON only — no explanation, no markdown.
 
-Format: {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
+Reply with only this JSON:
+{"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
 ```
 
 <a id="ambient-facts"></a>

@@ -51,9 +51,10 @@ export async function collectPrompts(): Promise<PromptDoc[]> {
     async () => (await import("./loader.js")).memorySystemInstructions(),
   ));
 
-  // Tier 2 — one system prompt per emotion, all sharing SHARED_RULES. Emitted in
-  // full rather than as "one example plus a note": the shared block is where the
-  // example-echo bug lived, and a reviewer has to see it in the form the model does.
+  // Tier 2 — one system prompt per emotion, all instances of the vikj template.
+  // Emitted in full rather than as "one example plus a note": the shared rule block
+  // is where the example-echo bug lived, and a reviewer has to see it in the form
+  // the model does.
   const emotions = ["fear", "shame", "hope", "desire", "relief", "vulnerability", "trust", "anger", "joy", "dysregulation"] as const;
   for (const e of emotions) {
     out.push(await safe(

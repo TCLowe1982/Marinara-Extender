@@ -163,19 +163,44 @@ Reply with only this JSON:
 {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0}],"salience":0.0,"subject":"..."}`;
 }
 
-// LONG = the real shipped system prompt, with only the bait block swapped.
+// LONG = the pre-vikj shipped system prompt, with only the bait block swapped.
+//
+// HISTORICAL AS OF 2026-08-20: the vikj rewrite shipped and the LONG template no
+// longer exists in the code, so the five-arm v2 mode aborts here by design. The
+// question v2 existed to answer (short-vs-long, bait ladder) is decided and
+// sealed; --v3 (challenger machinery) is the living mode. Reconstructing LONG
+// from git to re-run v2 would be re-litigating a sealed verdict.
 function long(emotion, bait) {
   const shipped = buildSystemPrompt(emotion, []);
   if (!shipped.includes(OFF_PLANET)) {
     console.error("ABORT — the shipped prompt no longer contains the off-planet block verbatim.");
-    console.error("The LONG arms swap that block by exact match; a drift here would silently");
-    console.error("produce two identical arms and a meaningless comparison.");
+    console.error("(Expected post-vikj: the LONG template is gone. Use --v3; v2's question is sealed.)");
     process.exit(1);
   }
   return shipped.replace(OFF_PLANET, bait);
 }
 
-const ARMS = {
+// ── v3: challenger vs champion (vikj §7, the sealed acceptance path) ─────────
+//
+// CHAMPION is SHORT+off-planet exactly as it won s6cu — same builder, same bait
+// block, verbatim. CHALLENGER is the REAL production assembly: buildSystemPrompt
+// with the challenger flag, hasThreads=false because the bench user prompt sends
+// no Active-threads block, so NO_LIST is the honest variant. A bench-local copy
+// of the draft would drift from what ships; the flag guarantees the thing
+// measured is the thing deployed (the pifl lesson, applied to the bench itself).
+//
+// The challenger's own bait is read from bait.json — the live, registered,
+// freshly rotated warrants — and joins the x-echo universe.
+const V3 = process.argv.includes("--v3");
+const LIVE_BAIT = JSON.parse(await readFile(new URL("../src/sentiment/bait.json", import.meta.url), "utf8"));
+const LIVE_BAIT_EX = [...LIVE_BAIT.specific, ...LIVE_BAIT.vague].map((e) => e.text);
+
+const ARMS = V3 ? {
+  "CHAMPION":   (e) => short(e, OFF_PLANET),
+  // Post-flip: the challenger IS buildSystemPrompt. hasThreads=false because the
+  // bench user prompt sends no Active-threads block, so NO_LIST is honest.
+  "CHALLENGER": (e) => buildSystemPrompt(e, [], false),
+} : {
   "LONG+in-domain":   (e) => long(e, IN_DOMAIN),
   "LONG+off-planet":  (e) => long(e, OFF_PLANET),
   "SHORT+no-example": (e) => short(e, NO_EXAMPLE),
@@ -197,14 +222,17 @@ const VAGUE_EX = [
   "exposes her personal fear",
   "reveals her vulnerability and desire for connection",
 ];
-const OWN = {
+const OWN = V3 ? {
+  "CHAMPION":   [...OFF_PLANET_EX, ...VAGUE_EX],
+  "CHALLENGER": LIVE_BAIT_EX,
+} : {
   "LONG+in-domain":   [...IN_DOMAIN_EX, ...VAGUE_EX],
   "LONG+off-planet":  [...OFF_PLANET_EX, ...VAGUE_EX],
   "SHORT+no-example": [],
   "SHORT+off-planet": [...OFF_PLANET_EX, ...VAGUE_EX],
   "SHORT+in-domain":  [...IN_DOMAIN_EX, ...VAGUE_EX],
 };
-const ALL_EXAMPLES = [...new Set([...IN_DOMAIN_EX, ...OFF_PLANET_EX, ...VAGUE_EX])];
+const ALL_EXAMPLES = [...new Set([...IN_DOMAIN_EX, ...OFF_PLANET_EX, ...VAGUE_EX, ...(V3 ? LIVE_BAIT_EX : [])])];
 
 const BOILERPLATE = [
   /^the speaker is (exposing|expressing|revealing|showing|demonstrating)/i,
@@ -312,7 +340,7 @@ console.log(`chunk length: min ${chunks[0]?.len} · median ${chunks[Math.floor(c
 const results = {};
 for (const arm of armNames) {
   const build = ARMS[arm];
-  const r = { n: 0, noBeat: 0, declined: 0, selfEcho: 0, crossEcho: 0, boiler: 0, grounding: [], motivations: [], sysTokens: 0, samples: [] };
+  const r = { n: 0, noBeat: 0, declined: 0, selfEcho: 0, crossEcho: 0, boiler: 0, grounding: [], motivations: [], sysTokens: 0, samples: [], threads: 0 };
   for (const ch of chunks) {
     const sys = build(ch.emotion);
     r.sysTokens += Math.round(sys.length / 4);
@@ -330,6 +358,12 @@ for (const arm of armNames) {
     if (OWN[arm].length && echoesPhrases(m, OWN[arm])) { r.selfEcho++; r.samples.push(m); }
     if (echoesPhrases(m, ALL_EXAMPLES)) r.crossEcho++;
     if (BOILERPLATE.some((re) => re.test(m))) r.boiler++;
+    // v3: thread-emission rate, challenger-only telemetry (packet §7). Reported,
+    // never part of the ship test — pre-registered so it cannot be argued either
+    // way after the fact. Thread-label ECHO is n/a by construction: the thread
+    // rule ships no illustrations since n9bv pulled them, so there is nothing to
+    // echo — that absence is the n9bv win, not a measurement gap.
+    if (typeof out.thread === "string" && out.thread.trim()) r.threads++;
     const mw = words(m), cw = new Set(words(ch.text));
     r.grounding.push(mw.length ? mw.filter((w) => cw.has(w)).length / mw.length : 0);
     // Skeleton, not the raw string: two motivations differing only in grammatical
@@ -357,6 +391,26 @@ for (const arm of armNames) {
     String(g).padStart(11) +
     String(d).padStart(10),
   );
+}
+
+if (V3) {
+  const c = results["CHALLENGER"];
+  console.log(`\nCHALLENGER thread-emission rate: ${pct(c.threads, c.n)} (telemetry only — not part of the ship test)`);
+  console.log(`CHALLENGER thread-label echo: n/a — the thread rule ships no illustrations to echo (n9bv).`);
+  const champ = results["CHAMPION"], chal = results["CHALLENGER"];
+  const pt = (x, r2) => (r2.n ? (x / r2.n) * 100 : 0);
+  const echoDelta = pt(chal.crossEcho, chal) - pt(champ.crossEcho, champ);
+  const boilDelta = pt(chal.boiler, chal) - pt(champ.boiler, champ);
+  const validityDelta = pt(chal.noBeat, chal) - pt(champ.noBeat, champ);
+  console.log(`\n── SEALED RULE, applied mechanically (packet §7; noise = 2 points at n=60) ──`);
+  console.log(`  x-echo      challenger − champion : ${echoDelta.toFixed(1)} pts   (must be ≤ +2)`);
+  console.log(`  boilerplate challenger − champion : ${boilDelta.toFixed(1)} pts   (must be ≤ +2)`);
+  // "JSON validity does not drop a single point" is ABSOLUTE in the sealed rule —
+  // the 2-point noise band applies to echo and boilerplate only. One extra invalid
+  // output at n=60 is 1.7 points and fails. Declines are counted apart and free.
+  console.log(`  no-beat     challenger − champion : ${validityDelta.toFixed(1)} pts   (sealed: must be ≤ 0 — no noise band on validity)`);
+  const ships = echoDelta <= 2 && boilDelta <= 2 && validityDelta <= 1e-9;
+  console.log(`  VERDICT: ${ships ? "SHIPS" : "DOES NOT SHIP"}`);
 }
 
 console.log("\nno-beat   = UNUSABLE output — unparseable, or missing a required field. This is the validity number.");

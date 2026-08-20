@@ -1,0 +1,38 @@
+model dolphin3:8b · 60 chunks · 2 arms · 120 calls
+quarantine: POLLER=0 · sidecar not reachable
+floor in force: min_chunk_tokens=2
+chunk length: min 9 · median 1041 · max 5508
+
+CHAMPION done
+CHALLENGER done
+
+arm                sysTok  no-beat  declined  self-echo  x-echo  boilerplate  grounding  distinct
+CHAMPION              302       2%        0%        12%     12%           3%        33%       93%
+CHALLENGER            517       0%        0%         0%      0%           0%        31%       97%
+
+CHALLENGER thread-emission rate: 55% (telemetry only — not part of the ship test)
+CHALLENGER thread-label echo: n/a — the thread rule ships no illustrations to echo (n9bv).
+
+── SEALED RULE, applied mechanically (packet §7; noise = 2 points at n=60) ──
+  x-echo      challenger − champion : -11.7 pts   (must be ≤ +2)
+  boilerplate challenger − champion : -3.3 pts   (must be ≤ +2)
+  no-beat     challenger − champion : -1.7 pts   (sealed: must be ≤ 0 — no noise band on validity)
+  VERDICT: SHIPS
+
+no-beat   = UNUSABLE output — unparseable, or missing a required field. This is the validity number.
+declined  = legal {"no_beat":true}. Obeying the instruction, NOT a parse failure. Never counted as invalid.
+self-echo = motivation reproduces THIS arm's own bait (n/a for the baseline, which has none)
+x-echo    = reproduces ANY arm's bait — the number comparable across all five
+grounding = share of the motivation's content words present in the chunk (higher better)
+distinct  = unique motivation SKELETONS / total (the rule's own claim, measured)
+
+Scored with echoesPhrases() from analyzer.ts — the shipped guard's matcher.
+
+CHAMPION — self-echo samples:
+   "The subject insists that the boat was green, not blue, and will not let this fact go unacknowledged."
+   "insists the boat was green, not blue, and will not let it go"
+   "insists the boat was green, not blue, and will not let it go"
+
+QUARANTINE CHECK — beats created since this run began that echo an arm's bait: 0
+
+raw: D:\Entertainment\Wip\Projects\MarinaraExtender\memory-extender\bench-v2-2026-08-20T03-49-07-508Z.json

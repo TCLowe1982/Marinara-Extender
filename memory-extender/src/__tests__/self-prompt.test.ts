@@ -55,9 +55,13 @@ describe("detectSelfPrompt", () => {
   });
 
   it("catches a prompt fragment pasted mid-conversation", () => {
+    // The fragment must be a line the CURRENT prompt actually contains —
+    // signatures derive from the live build, so when the prompt is rewritten
+    // (vikj, 2026-08-20) a fixture quoting the retired text goes correctly
+    // undetected and the test, not the detector, is what went stale.
     const pasted =
       "ok here's what it currently says, tell me if this reads right:\n" +
-      "- Respond with raw JSON only — no explanation, no markdown.\n" +
+      "- If you cannot name what happened in THIS chunk that specifically, there is no beat: reply {\"no_beat\": true} instead of reaching for a remembered phrase.\n" +
       "does that seem too blunt to you?";
     expect(detectSelfPrompt(pasted)).not.toBeNull();
   });

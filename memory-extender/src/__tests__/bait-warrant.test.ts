@@ -49,11 +49,12 @@ function illustrationsIn(prompt: string): string[] {
  *
  * This list must only ever SHRINK. Adding to it is filing a bug, not silencing one.
  */
-const KNOWN_UNCOVERED = new Set([
-  "Porsche test drive",
-  "jurisprudence soft launch",
-  "the Hargrove investigation",
-]);
+// EMPTIED 2026-08-20 (vikj ship): the thread rule ships no illustrations at all —
+// "name the situation, not the cast" states the constraint instead of demonstrating
+// it. With the labels out of every built prompt, keeping them here would only mask
+// a future re-introduction. If a thread illustration ever returns, it arrives with
+// its own ledger and guard, not with an exemption.
+const KNOWN_UNCOVERED = new Set<string>([]);
 
 const EMOTIONS = [
   "fear", "shame", "hope", "desire", "relief",
@@ -66,6 +67,14 @@ describe("every prompt illustration has an arrest warrant", () => {
       const found = illustrationsIn(buildSystemPrompt(emotion, []));
       const uncovered = found.filter((ex) => !echoesAnExample(ex) && !KNOWN_UNCOVERED.has(ex));
       expect(uncovered, `uncovered bait in the ${emotion} prompt — register the skeleton in PROMPT_EXAMPLE_ECHOES in THIS commit`).toEqual([]);
+    });
+
+    // Both thread variants build distinct prompts (NO_LIST is the cold-start
+    // path); an illustration must not hide in the one the default misses.
+    it(`${emotion}: the NO_LIST variant ships no uncovered illustration either`, () => {
+      const found = illustrationsIn(buildSystemPrompt(emotion, [], false));
+      const uncovered = found.filter((ex) => !echoesAnExample(ex) && !KNOWN_UNCOVERED.has(ex));
+      expect(uncovered, `uncovered bait in the ${emotion} NO_LIST prompt`).toEqual([]);
     });
   }
 

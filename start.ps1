@@ -9,6 +9,15 @@
 $ErrorActionPreference = "SilentlyContinue"
 $scriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sidecarDir = Join-Path $scriptDir "memory-extender"
+
+# NAME THE WINDOWS (MarinaraExtender-n24d). This script opens TWO consoles -- this
+# one and the sidecar worker below -- and neither used to say what it was. The
+# watchdog inherited the host default ("Windows PowerShell") and the worker got
+# renamed to "npm start" by npm. The Marinara Engine ALSO runs npm, so its window
+# carried the identical label, and telling the two apart took a process-tree walk
+# and a port-ownership lookup. A window that cannot say what it is is a window
+# somebody eventually closes at the wrong moment.
+try { $Host.UI.RawUI.WindowTitle = "Marinara Extender - console" } catch {}
 $OLLAMA_URL   = "http://127.0.0.1:11434"
 $SIDECAR_URL  = "http://127.0.0.1:3001"
 $SIDECAR_PORT = 3001
@@ -150,7 +159,13 @@ function Start-Sidecar {
     # to sidestep nested-quoting breakage. $sidecarDir / $logPath / $RunCmd are
     # interpolated now; the backtick-escaped vars ($_, $log) run in the child.
     $logPath = Join-Path $sidecarDir "logs\sidecar.log"
-    $worker = "`$ErrorActionPreference='SilentlyContinue'; Set-Location '$sidecarDir'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; `$log='$logPath'; if(-not (Test-Path (Split-Path `$log))){New-Item -ItemType Directory (Split-Path `$log)|Out-Null}; Add-Content -Path `$log -Value ('===== session start '+(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')+' =====') -Encoding UTF8; cmd /c 'npm.cmd $script:RunCmd 2>&1' | ForEach-Object { `$_; Add-Content -Path `$log -Value `$_ -Encoding UTF8 }; Write-Host ''; Write-Host 'Sidecar stopped. You can close this window. Log: memory-extender\logs\sidecar.log'"
+    # The title is set TWICE on purpose (n24d). npm renames the console to
+    # "npm start" when it launches the script, so a title set only up front is
+    # clobbered a second later -- and "npm start" is exactly the label the Engine's
+    # window also wears. Setting it again on the first line of output lands AFTER
+    # npm's rename and sticks. The up-front set covers the seconds before then.
+    $wTitle = "Marinara Extender - sidecar log"
+    $worker = "`$ErrorActionPreference='SilentlyContinue'; Set-Location '$sidecarDir'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; try{`$Host.UI.RawUI.WindowTitle='$wTitle'}catch{}; `$log='$logPath'; if(-not (Test-Path (Split-Path `$log))){New-Item -ItemType Directory (Split-Path `$log)|Out-Null}; Add-Content -Path `$log -Value ('===== session start '+(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')+' =====') -Encoding UTF8; cmd /c 'npm.cmd $script:RunCmd 2>&1' | ForEach-Object { if(-not `$titled){ try{`$Host.UI.RawUI.WindowTitle='$wTitle'}catch{}; `$titled=`$true }; `$_; Add-Content -Path `$log -Value `$_ -Encoding UTF8 }; Write-Host ''; Write-Host 'Sidecar stopped. You can close this window. Log: memory-extender\logs\sidecar.log'"
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($worker))
     $script:SidecarProc = Start-Process "powershell.exe" `
         -ArgumentList "-NoLogo","-ExecutionPolicy","Bypass","-EncodedCommand",$enc `

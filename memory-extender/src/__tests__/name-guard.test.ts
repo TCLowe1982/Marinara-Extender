@@ -13,7 +13,7 @@
 // asymmetry is why the guard stands down entirely when it cannot load its exemptions.
 
 import { describe, it, expect } from "vitest";
-import { stripInventedNames } from "../sentiment/name-guard.js";
+import { stripInventedNames, stripNamed } from "../sentiment/name-guard.js";
 
 // The exemptions a live call would carry: the character, the user, roster names.
 const EXEMPT = ["Dr. Mari Zielińska", "Mari", "Priya Chandrasekaran", "TC Lowe", "Thomas"];
@@ -139,5 +139,50 @@ describe("stripInventedNames — standing down", () => {
 
   it("handles empty input without throwing", () => {
     expect(stripInventedNames("", "src", EXEMPT).text).toBe("");
+  });
+});
+
+// THE ASSEMBLED-TEXT HAZARD (v6tw).
+//
+// stripInventedNames may only judge RAW MODEL FIELDS. Fed an assembled entry body it
+// convicts the structural labels — "Emotion:", "Motivation:", "Relational dynamics:",
+// "Outcome:" are all capitalised, absent from the source, and not sentence-starters.
+//
+// This is not hypothetical: the first dry run of scripts/repair-epf4-names.mjs did
+// exactly this and would have rewritten "Emotion: vulnerability" to
+// "someone: vulnerability" across the repaired records. The dry run is the only
+// reason it was caught, and these two tests are why it stays caught.
+const ENTRY_BODY = [
+  "Emotion: vulnerability",
+  "",
+  "Motivation: Dr. Mari Zielińska reveals her vulnerability to Professor Alexei Kowalski after their intimate encounter.",
+  "",
+  "Relational dynamics: Mari asks for another kiss from Alexei.",
+  "",
+  "Outcome: This moment strengthens the bond between Mari and Alexei.",
+].join("\n");
+
+describe("assembled text", () => {
+  it("stripInventedNames DESTROYS structural labels — which is why it is raw-fields-only", () => {
+    // Asserted as a property of the function, not a wish. If someone ever makes this
+    // safe, this test fails and they can delete it deliberately.
+    const r = stripInventedNames(ENTRY_BODY, "your mouth takes mine", EXEMPT);
+    expect(r.removed).toContain("Emotion");
+    expect(r.text).toMatch(/someone: vulnerability/);
+  });
+
+  it("stripNamed carries out a verdict without forming one, so labels survive", () => {
+    // The guilty list comes from judging the RAW fields; here we only substitute.
+    const r = stripNamed(ENTRY_BODY, ["Alexei", "Kowalski"]);
+    expect(r.text).toMatch(/^Emotion: vulnerability/);
+    expect(r.text).toMatch(/Motivation: Dr\. Mari/);
+    expect(r.text).toMatch(/Relational dynamics:/);
+    expect(r.text).toMatch(/Outcome:/);
+    expect(r.text).not.toMatch(/Alexei|Kowalski/);
+    expect(r.removed).toContain("Alexei");
+  });
+
+  it("stripNamed with an empty verdict is a no-op", () => {
+    expect(stripNamed(ENTRY_BODY, []).text).toBe(ENTRY_BODY);
   });
 });

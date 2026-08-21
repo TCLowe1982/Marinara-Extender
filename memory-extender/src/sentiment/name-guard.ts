@@ -123,6 +123,31 @@ export interface NameGuardResult {
 }
 
 /**
+ * ⚠ RAW MODEL FIELDS ONLY. NEVER ASSEMBLED TEXT.
+ *
+ * `stripInventedNames` decides guilt with factSupport, which convicts any capitalised
+ * token absent from the source. That is correct for `motivation` — a sentence of
+ * prose — and catastrophic for anything carrying STRUCTURAL LABELS, because
+ * "Emotion:", "Motivation:", "Relational dynamics:" and "Outcome:" are capitalised,
+ * absent from the source, and not sentence-starters. Run it on an assembled entry
+ * body and you get "someone: vulnerability".
+ *
+ * Caught by the v6tw repair script's dry run, which fed it entry `content` and
+ * printed exactly that. The live path was never exposed — parseAnalysisJson sees the
+ * model's own fields, before the encoder assembles anything — but the hazard is one
+ * function call away for anyone repairing stored records.
+ *
+ * To clean text that ALREADY has a verdict — a summary or an entry body derived from
+ * a field you have judged — use `stripNamed` with the guilty list. It does the same
+ * span substitution and forms no opinion of its own.
+ */
+export function stripNamed(text: string, guiltyNames: string[]): NameGuardResult {
+  const s = String(text ?? "");
+  if (!s.trim() || guiltyNames.length === 0) return { text: s, removed: [] };
+  return substituteSpans(s, new Set(guiltyNames.map((n) => n.toLowerCase())));
+}
+
+/**
  * Replace proper nouns that appear in `field` but nowhere in `source` and nowhere in
  * the store's known names.
  *
@@ -142,7 +167,11 @@ export function stripInventedNames(
   const verdict = factSupport(text, source, exempt);
   if (verdict.unsupported.length === 0) return { text, removed: [] };
 
-  const guilty = new Set(verdict.unsupported.map((n) => n.toLowerCase()));
+  return substituteSpans(text, new Set(verdict.unsupported.map((n) => n.toLowerCase())));
+}
+
+/** The substitution itself. Forms no opinion — the caller supplies the verdict. */
+function substituteSpans(text: string, guilty: Set<string>): NameGuardResult {
   const removed: string[] = [];
 
   const out = text.replace(NAME_SPAN, (span) => {

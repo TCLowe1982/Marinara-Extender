@@ -298,6 +298,22 @@ The prompt's illustrations are **bait**: concrete enough to teach shape, absurd 
 - **`bait-tripwire.ts`** — fires at ingestion when a bait word appears in a chunk. Generated bait has **no escape hatch**: its words are corpus-absent by construction, so their appearance means contamination, not authenticity. The hatch stays open for human-plausible legacy phrases, where the premise still holds.
 - **`bait-rot.mjs`** — the inverse of `bait-warrant`: can the *store* now corroborate a warrant? Runs on `start.ps1` (non-blocking) and `.githooks/pre-push` (blocking). Exits non-zero on **current** rot only; failing forever on retired rot trains everyone to ignore it.
 
+## The invented-name guard (`name-guard.ts`, `epf4`)
+
+A *different* failure from echo, and a blocklist cannot reach it: **the model invents a partner when the chunk gives it none.** Measured over the 62 live beats on the vikj build, two intimate-source beats attributed the scene to "Professor Alexei Kowalski" and "Dr. Alexei Petrov" — names absent from their own source text. Two surnames for one invented person is the tell that this is filler generated on demand, not a wrong inference. The partner in those scenes is the **user**, and `motivation` becomes the companion entry's summary, so a fabricated person becomes retrievable and later reads as real.
+
+Runs in `parseAnalysisJson` beside `rejectAsEcho`, over `motivation`, `relationalDynamics` and `outcome`. It reuses `factSupport` (`fact-support.ts`) rather than re-deriving proper-noun extraction — that module already owns the sentence-starter trap, possessive stripping, the truncation-fragment rule and the 3-char stem match that stops "Polish" convicting "Poland".
+
+Three design rules, each the conservative direction:
+
+- **Neutralise, never reject.** The beat is a real moment and only the noun is false, so the unsupported name (with any honorific) is replaced by `someone`. Rejecting would destroy a real memory to remove one wrong word — the false-positive cost this project treats as strictly worse than the bug.
+- **Never infer the right answer.** It would be easy to substitute "the user", since the partner usually is. Inferring an identity is the behaviour being fixed. `4ghy` already ruled this shape: an unrecognised label leaves the record **unattributed**.
+- **Exemptions load inside the guard, not from callers.** A caller that forgot to pass them would convict *real* names — the dangerous, silent direction. `knownNames()` (memoised, 5 min) reads alias canonicals + aliases, the identity-map roster and the declared user identity, and returns **`null`** when it cannot read them. Null disables the guard entirely: an empty list would mean "nobody is real" and strip every name in the store.
+
+**Countable on purpose** (`5x5y`): every substitution appends to `data/name-guard.jsonl` with before/after. Subtext sat at 0.7% for months and read as working because nobody could put a denominator under it; a guard that fires silently is that failure wearing a fix.
+
+**Known deliberate miss**, pinned in `name-guard.test.ts`: an invented surname welded to a real given name inside one span ("Mari Kowalski") escapes, because the guard only collapses a span whose *every* capitalised token is unsupported. Widening that would delete true names to remove false ones. If the shape appears in the store, fix it with per-token substitution inside the span.
+
 **Single-channel exposure.** Bait appears in the system prompt and in no other artifact the pipeline can ingest. It lives in `src/sentiment/bait.json`, is never quoted in source, tests or docs, and is redacted from `docs/PROMPTS.md` and `bait-audit` output. **Rotation, not secrecy, is the defence** — anti-join costs seconds, so anything exposed is replaced.
 
 **When counting contamination, the contamination's own artifacts are the largest false-positive source.** Measured three times in one session, each inflated number looking like a scarier version of the true finding: whole-YAML scanning counted stored *field values* (1,100 vs 65); short bait fragments counted quotations (683); the pifl phrase matched 596 records alone (636 vs 34). Only source text — `text` on a beat, `content` on an entry — answers "was this ingested".

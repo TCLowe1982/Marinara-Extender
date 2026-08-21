@@ -25,6 +25,7 @@ import { fetchWithBackoff } from "../http.js";
 import { localUrl, localEnabled, localModel, externalUpstream, externalModel } from "../llm-config.js";
 import type { BeatAnalysis, ClassificationResult, Emotion, EmotionWeight } from "./types.js";
 import { detectBaitContamination, recordContamination, excerptAround } from "./bait-tripwire.js";
+import { guardField, knownNames } from "./name-guard.js";
 import { getDataDir } from "../storage.js";
 
 // ── JSON extraction (handles markdown-fenced responses) ────────────────────
@@ -76,7 +77,12 @@ export function isDeclineResponse(raw: string): boolean {
   return false;
 }
 
-function parseAnalysisJson(raw: string, sourceText: string): BeatAnalysis | null {
+function parseAnalysisJson(
+  raw: string,
+  sourceText: string,
+  exempt: string[] | null = null,
+  chatId?: string,
+): BeatAnalysis | null {
   const attempts = jsonAttempts(raw);
 
   for (const attempt of attempts) {
@@ -113,10 +119,15 @@ function parseAnalysisJson(raw: string, sourceText: string): BeatAnalysis | null
       // guarantee — a model under-instructed by a long chunk reaches for whatever
       // phrasing is nearest, and the prompt is nearest. This is the guarantee.
       if (rejectAsEcho(parsed.motivation, sourceText)) return null;
+      // epf4: the model invents a partner when the chunk gives it none, and the
+      // invented name lands in the entry summary the loader injects. Neutralised
+      // rather than rejected — the beat is a real moment, only the noun is false.
+      // Inert when `exempt` is null (exemptions unavailable): silence, not accusation.
+      const guard = (v: string, field: string) => guardField(v, sourceText, exempt, { field, chatId });
       return {
-        motivation:        parsed.motivation.trim(),
-        relationalDynamics: parsed.relational_dynamics.trim(),
-        outcome:           parsed.outcome.trim(),
+        motivation:        guard(parsed.motivation.trim(), "motivation"),
+        relationalDynamics: guard(parsed.relational_dynamics.trim(), "relationalDynamics"),
+        outcome:           guard(parsed.outcome.trim(), "outcome"),
         subpattern:        typeof parsed.subpattern === "string" ? parsed.subpattern : undefined,
         emotions:          parseEmotions(parsed.emotions),
         subtext:           typeof parsed.subtext === "string" && parsed.subtext.trim()
@@ -749,7 +760,10 @@ export async function analyzeChunk(
 
   // The chunk the model was asked about — the corroboration evidence for the echo
   // guard. Without it the guard cannot tell a copied example from a real utterance.
-  return parseAnalysisJson(raw, sourceText);
+  // The exemption list is loaded here (memoised) rather than threaded through every
+  // caller, because a caller that forgets it would convict REAL names — see epf4.
+  const exempt = await knownNames();
+  return parseAnalysisJson(raw, sourceText, exempt, extras?.chatId);
 }
 
 export interface AnalyzedBeat {

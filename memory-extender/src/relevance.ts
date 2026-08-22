@@ -81,7 +81,23 @@ export function weightedTerms(text: string, skipFirstCapital: boolean): Map<stri
   const terms = new Map<string, number>();
   let seenWord = false;
   for (const rawToken of text.split(/\s+/)) {
-    const bare = rawToken.replace(/[^\p{L}\p{N}]/gu, "");
+    // STRIP THE POSSESSIVE FIRST (oxmv). Removing punctuation outright welds the
+    // possessive s onto the name — "Thomas's" became "thomass" — while tokenize(),
+    // which handles the CUE side, replaces punctuation with a SPACE and so yields
+    // "thomas". The two sides disagreed, and a possessive name in a summary was
+    // therefore unmatchable by any cue naming that person: measured at 15.1% of live
+    // summaries, led by Thomas's (289), Mari's (251) and Priya's (150).
+    //
+    // It failed in the direction that looks like nothing: the entry simply did not
+    // surface, which reads as the model not recalling it. Neither function is wrong
+    // read alone — only the asymmetry between them is.
+    //
+    // fact-support.ts already carried this fix for the same reason (a stray "s"
+    // defeating an exemption check); relevance.ts never got it.
+    const bare = rawToken
+      .replace(/[^\p{L}\p{N}'’]/gu, "")   // keep apostrophes so the possessive is still visible
+      .replace(/['’]s$/u, "")             // Thomas's -> Thomas
+      .replace(/['’]/gu, "");             // drop any remaining apostrophes (o'brien -> obrien)
     if (!bare) continue;
     const lower = bare.toLowerCase();
     const isName = (!skipFirstCapital || seenWord) && /^\p{Lu}/u.test(bare);

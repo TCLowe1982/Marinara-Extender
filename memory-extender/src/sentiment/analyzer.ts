@@ -838,6 +838,11 @@ export async function enforceSubtext(
   if (analysis.subtext) { log("first-try"); return analysis; }
 
   const retryRaw = await call(systemPrompt, `${userPrompt}\n${SUBTEXT_RETRY}`);
+  // A null or empty retry is the same outcome as an unparseable one: no subtext, and
+  // the original beat is kept untouched. Handled explicitly because the seam's type
+  // is deliberately looser than callLlm's — a stub, or a future backend, may return
+  // nothing at all.
+  if (!retryRaw) { log("retry-failed"); return analysis; }
   const retry = parseAnalysisJson(retryRaw, sourceText, exempt, chatId);
   if (!retry) { log("retry-failed"); return analysis; }
   if (!retry.subtext) { log("declined"); return analysis; }

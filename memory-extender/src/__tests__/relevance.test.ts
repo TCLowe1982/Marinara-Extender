@@ -16,6 +16,7 @@ import {
   harvestBodyTerms,
   relevanceScore,
   summaryTerms,
+  weightedTerms,
   MAX_BODY_TERMS,
   PROPER_NOUN_WEIGHT,
 } from "../relevance.js";
@@ -167,5 +168,53 @@ describe("write-side / read-side round trip", () => {
     const once = harvestBodyTerms(body, summary);
     const twice = harvestBodyTerms(body, summary);
     expect(twice).toEqual(once);
+  });
+});
+
+// POSSESSIVE NAMES WERE UNMATCHABLE (MarinaraExtender-oxmv).
+//
+// The two halves of the scorer disagreed about apostrophes, and only the asymmetry
+// was wrong — each function read fine alone:
+//
+//   tokenize()       the CUE side:     "Thomas's" -> ["thomas", "s"]   (punctuation -> space)
+//   weightedTerms()  the SUMMARY side: "Thomas's" -> "thomass"         (punctuation -> nothing)
+//
+// So a summary naming someone possessively could never be reached by a cue naming
+// that person. Measured at 15.1% of live summaries — 289 "Thomas's" (the user), 251
+// "Mari's", 150 "Priya's" — and it failed in the direction that looks like nothing:
+// the entry just did not surface, which reads as the model not recalling it.
+describe("possessive names (oxmv)", () => {
+  it("scores a possessive name exactly like the plain form", () => {
+    const cue = "Do you remember Thomas?";
+    const possessive = relevanceScore("Becky is Thomas's sister", cue);
+    const plain = relevanceScore("Becky is the sister of Thomas", cue);
+    expect(possessive).toBeGreaterThan(0);
+    expect(possessive).toBeCloseTo(plain, 5);
+  });
+
+  it("handles the typographic apostrophe too", () => {
+    // Model output uses U+2019 far more often than the ASCII quote.
+    expect(relevanceScore("Mari\u2019s ruling on the matter", "what did Mari decide")).toBeGreaterThan(0);
+  });
+
+  it("still works with trailing punctuation on the token", () => {
+    expect(relevanceScore("It was Priya's, apparently.", "ask Priya about it")).toBeGreaterThan(0);
+  });
+
+  it("keeps the possessive name at NAME weight, not ordinary-word weight", () => {
+    // The whole point: it must come back as a name (2.5), not merely become
+    // matchable as a common word.
+    expect(weightedTerms("Becky is Thomas's sister", true).get("thomas")).toBe(PROPER_NOUN_WEIGHT);
+  });
+
+  it("does not mangle an internal apostrophe into a different word", () => {
+    // O'Brien must not silently become two tokens or lose its head.
+    const t = weightedTerms("the report came from O'Brien", false);
+    expect([...t.keys()]).toContain("obrien");
+  });
+
+  it("leaves a plural-s alone — only the POSSESSIVE is stripped", () => {
+    // "sisters" must not become "sister": that would merge distinct terms.
+    expect([...weightedTerms("she has two sisters", false).keys()]).toContain("sisters");
   });
 });

@@ -16,7 +16,16 @@
 #
 # Checks, in the order they fail cheapest-first:
 #   1. bait-rot   — a CURRENT warrant gone corroborable, or a live tripwire event
-#   2. tests      — includes bait-fixture and bait-tripwire property assertions
+#   2. typecheck  — tsc --noEmit
+#   3. tests      — includes bait-fixture and bait-tripwire property assertions
+#
+# WHY TYPECHECK IS HERE (2026-08-21). It was not, and a commit that does not compile
+# reached origin: vitest transpiles without checking types, so `npm test` passed a
+# `string | null` handed to a `string` parameter and the hook waved it through. The
+# break only surfaced on the next `npm run build`. Tests answer "does it behave";
+# only tsc answers "does it build", and pushing something that cannot build is worse
+# than pushing something that fails a test, because the failure lands on whoever
+# pulls next rather than on the author.
 #
 # Bypass with --no-verify only when you know why. If bait-rot is the thing failing,
 # the fix is a rotation, which takes seconds:
@@ -24,6 +33,12 @@
 
 set -e
 cd "$(dirname "$0")/../memory-extender" || exit 0
+
+# First, and deliberately ABOVE the dist guard below: typechecking needs no build
+# output, so it must not be skipped on a fresh clone.
+echo "pre-push: typecheck..."
+npx tsc --noEmit
+echo "  ok"
 
 if [ ! -d dist ]; then
   echo "pre-push: no dist/, skipping bait checks (run npm run build first)"

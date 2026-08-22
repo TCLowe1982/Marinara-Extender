@@ -26,6 +26,7 @@ import { localUrl, localEnabled, localModel, externalUpstream, externalModel } f
 import type { BeatAnalysis, ClassificationResult, Emotion, EmotionWeight } from "./types.js";
 import { detectBaitContamination, recordContamination, excerptAround } from "./bait-tripwire.js";
 import { guardField, knownNames } from "./name-guard.js";
+import { classifyIntimacy, recordSubtext, type SubtextOutcome } from "./intimacy.js";
 import { getDataDir } from "../storage.js";
 
 // ── JSON extraction (handles markdown-fenced responses) ────────────────────
@@ -586,6 +587,35 @@ const CHALLENGER_FIELDS: Record<Emotion, [string, string, string]> = {
 
 const CHALLENGER_SUBTEXT = `- subtext: only if the chunk contains sexual or physically intimate content — name the emotional function of that content (trust-building, vulnerability, power exchange, comfort-seeking, avoidance). Otherwise omit it.`;
 
+/**
+ * THE SECOND ASK (5x5y). Appended to the user prompt on ONE retry, when the intimacy
+ * detector says the chunk warrants a subtext and the first answer omitted it.
+ *
+ * It carries NO EXAMPLE, deliberately. The prompt law (pifl) is that examples are
+ * gravitational mass regardless of sign, and this instruction fires precisely when
+ * the model has already shown it has nothing to say — the moment it is most likely to
+ * reach for the nearest available phrasing. An illustration here would be echoed
+ * straight into the store, and it would be echoed into the one field we have no
+ * historical baseline for.
+ *
+ * THE ESCAPE HATCH IS LOAD-BEARING, not politeness. Enforcement whose only accepted
+ * answer is a filled field does not produce subtext, it produces INVENTED subtext —
+ * which is epf4 again, in a field created to hold a judgement. So a second refusal is
+ * an allowed outcome, and it is recorded rather than punished. What we are buying is
+ * a rate we can read, not a field that is never empty.
+ */
+const SUBTEXT_RETRY = `
+The chunk you just analyzed contains physically intimate content, and your answer omitted the subtext field.
+
+Answer again in the same JSON shape, and this time include subtext: name what the physical content is doing emotionally for these two people in THIS moment — what it builds, tests, asks for, or avoids.
+
+If the chunk genuinely does not show you that, omit the field again. Do not fill it with something plausible.`;
+
+/** Exposed for the prompt catalogue — every prompt this system sends must be readable. */
+export function subtextRetryInstruction(): string {
+  return SUBTEXT_RETRY.trim();
+}
+
 // The nine keys VERBATIM from the taxonomy the parser documents — the draft doc's
 // first revision listed five keys that do not exist, from memory, and was caught
 // by reading this file. Schema-from-memory is the exact failure the packet warns
@@ -763,7 +793,57 @@ export async function analyzeChunk(
   // The exemption list is loaded here (memoised) rather than threaded through every
   // caller, because a caller that forgets it would convict REAL names — see epf4.
   const exempt = await knownNames();
-  return parseAnalysisJson(raw, sourceText, exempt, extras?.chatId);
+  const analysis = parseAnalysisJson(raw, sourceText, exempt, extras?.chatId);
+  return enforceSubtext(analysis, sourceText, systemPrompt, userPrompt, exempt, extras?.chatId);
+}
+
+/**
+ * PROMPT ASKS, CODE ENFORCES (5x5y).
+ *
+ * The subtext field has been requested since May and emitted on 0.7% of the chunks
+ * that warrant one — 11 times in 1,574 — because nothing ever checked. An optional
+ * field an 8b model may silently skip is an advisory instruction, and this project
+ * has ruled that advisory guards do no work.
+ *
+ * One retry, never two: a model that has now declined twice is telling us something,
+ * and a third ask is how you talk a model into inventing. The original analysis is
+ * kept and only the subtext is GRAFTED on, because the first answer's motivation and
+ * outcome were fine — the retry exists to fill one gap, not to re-litigate the beat.
+ */
+export async function enforceSubtext(
+  analysis: BeatAnalysis | null,
+  sourceText: string,
+  systemPrompt: string,
+  userPrompt: string,
+  exempt: string[] | null,
+  chatId?: string,
+  // Test seam. Production passes nothing and gets the real model call; a test passes
+  // a stub and can assert HOW MANY TIMES it was called, which is the property that
+  // matters most here — "one retry, never two" is a rule about call count.
+  call: (system: string, user: string) => Promise<string | null> = callLlm,
+): Promise<BeatAnalysis | null> {
+  if (!analysis) return analysis;
+  const verdict = classifyIntimacy(sourceText);
+  if (!verdict.intimate) return analysis;
+
+  const markers = [...verdict.strong, ...verdict.weak].slice(0, 6);
+  const log = (outcome: SubtextOutcome) => recordSubtext(getDataDir(), {
+    at: new Date().toISOString(),
+    outcome,
+    markers,
+    chatId,
+    excerpt: sourceText.replace(/\s+/g, " ").slice(0, 160),
+  });
+
+  if (analysis.subtext) { log("first-try"); return analysis; }
+
+  const retryRaw = await call(systemPrompt, `${userPrompt}\n${SUBTEXT_RETRY}`);
+  const retry = parseAnalysisJson(retryRaw, sourceText, exempt, chatId);
+  if (!retry) { log("retry-failed"); return analysis; }
+  if (!retry.subtext) { log("declined"); return analysis; }
+
+  log("after-retry");
+  return { ...analysis, subtext: retry.subtext };
 }
 
 export interface AnalyzedBeat {

@@ -87,6 +87,17 @@ export async function collectPrompts(): Promise<PromptDoc[]> {
     async () => (await import("./sentiment/analyzer.js")).buildSystemPrompt("fear", [], false),
   ));
 
+  // The SECOND ask, and it is live text on a real fraction of turns rather than a
+  // hypothetical: it fires whenever the intimacy detector says a chunk warrants a
+  // subtext and the first answer omitted one. Emitted here because a prompt nobody
+  // can read is a prompt nobody reviews, which is the entire premise of this file.
+  out.push(await safe(
+    "analyzer-subtext-retry", "Tier 2 analyzer — the subtext retry",
+    "src/sentiment/analyzer.ts — SUBTEXT_RETRY",
+    "Appended to the user prompt on ONE retry, when scripts/intimacy-scan.mjs's detector says the chunk contains physically intimate content and the first answer omitted the subtext field. Never fires twice. A second refusal is an accepted outcome and is recorded to data/subtext-enforcement.jsonl rather than pressed further — enforcement whose only accepted answer is a filled field produces invented subtext, not subtext.",
+    async () => (await import("./sentiment/analyzer.js")).subtextRetryInstruction(),
+  ));
+
   out.push(await safe(
     "ambient-facts", "Tier 3 ambient facts (live turn)",
     "src/ambient.ts — SYSTEM_PROMPT",

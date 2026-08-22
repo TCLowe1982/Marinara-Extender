@@ -140,3 +140,42 @@ export function classifyIntimacy(text: string): IntimacyVerdict {
 export function isIntimate(text: string): boolean {
   return classifyIntimacy(text).intimate;
 }
+
+// ── The ledger ───────────────────────────────────────────────────────────────
+//
+// COUNTABLE FROM THE FIRST DAY, and this is the whole lesson of 5x5y rather than a
+// nicety. `subtext` sat at 0.7% for three months and read as working, because nobody
+// could put a denominator under it: there was no record of how many chunks WARRANTED
+// one, so "11 emissions" had nothing to be 11 out of. Enforcement that cannot be
+// measured would decay exactly the same way and nobody would notice again.
+//
+// Every REQUIRED case is written here with its outcome, so the rate is a division
+// rather than an argument: emitted / required, readable at any time.
+
+import { appendFileSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+
+export type SubtextOutcome = "first-try" | "after-retry" | "declined" | "retry-failed";
+
+export interface SubtextEvent {
+  at: string;
+  outcome: SubtextOutcome;
+  /** The markers that made this chunk count as intimate — the evidence for requiring. */
+  markers: string[];
+  chatId?: string;
+  excerpt?: string;
+}
+
+export function subtextLedgerPath(dataDir: string): string {
+  return join(dataDir, "subtext-enforcement.jsonl");
+}
+
+export function recordSubtext(dataDir: string, ev: SubtextEvent): void {
+  try {
+    const p = subtextLedgerPath(dataDir);
+    mkdirSync(dirname(p), { recursive: true });
+    appendFileSync(p, JSON.stringify(ev) + "\n", "utf8");
+  } catch {
+    // Swallowed: bookkeeping must never be able to fail an analysis.
+  }
+}

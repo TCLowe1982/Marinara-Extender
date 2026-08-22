@@ -12,7 +12,7 @@ up in review as readable prose rather than as a diff of string fragments.
 > They are withheld because this file gets pasted, and a pasted example lands in a
 > chat the sidecar ingests, which is how the previous pair rotted inside 48 hours.
 
-Build: `1.2.0+fabaa3d`
+Build: `1.2.0+ff6b0b1`
 
 | Prompt | Fires |
 |---|---|
@@ -28,6 +28,7 @@ Build: `1.2.0+fabaa3d`
 | [Tier 2 analyzer — joy](#analyzer-joy) | Fires per salient chunk whose primary emotion is joy. |
 | [Tier 2 analyzer — dysregulation](#analyzer-dysregulation) | Fires per salient chunk whose primary emotion is dysregulation. |
 | [Tier 2 analyzer — fear, with NO active threads](#analyzer-no-threads) | Identical to the above except the thread rule drops its reference to the absent "Active threads" list. |
+| [Tier 2 analyzer — the subtext retry](#analyzer-subtext-retry) | Appended to the user prompt on ONE retry, when scripts/intimacy-scan. |
 | [Tier 3 ambient facts (live turn)](#ambient-facts) | One batched call per turn over pre-filtered candidate sentences. |
 | [Scene facts (import)](#scene-facts) | Import path only. |
 | [Durability judge](#fact-judge) | Second pass over scene-fact candidates before anything reaches permanent memory. |
@@ -447,6 +448,21 @@ You are analyzing a moment of FEAR in a conversation.
 
 Reply with only this JSON:
 {"motivation":"...","relational_dynamics":"...","outcome":"...","emotions":[{"emotion":"<primary>","weight":0.0},{"emotion":"<secondary>","weight":0.0}],"subtext":null,"salience":0.0,"subject":"...","thread":null}
+```
+
+<a id="analyzer-subtext-retry"></a>
+
+## Tier 2 analyzer — the subtext retry
+
+**Source:** `src/sentiment/analyzer.ts — SUBTEXT_RETRY`  
+**When:** Appended to the user prompt on ONE retry, when scripts/intimacy-scan.mjs's detector says the chunk contains physically intimate content and the first answer omitted the subtext field. Never fires twice. A second refusal is an accepted outcome and is recorded to data/subtext-enforcement.jsonl rather than pressed further — enforcement whose only accepted answer is a filled field produces invented subtext, not subtext.
+
+```text
+The chunk you just analyzed contains physically intimate content, and your answer omitted the subtext field.
+
+Answer again in the same JSON shape, and this time include subtext: name what the physical content is doing emotionally for these two people in THIS moment — what it builds, tests, asks for, or avoids.
+
+If the chunk genuinely does not show you that, omit the field again. Do not fill it with something plausible.
 ```
 
 <a id="ambient-facts"></a>

@@ -314,6 +314,22 @@ Three design rules, each the conservative direction:
 
 **Known deliberate miss**, pinned in `name-guard.test.ts`: an invented surname welded to a real given name inside one span ("Mari Kowalski") escapes, because the guard only collapses a span whose *every* capitalised token is unsupported. Widening that would delete true names to remove false ones. If the shape appears in the store, fix it with per-token substitution inside the span.
 
+## Subtext enforcement (`intimacy.ts` + `enforceSubtext`, `5x5y`)
+
+**The field never worked.** `subtext` has been requested since May and was emitted on **11 of 1,574** beats whose own source is intimate — **0.7%**, peaking at 0.8% in June and never higher. It was not a regression and vikj did not break it: normalising by qualifying content per month shows no decay to explain. It was an **optional field that nothing enforced**, which is the advisory-guard failure with a longer fuse.
+
+> **Method warning, worth more than the fix.** The first diagnosis compared raw counts across months and reported a "7-week silent failure". Activity had collapsed at the same time (1,339 → 156 → 79 intimate beats), so "subtext stopped" and "the content stopped" predicted the same observation. **Normalise by exposure before attributing a change to a date** — see `bd memories count-vs-rate`. A near-zero base rate is especially dangerous, because every quiet period "confirms" the story.
+
+**The detector** (`classifyIntimacy`) is deliberately **high precision, low recall**, because the errors are asymmetric: a false positive demands a subtext for a chunk that has none, the model invents one, and the invention is filed as fact (`epf4`). A false negative just leaves today's behaviour. Nothing existing could be reused — the `desire` lexicon is about *wanting* and fires on a chunk about a sleep-debt ledger.
+
+- **STRONG markers decide; WEAK markers only inform.** Convicting on two weak markers was tried and dropped after measurement: it added 298 store-wide hits at ~40% precision (firing on "in bed talking about polyamory and GDPR", on pasted telemetry, on a director's stage note) to gain **3** true catches. Weak markers are still collected as evidence for diagnosing a wrong call.
+- Recall against the only ground truth available — beats where the model volunteered a subtext unprompted — is **12/17** on strong markers alone.
+- `scripts/intimacy-scan.mjs` measures it: `--weak-only` shows the risky class, `--near-miss` shows what recall costs. **Measure the eras separately** — pre-`pe4o`/`hjt9` beats are full of conversation *about* intimate fiction (pasted beat dumps, story planning, literary critique), so a whole-store precision number badly understates the live path.
+
+**The enforcement** runs after `parseAnalysisJson`: if the chunk is intimate and subtext is absent, **one** retry appends `SUBTEXT_RETRY` (readable at `/prompts`, reviewed 2026-08-21). Then the subtext is **grafted** onto the original analysis — the first answer's other fields were fine, and the retry exists to fill one gap, not re-litigate the beat.
+
+**A second refusal is an accepted outcome.** Enforcement whose only accepted answer is a filled field produces *invented* subtext, not subtext, so the instruction carries an explicit escape hatch and the miss is recorded instead. Every required case appends to `data/subtext-enforcement.jsonl` with outcome (`first-try` | `after-retry` | `declined` | `retry-failed`), the markers that triggered it, and an excerpt — so the rate is a division anyone can read. That ledger is the actual fix: the original failure survived three months because nobody could put a denominator under it.
+
 **Single-channel exposure.** Bait appears in the system prompt and in no other artifact the pipeline can ingest. It lives in `src/sentiment/bait.json`, is never quoted in source, tests or docs, and is redacted from `docs/PROMPTS.md` and `bait-audit` output. **Rotation, not secrecy, is the defence** — anti-join costs seconds, so anything exposed is replaced.
 
 **When counting contamination, the contamination's own artifacts are the largest false-positive source.** Measured three times in one session, each inflated number looking like a scarier version of the true finding: whole-YAML scanning counted stored *field values* (1,100 vs 65); short bait fragments counted quotations (683); the pifl phrase matched 596 records alone (636 vs 34). Only source text — `text` on a beat, `content` on an entry — answers "was this ingested".

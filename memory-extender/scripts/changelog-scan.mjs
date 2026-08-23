@@ -59,6 +59,7 @@ import { join } from "path";
 
 const { parse } = await import("yaml");
 const { getDataDir } = await import("../dist/storage.js");
+const { classifyChangelog } = await import("../dist/sentiment/changelog.js");
 
 const args = process.argv.slice(2);
 const flag = (n, d) => { const a = args.find((x) => x.startsWith(`--${n}=`)); return a ? a.split("=")[1] : d; };
@@ -76,16 +77,17 @@ const OPENERS_ONLY = args.includes("--openers-only");
 // longer decisive.
 // ---------------------------------------------------------------------------
 
+// openers, issueRefs and dialogueRate are NOT recomputed in this file — they come
+// from classifyChangelog(), the shipped detector. prompt-bench-v2's "ONE INSTRUMENT,
+// SHARED" rule applies to scans as much as to benches: a scan carrying its own copy
+// of the rule drifts from the guard, and then reports a store clean that production
+// would still fire on. What is defined below is only the reporting extras.
+
 const PERSON = /\b(i|me|my|mine|myself|you|your|yours|we|us|our|ours)\b/gi;
-// Sentence-initial changelog verbs. Counted, never decisive — see header.
-const OPENER = /(?:^|[.!?]\s+|\n\s*)(Added|Fixed|Changed|Removed|Improved|Updated|Refactored|Renamed|Deprecated|Introduced)\b/g;
 // Product/reference tokens: issue refs, versions, macros, tags, paths, file extensions.
+// Wider than the detector's own issue-ref rule on purpose — this one is a reading aid
+// in the report, not part of any verdict.
 const REFTOK = /(#\d{2,6})|(\bv?\d+\.\d+\.\d+\b)|(%[a-z_0-9]+%)|(\[[a-z]+:)|(\b[a-z0-9_-]+\.(?:png|jpe?g|js|ts|mjs|json|yaml|md)\b)|(\s(?:->|→)\s)/gi;
-// Net B on its own: an issue/PR reference. Narrower than REFTOK on purpose — version
-// strings and file paths are everywhere in this store's dev chatter, but a bare
-// "(#5225)" is release-note grammar and almost nothing else.
-const ISSUEREF = /#\d{3,6}\b/g;
-const DIALOGUE = /(["“”'])|(\?\s)|(\b(?:don'?t|can'?t|won'?t|i'?m|it'?s|that'?s|you'?re|didn'?t|isn'?t|let'?s)\b)|(\.\.\.)|(\b(?:said|asked|whispered|laughed|sighed)\b)/gi;
 
 const words = (s) => s.match(/[A-Za-z][A-Za-z'’-]*/g) ?? [];
 const count = (s, re) => (s.match(re) ?? []).length;
@@ -112,19 +114,23 @@ function features(text) {
   const n = w.length;
   if (!n) return null;
   const sentences = text.split(/[.!?]+\s/).filter((s) => s.trim().length > 0);
-  const openers = count(text, OPENER);
+  // The three signals any verdict rests on come FROM the shipped detector, so this
+  // scan and the guard cannot drift. `shipped` is what production would actually do.
+  const v = classifyChangelog(text);
   return {
     words: n,
     sentences: sentences.length,
-    openers,
-    issueRefs: count(text, ISSUEREF),               // NET B, independent of the verbs.
-    openerPer100w: (100 * openers) / n,
-    openerPerSent: openers / Math.max(1, sentences.length),
+    openers: v.openers,
+    issueRefs: v.issueRefs,                         // NET B, independent of the verbs.
+    dialogueRate: v.dialogueRate,
+    shipped: v.isChangelog,
+    shippedReason: v.reason,
+    openerPer100w: (100 * v.openers) / n,
+    openerPerSent: v.openers / Math.max(1, sentences.length),
     // Retained and printed, but no longer decisive — see the header. These are the
     // features mln9 predicted would work; they are kept so the falsification stays
     // visible in the output rather than only in this comment.
     personRate: count(text, PERSON) / n,
-    dialogueRate: count(text, DIALOGUE) / n,
     midCap: midCapDensity(text),
     refRate: count(text, REFTOK) / n,
     avgSentLen: n / Math.max(1, sentences.length),
@@ -273,7 +279,8 @@ function print(list, label) {
     console.log("");
     console.log(`[${r.score.toFixed(2)}] ${r.char}/${r.id}  ${r.created}  emotion=${r.emotion}  speaker=${JSON.stringify(r.speaker)}${r.retired ? "  RETIRED" : ""}`);
     console.log(`   nets=${netA(r) ? "A" : "-"}${netB(r) ? "B" : "-"} openers=${r.openers} issueRefs=${r.issueRefs} per100w=${r.openerPer100w.toFixed(2)} perSent=${r.openerPerSent.toFixed(2)} words=${r.words}`);
-    console.log(`   [mln9's predicted signals, kept visible] person=${r.personRate.toFixed(4)} dialogue=${r.dialogueRate.toFixed(4)} midCap=${r.midCap.toFixed(3)}`);
+    console.log(`   shipped verdict: ${r.shipped ? "FIRES" : "spared"} (${r.shippedReason})`);
+    console.log(`   [mln9's predicted signals, kept visible] person=${r.personRate.toFixed(4)} midCap=${r.midCap.toFixed(3)}`);
     console.log(`   ${r.excerpt}`);
   }
 }

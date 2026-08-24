@@ -47,6 +47,22 @@ $script:LastNodeWorkingSetMB = $null
 $script:LastNodeSampleAt = $null
 $script:SidecarStartedAt = $null
 
+# 3lru: the memory curve. The sample is already taken every 5s by
+# Measure-SidecarProcess; these govern how much of it reaches the log.
+#
+# MEM_LOG_INTERVAL 15 min -> ~96 lines/day, which the 15MB log will not notice.
+# MEM_STEP_MB 150 is deliberately well above ordinary jitter: the resting state is
+# 73-93 MB, so a 150 MB jump inside five seconds cannot be noise and is worth
+# interrupting for. Tune it DOWN only after reading what it catches at 150 —
+# starting sensitive would bury the real steps in chatter.
+$MEM_LOG_INTERVAL = 15
+$MEM_STEP_MB = 150
+$script:LastMemLogAt = $null
+# Same file the sidecar and watchdog already tee to, so the memory curve
+# interleaves with what the sidecar was DOING — which is the whole point of
+# logging the step: a jump is only diagnostic next to the line above it.
+$script:MemLogPath = Join-Path $PSScriptRoot "memory-extender\logs\sidecar.log"
+
 # Set by [D] detach, which leaves the server running on purpose. Every other way
 # out of this script - [Q], Ctrl+C, closing the window - takes the sidecar with
 # it, so "close everything for the night" is one action instead of two windows
@@ -250,15 +266,62 @@ function Measure-SidecarProcess {
     # much memory it holds, so the moment before a death is described rather
     # than guessed at. Cheap: two lookups every 5s. Never throws -- a diagnostic
     # that can take down the watchdog is worse than no diagnostic.
+    #
+    # 3lru: IT ALSO WRITES THE GROWTH CURVE NOW, because the sample was already
+    # being taken every 5 seconds and thrown away unless the process died. Reading
+    # memory only at death answered the wrong question -- median-at-death was 93 MB
+    # and looked reassuring, but a process observed live sat at 839 MB after 49
+    # minutes. Median-at-death measures HOW LONG PROCESSES LIVE, not how fast they
+    # grow. So sample against UPTIME.
+    #
+    # Two writers, because they answer different questions:
+    #   HEARTBEAT  every MEM_LOG_INTERVAL minutes -> the curve. Slow creep or flat?
+    #   STEP       an increase of >= MEM_STEP_MB between two samples 5s apart ->
+    #              names the OPERATION. A 500 MB jump inside five seconds is not a
+    #              leak in steady state, it is one thing retaining one large object,
+    #              and the timestamp is what lets it be matched against the log line
+    #              for whatever ran then.
+    # The step writer is the one that matters: a 73 MB floor against a 1.5 GB peak
+    # is the shape of per-operation retention, not of gradual creep.
     try {
         $conn = Get-NetTCPConnection -LocalPort $SIDECAR_PORT -State Listen -ErrorAction SilentlyContinue |
                 Select-Object -First 1
         if (-not $conn) { return }
         $p = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
         if (-not $p) { return }
+        $prevMB  = $script:LastNodeWorkingSetMB
+        $prevPid = $script:LastNodePid
         $script:LastNodePid = $p.Id
         $script:LastNodeWorkingSetMB = [math]::Round($p.WorkingSet64 / 1MB)
         $script:LastNodeSampleAt = Get-Date
+
+        # Uptime is the x-axis. Prefer the process's own start time over
+        # SidecarStartedAt: the launcher attaches to an ALREADY-RUNNING sidecar when
+        # the port is busy (Start-Sidecar's port guard), and in that case
+        # SidecarStartedAt is this watchdog's start, not the process's, which would
+        # report a 20-hour-old process as newborn.
+        $upMin = $null
+        try { $upMin = [math]::Round(((Get-Date) - $p.StartTime).TotalMinutes, 1) } catch {}
+
+        # STEP: a large jump between two samples five seconds apart. Logged
+        # immediately, because the value of this line is its TIMESTAMP -- it is what
+        # lets the jump be matched against whatever the sidecar logged doing at that
+        # moment. A restart resets the baseline, so only compare within one pid.
+        if ($null -ne $prevMB -and $prevPid -eq $p.Id) {
+            $delta = $script:LastNodeWorkingSetMB - $prevMB
+            if ($delta -ge $MEM_STEP_MB) {
+                Add-Content -Path $script:MemLogPath -Encoding UTF8 -ErrorAction SilentlyContinue `
+                    -Value ("[" + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + "] [mem:STEP] +" + $delta + " MB in one 5s sample -> " + $script:LastNodeWorkingSetMB + " MB (pid " + $p.Id + ", up " + $upMin + " min)")
+            }
+        }
+
+        # HEARTBEAT: the curve. Rare enough not to bloat a log that is already 15MB
+        # (one line every MEM_LOG_INTERVAL minutes is ~100/day).
+        if ($null -eq $script:LastMemLogAt -or ((Get-Date) - $script:LastMemLogAt).TotalMinutes -ge $MEM_LOG_INTERVAL) {
+            $script:LastMemLogAt = Get-Date
+            Add-Content -Path $script:MemLogPath -Encoding UTF8 -ErrorAction SilentlyContinue `
+                -Value ("[" + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + "] [mem] " + $script:LastNodeWorkingSetMB + " MB (pid " + $p.Id + ", up " + $upMin + " min)")
+        }
     } catch {}
 }
 

@@ -56,6 +56,20 @@ Score = **`retrievalCount + (recitationCount × 3)`**. Constants are exported fr
 
 Promotion runs every 20 turns (see `promotion.ts` / the pipeline reference). `core`/`secondary_core` are never pruned.
 
+### ⚠️ "Without retrieval" means **summoned**, not loaded (`gwny`, fixed 2026-08-24)
+
+Every row above measures staleness with `daysSinceRetrieval` = **`lastRetrievedAt ?? lastAccessed`**, and `lastRetrievedAt` is written *only* on demonstrable use (`recordRecitation`). Measured on the live store, **87% of hot entries have no `lastRetrievedAt` at all** — so for seven entries in eight, **`lastAccessed` IS the decay clock.**
+
+The loader used to stamp `lastAccessed` on *every loaded entry*, including ones that merely rode in on the recency fallback, while gating only `retrievalCount` on relevance. That made entries **immortal by exposure**: loaded as filler → clock reset → still available as filler. Measured before the fix: **8,320 hot vs 420 cold (19.8:1)**, only **17** entries cold-eligible, **48.7% massed in the 60–90 day band** (not an age distribution — a population being pushed back from the edge), and **4,242** entries never summoned, never used, and unable to age out.
+
+**The fix is one line in `loader.ts`** — a non-summoned entry is skipped entirely, no clock and no write: `if (!summoned) return Promise.resolve();`. `lastRetrievedAt` is still never written by the loader; being loaded, even when summoned, is not being used.
+
+- **Do NOT "fix" this by falling back to a creation date.** Measured: that makes **7,009 entries cold-eligible on the next pass** (vs **7** — the same 7 as today — for the shipped fix), and `IndexEntry` carries no `created` at all, so it needs a schema change plus a backfill. Leaving the field alone gets there for free: `lastAccessed` is **initialised at creation**, so a never-summoned entry keeps its creation date and ages from there.
+- **Migration is a curve, not a step** — existing values are untouched; entries age out only as they stop being summoned (3,401 within 30 days, 1,406 at 30–60, 2,472 at 60–90).
+- Skipping the write also removes **thousands of identical-row index rewrites per turn**. Possibly relevant to `3lru` (1.5 GB peak) and `96eo` (orphaned temp files); neither confirmed.
+- ⚠️ **This bug was silent in both directions** — the whole suite passed with it wrong *and* with it fixed, because nothing pinned who may touch the clock. `decay-clock.test.ts` now does, and its pins were **verified to fail against the old behaviour** before being kept (2 of 4 do; the other 2 are guards). A pin that cannot fail on the old code is worth nothing.
+- The **4,242 already-immortal entries are not relocated** by this. They age normally from here, up to 90 days from their last stamp. Force-ageing them is a separate decision with its own blast radius.
+
 ## Hot / cold / supersede / delete — nothing is destroyed lightly
 
 A central design choice: **demotion is a tier move, not a delete.** Entry *files* are essentially never moved or removed on the automatic path — only the index **row** moves between hot and cold.

@@ -755,26 +755,54 @@ export async function loadContext(
   dbg(`contextBlock assembled — total length:${contextBlock.length} (memoryBlock:${memoryBlock.length})`);
   if (!memoryBlock) dbg("  ⚠ no memory content — only instructions will be injected");
 
-  // Background: stamp lastAccessed on every loaded entry; increment
-  // retrievalCount ONLY for entries that were summoned (pulled in by topical
-  // relevance), not those that merely rode in on the recency fallback. This is
-  // what keeps the promotion signal honest: "was SUMMONED" earns credit, "was
-  // AROUND" does not. As the Current cache improves, more loads are relevance-
-  // driven, so exposure-count becomes a better proxy for use on its own.
+  // Background: credit entries that were SUMMONED (pulled in by topical relevance).
+  // Entries that merely rode in on the recency fallback are left ALONE — not their
+  // count, and not their clock. "Was SUMMONED" earns credit; "was AROUND" does not.
+  //
+  // ── gwny: STAMPING lastAccessed ON EVERY LOAD MADE ENTRIES IMMORTAL ──────────
+  //
+  // This used to stamp lastAccessed on every loaded entry, summoned or not, while
+  // gating only retrievalCount on relevance. That handed back everything the gate
+  // bought, because promotion.ts decides staleness with
+  //     lastRetrievedAt ?? lastAccessed
+  // and 87% of entries have no lastRetrievedAt (it is stamped only on demonstrable
+  // use, in recordRecitation). So for seven entries in eight, lastAccessed WAS the
+  // decay clock — and it was reset by being in the room.
+  //
+  // The result was a self-sustaining loop: an entry loaded as filler never aged, so
+  // it stayed available as filler, which stamped it again. Measured on the live
+  // store before the fix: 8,320 hot against 420 cold (19.8:1), only 17 entries
+  // cold-eligible, 48.7% massed in the 60-90 day band — not an age distribution but
+  // a population being repeatedly pushed back from the edge — and 4,242 entries that
+  // had never been summoned and never been used yet could not age out.
+  //
+  // WHY NOT FALL BACK TO A CREATION DATE INSTEAD, which was the first proposal:
+  // IndexEntry carries no `created` (it lives on the entry file), so it needs a
+  // schema change and a backfill — and measured against the live store it would make
+  // 7,009 entries cold-eligible on the NEXT PASS. That is a migration, not a bug fix.
+  // Leaving the field alone costs nothing and reaches the same place, because
+  // lastAccessed is initialised at creation: an entry never summoned and never used
+  // simply keeps its creation date and ages from there, which is exactly the wanted
+  // meaning. Measured immediate effect of THIS fix: 7 entries, the same 7 as today.
+  //
   // Fire-and-forget — don't block the response on file I/O. The handle is kept
   // (see awaitPendingCredit) so a caller that is about to tear down the data
   // directory can wait for it; nothing on the hot path ever does.
   const todayStr = new Date().toISOString().slice(0, 10);
-  const stamp = (scope: Scope, scopeId: string, e: IndexEntry, summoned: boolean) =>
-    upsertIndexEntry(scope, scopeId, {
+  const stamp = (scope: Scope, scopeId: string, e: IndexEntry, summoned: boolean) => {
+    // Nothing to record for an entry that merely rode along. Skipping the write is
+    // not just an optimisation: it is the fix. It also removes thousands of
+    // identical-row rewrites per turn from the hot index.
+    if (!summoned) return Promise.resolve();
+    return upsertIndexEntry(scope, scopeId, {
       ...e,
+      // Relevance is what refreshes the clock. lastRetrievedAt is still NOT stamped
+      // here — being loaded, even when summoned, is not the same as being used, and
+      // that stays recordRecitation's (promotion.ts) to write.
       lastAccessed: todayStr,
-      // Exposure credit is gated on relevance — see note above. lastRetrievedAt
-      // is NOT stamped here either way: being loaded (even when summoned) is not
-      // the same as being used. That's stamped in recordRecitation (promotion.ts)
-      // only when the model demonstrably uses the entry.
-      retrievalCount: (e.retrievalCount ?? 0) + (summoned ? 1 : 0),
+      retrievalCount: (e.retrievalCount ?? 0) + 1,
     });
+  };
   if (!session.skipCredit) {
     pendingCredit = Promise.all([
       ...chatSelection.selected.map((e) => stamp("chat", session.chatId, e, chatSelection.summoned.has(e.id))),

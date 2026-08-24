@@ -184,3 +184,73 @@ export function classifyChangelog(text: string): ChangelogVerdict {
 export function isChangelog(text: string): boolean {
   return classifyChangelog(text).isChangelog;
 }
+
+// ── The lane ─────────────────────────────────────────────────────────────────
+//
+// ROUTE AND MARK, NEVER DROP (hjt9). A suppressed release-notes paste is still
+// evidence of what was discussed, so it goes to an append-only sink: greppable
+// forever, never deleted, and never read back by recall. Same contract as
+// ops-lane.jsonl — it is a SINK, not a fourth recall lane. Routing this into
+// open_threads or character_topics would file it correctly and then feed it to the
+// model anyway, which is the problem restated.
+//
+// ITS OWN FILE, NOT ops-lane.jsonl, for the reason self-ingest-triage.mjs gives about
+// folding populations together: asking one ledger to answer two questions is how a
+// number stops meaning anything. The ops lane counts LINES of structure; this counts
+// WHOLE MESSAGES of third-party prose. Two questions, two denominators.
+//
+// AND IT RECORDS THE SAVES, NOT ONLY THE CATCHES. `spared-dialogue` is written when a
+// message carried enough enumeration to convict but was talking — the ABOUT-WORK case
+// this detector exists to protect. Without those lines the ledger could only show
+// what was suppressed, and "did it ever eat a real utterance" would be unanswerable
+// by division. That is exactly the hole 5x5y spent three months in: subtext sat at
+// 0.7% and read as working because nothing recorded how many chunks WARRANTED one.
+
+import { appendFileSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+
+export type ChangelogOutcome =
+  /** Convicted: routed to the sink, does not become a beat. */
+  | "suppressed"
+  /** Enumerated like release notes, but someone was talking. Spared on purpose. */
+  | "spared-dialogue";
+
+export interface ChangelogRecord {
+  at: string;
+  outcome: ChangelogOutcome;
+  chatId?: string;
+  speaker?: string;
+  openers: number;
+  issueRefs: number;
+  dialogueRate: number;
+  words: number;
+  /**
+   * THE FULL TEXT, not an excerpt. The sink's promise is that nothing is destroyed —
+   * a suppressed paste has to remain readable, or "route and mark" is just a drop
+   * with better manners. These are rare (six in three months) so the cost is nil.
+   */
+  text: string;
+}
+
+/** Append-only, never read by recall. */
+export function changelogLanePath(dataDir: string): string {
+  return join(dataDir, "changelog-lane.jsonl");
+}
+
+/**
+ * Write routed messages to the sink.
+ *
+ * NEVER THROWS. This runs inside ingestion, and a sink failure that broke an import
+ * would be a worse bug than the noise it collects. A lost record is a miss; a thrown
+ * error is a lost import.
+ */
+export function recordChangelog(dataDir: string, records: ChangelogRecord[]): void {
+  if (!records.length) return;
+  try {
+    const p = changelogLanePath(dataDir);
+    mkdirSync(dirname(p), { recursive: true });
+    appendFileSync(p, records.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8");
+  } catch {
+    // Swallowed on purpose — see above.
+  }
+}

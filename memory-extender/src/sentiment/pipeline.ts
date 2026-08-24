@@ -10,6 +10,7 @@ import type { EmotionalBeat, ClassificationResult } from "./types.js";
 import { chunkMessages } from "./chunker.js";
 import { classifyChunks } from "./classifier.js";
 import { recordOps, routeOps, type OpsRecord } from "./ops-lane.js";
+import { classifyChangelog, recordChangelog, type ChangelogRecord } from "./changelog.js";
 import { analyzeChunk } from "./analyzer.js";
 import { encodeBeat, beatIdForChunk, provenanceKeyForChunk, readBeatIndex, readBeat, companionEntryFromBeat } from "./encoder.js";
 import { createEntryIfUnique } from "../dedup.js";
@@ -103,7 +104,57 @@ export async function runSentimentPipeline(
   const { sourceType = "chat", characters, povCharacter, progressLabel } = options;
   const report = new Progress(progressLabel ?? characterName, options.progress ?? progressEnabled());
 
-  // Stage -1: OPS ROUTING, BEFORE CHUNKING — and this ordering is the whole point.
+  // Stage -1a: THIRD-PARTY RELEASE NOTES (mln9), before ops routing and for the same
+  // reason ops routing is here — this is a whole-message judgement and the chunker
+  // destroys the evidence. It runs BEFORE routeOps rather than after because routeOps
+  // reduces the message, and reducing first can drop enumeration lines and pull a real
+  // changelog under the floor. Detect on what arrived, not on what survived.
+  //
+  // Six such messages reached the store in three months, two on the current build.
+  // pe4o cannot see them (not our prompt) and hjt9 cannot (prose, not structure), so
+  // this is the third category and needs its own gate. Benched against 29 held-out
+  // Engine releases before wiring: 93% recall, zero false positives across 9,429
+  // beats — see scripts/changelog-bench.mjs.
+  const changelogRecords: ChangelogRecord[] = [];
+  const afterChangelog = messages.map((m) => {
+    const content = String(m.content ?? "");
+    if (!content.trim()) return m;
+    const v = classifyChangelog(content);
+
+    // THE SAVE IS RECORDED TOO. A message that enumerated like release notes but was
+    // somebody talking is the ABOUT-WORK case this gate exists to protect, and it is
+    // only countable if it is written down. Without it the ledger could show what was
+    // suppressed and never whether a real utterance was eaten.
+    if (v.reason === "dialogue") {
+      changelogRecords.push({
+        at: new Date().toISOString(), outcome: "spared-dialogue",
+        chatId: options.sourceChatId, speaker: m.role,
+        openers: v.openers, issueRefs: v.issueRefs, dialogueRate: v.dialogueRate,
+        words: v.words, text: content,
+      });
+      return m;
+    }
+    if (!v.isChangelog) return m;
+
+    // ROUTE AND MARK: the full text is in the sink before the message is emptied, so
+    // nothing is destroyed — it just stops being memory.
+    changelogRecords.push({
+      at: new Date().toISOString(), outcome: "suppressed",
+      chatId: options.sourceChatId, speaker: m.role,
+      openers: v.openers, issueRefs: v.issueRefs, dialogueRate: v.dialogueRate,
+      words: v.words, text: content,
+    });
+    return { ...m, content: "" };
+  });
+
+  if (changelogRecords.length) {
+    recordChangelog(getDataDir(), changelogRecords);
+    const supp = changelogRecords.filter((r) => r.outcome === "suppressed").length;
+    const spared = changelogRecords.length - supp;
+    console.info(`[ME:pipeline] changelog lane: ${supp} message(s) routed, ${spared} spared as dialogue`);
+  }
+
+  // Stage -1b: OPS ROUTING, BEFORE CHUNKING — and this ordering is the whole point.
   //
   // MEASURED 2026-08-06 (`node scripts/paste-scan-message.mjs`): the chunker joins
   // turns with a SPACE (`groupTexts.join(" ")`, chunker.ts:118/159). parseTurns has
@@ -121,7 +172,7 @@ export async function runSentimentPipeline(
   // prose. The chunk-level gate in classifyChunk stays as defence in depth for paths
   // that reach it with newlines intact (story imports, re-analysis of stored text).
   const opsRecords: OpsRecord[] = [];
-  const routedMessages = messages.map((m) => {
+  const routedMessages = afterChangelog.map((m) => {
     const content = String(m.content ?? "");
     if (!content.includes("\n")) return m;
     const routed = routeOps(content);
@@ -142,7 +193,7 @@ export async function runSentimentPipeline(
 
   if (opsRecords.length) {
     recordOps(getDataDir(), opsRecords);
-    console.info(`[ME:pipeline] ops lane: routed ${opsRecords.length} line(s) from ${messages.length - routedMessages.length} dropped message(s) + reductions`);
+    console.info(`[ME:pipeline] ops lane: routed ${opsRecords.length} line(s) from ${afterChangelog.filter((m) => String(m.content ?? "").trim().length > 0).length - routedMessages.length} dropped message(s) + reductions`);
   }
 
   // Stage 0: chunk

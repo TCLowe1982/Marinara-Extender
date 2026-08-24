@@ -17,6 +17,7 @@
 import type { Chunk, ClassificationResult, StructuralPatternMatch } from "./types.js";
 import { detectSelfPrompt, SELF_PROMPT_COVERAGE } from "./self-prompt.js";
 import { routeOps } from "./ops-lane.js";
+import { classifyChangelog } from "./changelog.js";
 import type { Emotion } from "./types.js";
 import { loadSentimentConfig, loadEmotionalKeywords } from "./config.js";
 
@@ -139,6 +140,33 @@ export function classifyChunk(
       structuralMatches: [],
       passesThreshold: false,
       suppressedReason: "self-prompt",
+    };
+  }
+
+  // THIRD-PARTY RELEASE NOTES (mln9) — DEFENCE IN DEPTH, not the primary gate.
+  //
+  // The real gate is at message level in pipeline.ts, where the line structure still
+  // exists. This one catches paths that reach a chunk without passing through there:
+  // story imports and re-analysis of stored text. It is worth having because
+  // enumeration survives chunking better than fences do — sentence-terminal
+  // punctuation still marks the items — which is exactly why all six stored positives
+  // are detectable in their flattened form.
+  //
+  // A CHUNK-LEVEL MISS IS EXPECTED AND ACCEPTED. A long changelog split across several
+  // chunks divides its openers among them, and each piece can fall under the floor.
+  // That is not a bug to fix here by lowering the floor: the message-level gate is the
+  // one that sees the whole document, and loosening this one would trade a real
+  // suppression risk for a duplicate catch.
+  const cl = classifyChangelog(chunk.text);
+  if (cl.isChangelog) {
+    return {
+      chunk,
+      scores: {},
+      primaryEmotion: null,
+      salience: 0,
+      structuralMatches: [],
+      passesThreshold: false,
+      suppressedReason: "changelog",
     };
   }
 

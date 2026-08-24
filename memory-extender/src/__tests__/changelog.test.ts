@@ -18,7 +18,10 @@ import {
   isChangelog,
   OPENER_FLOOR,
   DIALOGUE_CEILING,
+  recordChangelog,
+  changelogLanePath,
 } from "../sentiment/changelog.js";
+import { classifyChunk } from "../sentiment/classifier.js";
 
 // From beat-6e75eeb7f8b6 and beat-61b2658165f9 — real pastes, current build.
 const REAL_RELEASE_NOTES = `Added first-class Audio connections: a new "Audio" provider type in Settings → Connections carries the speech backend (ElevenLabs, OpenAI-compatible, PocketTTS, xAI Voice), base URL, API key, model, and default voice. Added Lorebook Update agents can now optionally assign an integer injection order when creating or updating entries. Omitting it keeps the existing default order, and approval review preserves the value through editing and commit (#5225). Fixed gallery routes so generated images stored with a mismatched extension render instead of returning 404 (#5147). Improved the Game Mode narration box so it can be collapsed to a slim handle.`;
@@ -119,6 +122,68 @@ describe("classifyChangelog — returns the split, never a bare boolean", () => 
       `i'm reading it now. Added the audio connections. Fixed the gallery routes. Improved the narration box. that's mine, isn't it? i can't believe it.`,
     );
     expect(mixed.reason).toBe("dialogue");
+  });
+});
+
+describe("wiring: the chunk-level gate (defence in depth)", () => {
+  const chunk = (text: string) => ({
+    text, speaker: "user", turnStart: 0, turnEnd: 0, messageIds: [] as string[],
+  });
+
+  it("suppresses a release-notes chunk and names the lane", () => {
+    const r = classifyChunk(chunk(REAL_RELEASE_NOTES));
+    expect(r.passesThreshold).toBe(false);
+    expect(r.suppressedReason).toBe("changelog");
+    expect(r.primaryEmotion).toBeNull();
+  });
+
+  it("does NOT suppress a character reacting to one", () => {
+    // The expensive direction. If this ever flips, a real utterance is being
+    // destroyed to be rid of a false one — the fqnl error with the sign flipped.
+    const r = classifyChunk(chunk(ABOUT_WORK));
+    expect(r.suppressedReason).not.toBe("changelog");
+  });
+
+  it("does NOT suppress ordinary RP prose", () => {
+    const r = classifyChunk(chunk(
+      `She didn't look up. "Don't," she said, and it wasn't a command so much as a request she had no other words for. Added to that, the room was very cold.`,
+    ));
+    expect(r.suppressedReason).not.toBe("changelog");
+  });
+});
+
+describe("wiring: the lane records saves as well as catches", () => {
+  it("writes both outcomes to its own sink, not the ops lane", async () => {
+    const { mkdtempSync, readFileSync, existsSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "me-changelog-"));
+
+    recordChangelog(dir, [
+      { at: "2026-08-24T00:00:00Z", outcome: "suppressed", openers: 12, issueRefs: 3, dialogueRate: 0.001, words: 400, text: "Added a thing." },
+      { at: "2026-08-24T00:00:01Z", outcome: "spared-dialogue", openers: 4, issueRefs: 0, dialogueRate: 0.06, words: 90, text: "babe that's mine!" },
+    ]);
+
+    const p = changelogLanePath(dir);
+    expect(existsSync(p)).toBe(true);
+    // Its OWN file. The ops lane counts lines of structure; this counts whole
+    // messages of third-party prose — two questions, two denominators.
+    expect(p.endsWith("changelog-lane.jsonl")).toBe(true);
+
+    const rows = readFileSync(p, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(rows).toHaveLength(2);
+    // The SAVE is the one that makes "did it ever eat a real utterance" answerable
+    // by division rather than by argument.
+    expect(rows.filter((r) => r.outcome === "spared-dialogue")).toHaveLength(1);
+    // Full text, not an excerpt — route-and-mark means nothing is destroyed.
+    expect(rows[0].text).toBe("Added a thing.");
+  });
+
+  it("never throws, even when the sink is unwritable", () => {
+    // A sink failure that broke an import would be worse than the noise it collects.
+    expect(() => recordChangelog("\0:/nope", [
+      { at: "x", outcome: "suppressed", openers: 5, issueRefs: 0, dialogueRate: 0, words: 10, text: "t" },
+    ])).not.toThrow();
   });
 });
 

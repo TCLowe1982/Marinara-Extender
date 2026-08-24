@@ -165,7 +165,20 @@ function Start-Sidecar {
     # window also wears. Setting it again on the first line of output lands AFTER
     # npm's rename and sticks. The up-front set covers the seconds before then.
     $wTitle = "Marinara Extender - sidecar log"
-    $worker = "`$ErrorActionPreference='SilentlyContinue'; Set-Location '$sidecarDir'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; try{`$Host.UI.RawUI.WindowTitle='$wTitle'}catch{}; `$log='$logPath'; if(-not (Test-Path (Split-Path `$log))){New-Item -ItemType Directory (Split-Path `$log)|Out-Null}; Add-Content -Path `$log -Value ('===== session start '+(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')+' =====') -Encoding UTF8; cmd /c 'npm.cmd $script:RunCmd 2>&1' | ForEach-Object { if(-not `$titled){ try{`$Host.UI.RawUI.WindowTitle='$wTitle'}catch{}; `$titled=`$true }; `$_; Add-Content -Path `$log -Value `$_ -Encoding UTF8 }; Write-Host ''; Write-Host 'Sidecar stopped. You can close this window. Log: memory-extender\logs\sidecar.log'"
+    # 073: THE WORKER MUST EXIT WITH NPM'S CODE, not its own.
+    #
+    # Write-SidecarPostMortem reads $SidecarProc.ExitCode and its comment says that
+    # number "discriminates the remaining candidates in a single number". It could
+    # not. This worker ends with Write-Host, so PowerShell exited 0 on a successful
+    # *print* no matter how node died — and 25 of 30 recorded deaths duly reported
+    # exit 0, which reads as a clean shutdown and means nothing at all. The one
+    # value that identifies the killer, npm's own exit code, was computed by the
+    # pipeline and then discarded.
+    #
+    # So: capture $LASTEXITCODE the instant the pipeline ends (anything else run
+    # first will overwrite it), log it in its own line, and exit WITH it. That makes
+    # the existing post-mortem instrumentation report what it always claimed to.
+    $worker = "`$ErrorActionPreference='SilentlyContinue'; Set-Location '$sidecarDir'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; try{`$Host.UI.RawUI.WindowTitle='$wTitle'}catch{}; `$log='$logPath'; if(-not (Test-Path (Split-Path `$log))){New-Item -ItemType Directory (Split-Path `$log)|Out-Null}; Add-Content -Path `$log -Value ('===== session start '+(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')+' =====') -Encoding UTF8; cmd /c 'npm.cmd $script:RunCmd 2>&1' | ForEach-Object { if(-not `$titled){ try{`$Host.UI.RawUI.WindowTitle='$wTitle'}catch{}; `$titled=`$true }; `$_; Add-Content -Path `$log -Value `$_ -Encoding UTF8 }; `$npmExit=`$LASTEXITCODE; if(`$null -eq `$npmExit){`$npmExit=-1}; `$npmHex='0x{0:X8}' -f ([int64]`$npmExit -band 0xFFFFFFFFL); Add-Content -Path `$log -Value ('['+(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')+'] [worker] npm/node exited with code '+`$npmExit+' ('+`$npmHex+')') -Encoding UTF8; Write-Host ''; Write-Host ('Sidecar stopped (exit '+`$npmExit+'). You can close this window. Log: memory-extender\logs\sidecar.log'); exit `$npmExit"
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($worker))
     $script:SidecarProc = Start-Process "powershell.exe" `
         -ArgumentList "-NoLogo","-ExecutionPolicy","Bypass","-EncodedCommand",$enc `
@@ -259,6 +272,15 @@ function Write-SidecarPostMortem {
     # single number: 0xC0000005 access violation, 0xC000013A close/CTRL event
     # (something signalling the console), 1 for an ordinary npm failure, or a
     # kill-shaped code pointing at an external terminator.
+    #
+    # THAT WAS ONLY TRUE FROM 2026-08-24. Until then the worker ended on a
+    # Write-Host, so PowerShell exited 0 whenever the *print* succeeded — however
+    # node had died. 25 of the first 30 recorded deaths reported "EXIT CODE: 0",
+    # which reads as a clean shutdown and carried no information whatsoever; the
+    # number this comment describes was npm's, and the pipeline threw it away.
+    # Start-Sidecar now captures $LASTEXITCODE and exits with it, so codes logged
+    # after that date mean what is written above. ANYTHING EARLIER IN THE LOG DOES
+    # NOT — do not read the historical zeroes as evidence of a graceful stop.
     param([string]$Reason)
     $lines = @()
     $lines += "[watchdog:postmortem] $Reason"

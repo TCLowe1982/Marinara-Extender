@@ -271,6 +271,15 @@ export async function resolveIdentity(
  * Everything here is data in identity-map.yaml — a fork must never be a code
  * branch per character.
  */
+/**
+ * Is ANY card forked? A local, already-cached read, used to keep the loader off
+ * the network entirely when nothing is forked — which is the normal case.
+ */
+export async function anyForkConfigured(): Promise<boolean> {
+  const map = await getIdentityMap();
+  return map.some((e) => !!e.forkSplitAt);
+}
+
 export async function forkConfigFor(characterId: string): Promise<{ splitAt: string; primary: boolean } | null> {
   const map = await getIdentityMap();
   const e = map.find((x) => x.characterId === characterId);

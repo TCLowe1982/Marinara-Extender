@@ -31,7 +31,7 @@
 // bodyTerms and subjects already follow.
 
 import { listChats } from "./engine-client.js";
-import { forkConfigFor } from "./identity.js";
+import { forkConfigFor, anyForkConfigured } from "./identity.js";
 import type { IndexEntry } from "./storage.js";
 
 // Which CARD owns a chat. Chats change owner never, so this is cached like the
@@ -78,6 +78,22 @@ export interface ForkFilter {
  * not forked — in which case NOTHING changes and the loader behaves as before.
  */
 export async function forkFilterForChat(chatId: string | undefined | null): Promise<ForkFilter | null> {
+  if (!chatId) return null;
+
+  // CHEAP LOCAL CHECK FIRST, AND IT IS NOT AN OPTIMISATION.
+  //
+  // ownersOfChat asks the ENGINE for the chat list. Calling that before knowing
+  // whether any fork exists put a network round-trip on the loader's hot path
+  // for every character — which hung the test suite (no Engine to answer) and
+  // would have blocked the first load of every process in production, or worse
+  // stalled it whenever the Engine was slow. A .catch() handles a rejection; it
+  // does not handle a HANG.
+  //
+  // The identity map is a local file that is already cached, so "is anything
+  // forked at all" costs nothing. Almost always the answer is no, and this
+  // returns before any I/O.
+  if (!(await anyForkConfigured())) return null;
+
   const owners = await ownersOfChat(chatId);
   for (const cardId of owners) {
     const cfg = await forkConfigFor(cardId);

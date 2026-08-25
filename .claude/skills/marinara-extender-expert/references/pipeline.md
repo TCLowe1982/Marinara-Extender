@@ -122,6 +122,23 @@ The **cap** is the other arm and is now split out as `dkib`: monotonic degradati
 
 ⚠️ **The nine in the original report were never one population** — 5 changelogs, 1 ABOUT-WORK, 2 self-ingested *session reports*, 1 debug paste with a minted speaker. Three of the six carry a speaker minted from the changelog's own first line (`4ghy` overlap). The sibling class — **our own session reports** ("Done — committed (644a280) and pushed") — is `6cna`, unsized, and carries *no* enumeration structure, so it will evade this signal too.
 
+### Stage −1b — THE MIRROR (`i83s`, 2026-08-25)
+
+**The store's own output, pasted into chat and ingested as dialogue.** Found while reconciling a count: 12 beats contained the literal text `[about: Thomas]` because a store audit had been pasted back into the conversation — `- ctopic-tmbg7dpu: [about: Thomas] Thomas has been mourning…`. Those 12 were then counted *as if they were entries*. The store described itself, the description became a memory, and the memory inflated the next measurement of the thing it described.
+
+**A mirror, not a race.** This ticket began as a write-concurrency bug; that diagnosis died (see `data-model`/`i83s`) but the symptom — one utterance carrying several weights — survived it with no cause. This is the replacement suspect, and unlike the race it is *growing*: **232 Jun → 376 Jul → 388 Aug**.
+
+**Measured before guarding** (9,513 beats): **840** carry deliberate `[remember:]`/`[bookmark:]` syntax and nothing else — **a feature, never refused**, it is the primary manual-capture path. **126** carry mirror signals only. **21** carry both. By signal: 79 `entry-id`, 47 `me-log`, 31 `ticket-id`, 13 `about-tag`, 9 `beat-id`.
+
+**Not a keyword blocklist.** It matches **self-minted identifiers** — `ctopic-`/`utopic-`/`nthr-`/`recap-`, `beat-<sha>`, `[ME:…]`, `MarinaraExtender-<id>` — strings only this system produces. Nobody types `ctopic-8f3k2a1b` to mean something. A human can say "about" or "remember" all day and never trip it.
+
+**Line-level with a coverage gate, never a chunk-level boolean.** The 21 "both" beats are ordinary shop talk that happens to cite one of our ids ("the `[remember:]` tag writes character-scope because…"), and a chunk verdict would misfile every word wrapped around the thing it detected — **the `pe4o` failure repeated**, fixed `pe4o`'s way. `detectMirror` returns the split (`signals`, `matches`, `coverage`, `sample`); `isMirror` applies `MIRROR_COVERAGE = 0.4`, matching `SELF_PROMPT_COVERAGE`.
+
+**Refuse, don't filter.** Route-and-mark into `data/mirror-lane.jsonl` with the **full text** before the message is emptied; refusals counted **by reason**; refusals *and* saves surfaced live in the `[ME:pipeline] mirror lane:` line. The saves matter as much as the refusals — without them the ledger could show what was suppressed and never whether a real utterance was eaten.
+
+⚠️ **The threshold is a stated tradeoff, not a tuned number** (`scripts/mirror-bench.mjs`). 137 chunks carry a mirror line; at 0.4 it refuses 79 and keeps 58. **Known misses:** two genuine log pastes sit at 0.36 and 0.39. **Known correct keeps at the same depth:** a real celebration ("OH IT FINISHED. 263/263, 469 chunks, zero off-speaker errors") at 0.35 and a debugging exchange at 0.30. Dropping to 0.3 catches the two misses **and eats both of those**. It was not lowered to make the number look better.
+
+
 **The detector** is `classifyChangelog` (`sentiment/changelog.ts`), benched 2026-08-23 and **WIRED 2026-08-24**. `OPENER_FLOOR = 3` sentence-initial enumeration verbs (case-sensitive — "i added a note" is not a list item), `DIALOGUE_CEILING = 0.03` spares anything that is somebody talking. Returns the split, never a boolean: `reason` distinguishes `below-floor` (not a list) from `dialogue` (a list, but it's an ABOUT-WORK save worth counting separately).
 
 **Disposition is route-and-mark, never drop** (`hjt9`'s rule, and it has been the key throughout). A convicted message's **full text** — not an excerpt — goes to `data/changelog-lane.jsonl` before the message is emptied, so a suppressed paste is still evidence of what was discussed. It is a **sink, not a recall lane**: append-only, never read back, never injected. **Its own file, not `ops-lane.jsonl`** — the ops lane counts *lines of structure*, this counts *whole messages of third-party prose*; one ledger answering two questions is how a number stops meaning anything.

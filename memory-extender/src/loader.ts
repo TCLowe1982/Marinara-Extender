@@ -24,7 +24,7 @@ import { listActiveThreads } from "./threads.js";
 import type { RecapEntry } from "./arcs.js";
 import { readBeat, companionEntryFromBeat } from "./sentiment/encoder.js";
 import { activateRecaps } from "./recap-activation.js";
-import { forkFilterForChat, applyForkFilter } from "./fork.js";
+import { forkFilterForChat, applyForkFilter, rowInBranch, type ForkFilter } from "./fork.js";
 import {
   capRejections,
   hashBlock,
@@ -336,6 +336,12 @@ async function coldRecall(
   scope: Scope,
   scopeId: string,
   recentText: string,
+  // IDENTITY FORK (yi70). The hot path is split in loadIndexes, but cold recall
+  // reads its own index — so without this a recall MISS could rehydrate the
+  // other branch's memory into Current and hand one sister the other's life.
+  // Narrow surface (cold is only consulted on a miss) and therefore exactly the
+  // kind of hole that stays open for months.
+  fork: ForkFilter | null = null,
 ): Promise<IndexEntry | null> {
   const cold = await readColdIndex(scope, scopeId);
   if (!cold || cold.entries.length === 0) return null;
@@ -350,6 +356,8 @@ async function coldRecall(
     // it must never be recalled back into Current on its own (that would undo
     // the delete). Resurrection is the explicit "Recently deleted" → Restore path.
     if (e.deletedAt) continue;
+    // Wrong branch of a forked identity — see the fork note on this signature.
+    if (fork && !(await rowInBranch(e, fork))) continue;
     // Same for a memory derived from a reply the user threw away (s2lw). It is
     // kept for the audit trail, not for recall — letting cold recall resurrect it
     // would put the discarded text's facts back in front of the character, which
@@ -670,7 +678,7 @@ export async function loadContext(
     const miss = (s: { bestRelevance: number }) => s.bestRelevance < RELEVANCE_CREDIT_THRESHOLD;
     const [cChat, cChar, cGlobal] = await Promise.all([
       miss(chatSelection)   ? coldRecall("chat", session.chatId, recentText)            : Promise.resolve(null),
-      miss(charSelection)   ? coldRecall("character", session.characterId, recentText)  : Promise.resolve(null),
+      miss(charSelection)   ? coldRecall("character", session.characterId, recentText, await forkFilterForChat(session.chatId).catch(() => null)) : Promise.resolve(null),
       miss(globalSelection) ? coldRecall("global", "global", recentText)                : Promise.resolve(null),
     ]);
     const adopt = async (hit: IndexEntry | null, scope: Scope, scopeId: string, into: Entry[], sel: ScopeSelection) => {

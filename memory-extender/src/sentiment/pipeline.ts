@@ -30,6 +30,11 @@ export interface PipelineOptions {
   // before filtering. Use for first-person prose where the narrator IS a
   // named character (e.g. povCharacter: "Mark").
   povCharacter?: string;
+  // Who the HUMAN is playing (qhej). Threaded so the fact path can tell a fact
+  // about the PERSONA from a fact about the person — resolveFactTarget has had
+  // a persona branch since it was written and no caller ever populated the
+  // field, so it was dead code and every persona fact routed as a stranger's.
+  personaName?: string;
   // Label for console progress output (e.g. the story title). Defaults to the
   // character name.
   progressLabel?: string;
@@ -101,7 +106,7 @@ export async function runSentimentPipeline(
   characterName: string,
   options: PipelineOptions = {},
 ): Promise<PipelineResult> {
-  const { sourceType = "chat", characters, povCharacter, progressLabel } = options;
+  const { sourceType = "chat", characters, povCharacter, progressLabel, personaName } = options;
   const report = new Progress(progressLabel ?? characterName, options.progress ?? progressEnabled());
 
   // Stage -1a: THIRD-PARTY RELEASE NOTES (mln9), before ops routing and for the same
@@ -429,7 +434,11 @@ export async function runSentimentPipeline(
   // chunk set (not just `filtered`/salient) so they're captured anyway. Guarded
   // — a fact-pass failure must never fail an import that already saved its beats.
   try {
-    await ingestSceneFacts({ characterId, characterName, chunks, roster, sourceChatId: options.sourceChatId });
+    await ingestSceneFacts({
+      characterId, characterName, chunks, roster,
+      sourceChatId: options.sourceChatId,
+      ...(personaName ? { personaName } : {}),
+    });
   } catch (err) {
     console.warn("[ME:pipeline] scene-fact pass failed:", err);
   }

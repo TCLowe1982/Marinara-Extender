@@ -21,7 +21,7 @@ import { createEntry, createEntryIfUnique } from "./dedup.js";
 import { resolveNameToKey, matchesSessionName } from "./identity.js";
 import { normalizeLabel, readAliasTable, USER_IDENTITY_KEY } from "./aliases.js";
 import { fetchEmbeddings, cosineSim } from "./embeddings.js";
-import { makeSubject, subjectKindFor, subjectRejectionCounts, type SubjectRef } from "./subject.js";
+import { makeSubject, subjectKindFor, subjectRejectionCounts, type SubjectRef, type SubjectKind } from "./subject.js";
 
 // Scope the subject roster to characters actually MENTIONED in the scene, not
 // the whole cast. With the global cast in the prompt the model attributed a
@@ -116,9 +116,20 @@ export async function resolveFactTarget(
       subject_ = makeSubject(subject);
     }
   } else if (subject) {
-    // The fact is about the scope owner or the user — still an aboutness claim,
-    // and the one case where the kind is knowable without a roster.
-    subject_ = makeSubject(subject, { kind: subjectKindFor(subject) });
+    // The fact is about the user, the player's PERSONA, or the scope owner —
+    // all three stay on this ledger, and until qhej they were indistinguishable
+    // once stored. `kind` is what separates them.
+    //
+    // ORDER MATTERS. The persona check runs BEFORE the character check because
+    // a persona name can legitimately collide with the session character's
+    // (TC's persona is "Thomas"; a character could be too). Whoever the human
+    // declared themselves to be wins that tie — a declaration is not a guess.
+    const kind: SubjectKind | undefined =
+      subjectKindFor(subject) ??
+      (ctx.personaName && matchesSessionName(subject, ctx.personaName) ? "persona"
+        : matchesSessionName(subject, ctx.characterName ?? ctx.identityKey) ? "character"
+        : undefined);
+    subject_ = makeSubject(subject, { kind });
   }
 
   return { scope, scopeId, summary, ...(subject_ ? { subjects: [subject_] } : {}) };
@@ -259,6 +270,7 @@ export interface IngestSceneFactsInput {
   characterName: string;
   chunks: Chunk[];          // the FULL chunk set, before the salience threshold
   roster: string[];         // known character names, for subject attribution
+  personaName?: string;     // who the HUMAN is playing (qhej) — see FactContext
   sourceChatId?: string;    // so a re-import cleanly replaces these facts
   classify?: FactClassifier; // injectable for tests
   judge?: FactJudge;         // injectable for tests; default = durability judge
@@ -286,6 +298,7 @@ export async function ingestSceneFacts(
     identityKey: input.characterId,
     fallbackChatId: input.sourceChatId ?? input.characterId,
     characterName: input.characterName,
+    ...(input.personaName ? { personaName: input.personaName } : {}),
   };
 
   // Only the characters present in this scene, so the model can't attribute a

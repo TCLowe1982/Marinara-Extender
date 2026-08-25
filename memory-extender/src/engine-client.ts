@@ -211,6 +211,20 @@ export function listCharacters(): Promise<Record<string, unknown>[]> {
   return engineFetch("/characters").then((r) => unwrapList(r, "characters"));
 }
 
+/**
+ * The player's PERSONAS (qhej). Distinct from characters: a persona is who the
+ * HUMAN is playing, and every chat row names one via `personaId`. Without this
+ * the store cannot tell a fact about the persona "Thomas" from a fact about the
+ * human — the gap that filed three RP lines about Texas as biography of TC.
+ *
+ * GET /api/characters/personas/list returns a bare array of persona objects
+ * (name, personaVersion, description, … at the TOP level — unlike characters,
+ * whose payload nests a JSON-string `data`).
+ */
+export function listPersonas(): Promise<Record<string, unknown>[]> {
+  return engineFetch("/characters/personas/list").then((r) => unwrapList(r, "personas"));
+}
+
 export function listLorebooks(): Promise<Record<string, unknown>[]> {
   return engineFetch("/lorebooks").then((r) => unwrapList(r, "lorebooks"));
 }

@@ -73,6 +73,13 @@ export interface DetectedTurn {
   precedingUserMessageId?: string;
   /** All participants of the chat — group scenes have several. */
   participantIds: string[];
+  /**
+   * The PERSONA the human is playing in this chat (qhej). Every engine chat row
+   * carries `personaId`; it was simply never read. Without it the ingest path
+   * cannot tell "a fact about the persona Thomas" from "a fact about the human",
+   * so RP dialogue about the persona lands in user_topics as biography of TC.
+   */
+  personaId?: string;
 }
 
 /** The last user message before `index` in an ascending tail, if any. */
@@ -332,6 +339,7 @@ export function buildTurns(
       precedingUserText: userMessage ? (str(userMessage, "content") ?? "") : "",
       ...(userMessage && str(userMessage, "id") ? { precedingUserMessageId: str(userMessage, "id")! } : {}),
       participantIds: getChatParticipantIds(chat),
+      ...(str(chat, "personaId") ? { personaId: str(chat, "personaId")! } : {}),
     });
   }
   return out;

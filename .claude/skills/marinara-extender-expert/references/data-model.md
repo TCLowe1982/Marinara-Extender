@@ -45,6 +45,16 @@ Each record exists in two forms, deliberately:
 
   **`subjects` absent means UNASSESSED, never "about nobody"** — the same rule as `bodyTerms`. `normalizeSubjects` returns `undefined` rather than `[]` for exactly this reason. A refused subject does **not** discard the memory: the entry is still routed and stored, minus the aboutness claim. Route and mark, never drop.
 
+  **`kind` and the persona axis (`qhej`, 2026-08-25).** `kind: persona` is what lets the store say *which* Thomas — TC the human (Nodaway County, MO) versus Thomas the in-character persona (Independence, MO). Three `user_topics` rows placing "the user" in Texas came from RP dialogue about the persona, and nothing could express the difference.
+
+  **The Engine had the answer all along.** Every chat row carries `personaId` — 97 of 100 on the live install, resolving to Thomas ×86, TC ×8, Dr. Mari Zielińska ×2, Mark ×1. It was simply never read. The plumbing now runs `chat.personaId` → `DetectedTurn.personaId` → `personaNameFor()` (cached, mirrors `characterNameFor`) → `process-turn` `personaName` → `PipelineOptions.personaName` → `ingestSceneFacts` → `FactContext.personaName`.
+
+  **`resolveFactTarget` has carried a persona branch since it was written and no caller ever populated the field** — it was dead code, so every persona fact routed as an unresolvable stranger and fell out to chat scope. That is the mechanism behind the 22 `[about: Thomas]` rows. `api.ts`'s long-story path is the sharpest case: it *received* `personaName`, used it for tier-3 routing, and never forwarded it to the pipeline.
+
+  **Persona wins a name collision with the session character** — if a character shares the persona's name, the human's declared identity takes the tie. Same principle that exempts `user-identity.yaml` from the alias ambiguity cap: a declaration is not a guess.
+
+  **The fix is FORWARD-LOOKING.** The three Texas rows have no `sourceChatId` (they are part of the ~9,109 legacy unprovenanced entries), so there is no chat to look up and no persona to resolve. Do not read "the mechanism is fixed" as "the old rows are adjudicated". The positive control is `utopic-51q5g9vz` — the one Missouri row *with* provenance resolves to persona **TC**, correctly a fact about the human.
+
 Tier fields **and `provenance`** are **mirrored** onto both so the loader never has to open entry files to rank or to filter.
 
 > **The index still has no `content`, and never will.** This remains the most consequential shape fact: retrieval can only score what is on the index row. "Just also search the content" means either opening thousands of entry files per turn or carrying whole bodies in a multi-megabyte index that is re-read every turn and rewritten on every upsert. Neither is viable.

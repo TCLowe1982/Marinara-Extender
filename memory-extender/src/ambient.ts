@@ -91,12 +91,34 @@ export function isSecondPersonOnly(sentence: string): boolean {
     && !NAMED_SUBJECT_RE.test(sentence);
 }
 
-// DEFAULT ON, WITH A KILL SWITCH — the house posture. Opt-in causes silent
-// degradation: the median user gets a gate that cannot see itself being talked
-// about and has nothing to compare it to. MARINARA_EXTENDER_SECOND_PERSON=0
-// restores the pre-cye6 behaviour exactly.
+// DEFAULT OFF, BY MEASUREMENT (cye6 slice 3). This shipped default-on, per the
+// house posture that opt-in causes silent degradation. The bench then measured
+// the population it admits and it FAILED ITS OWN PRE-REGISTERED BAR:
+//
+//   second-person facts   29% precise, 34% misattributed   (bar: >=60%, <=25%)
+//   existing population   43% precise at baseline
+//
+// So the gate admits 161 facts per 60 turns of which roughly 114 are unsound or
+// filed on the wrong person — and 34% misattribution is more than double the
+// baseline population's 15%. Misattribution is the dangerous class: a fact about
+// a character filed on the user is the qhej/hhdr failure, and it is worse than
+// the omission cye6 exists to fix.
+//
+// The pre-registered fallback (subject position instead of presence) does NOT
+// rescue it: 27% on the same labels, two points WORSE, while dropping 62 of the
+// 161. Slice 1 predicted subject position would be "a big precision win". It is
+// not. It is the same precision over a smaller set.
+//
+// Blended across both populations arm B scores 51% against arm A's 43%, which
+// looks like a win and is exactly the number the per-population reporting exists
+// to refuse. The bar was set before the data and the data did not clear it.
+//
+// MARINARA_EXTENDER_SECOND_PERSON=1 turns it on. The switch stays because the
+// population is real — su6h's omission is genuine and 15,739 sentences are still
+// invisible — but it does not ship until the ATTRIBUTION defect is fixed, which
+// is a different ticket. See the notes on cye6.
 export function secondPersonEnabled(): boolean {
-  return process.env.MARINARA_EXTENDER_SECOND_PERSON !== "0";
+  return process.env.MARINARA_EXTENDER_SECOND_PERSON === "1";
 }
 
 // ── Direction of address, enforced ───────────────────────────────────────────

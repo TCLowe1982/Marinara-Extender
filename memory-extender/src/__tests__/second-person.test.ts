@@ -55,20 +55,24 @@ describe("the Independence case, end to end at the gate", () => {
   });
 });
 
-describe("the gate is ON by default, OFF by flag", () => {
+describe("the gate is OFF by default — it failed its own bar (slice 3)", () => {
   const s = "you grew up on a barge and never once got seasick";
 
-  it("default admits it", () => {
-    expect(secondPersonEnabled()).toBe(true);
-    expect(extractCandidates(s, { admitSecondPerson: true })).toEqual([s]);
+  it("default does NOT admit it", () => {
+    // It shipped default-on. The bench measured the population it admits at 29%
+    // precision and 34% misattribution against a pre-registered bar of >=60% and
+    // <=25%, so the default was flipped. The mechanism stays wired and tested;
+    // what is refused is turning it on before the attribution defect is fixed.
+    expect(secondPersonEnabled()).toBe(false);
+    expect(extractCandidates(s)).toEqual([]);
   });
 
-  it("MARINARA_EXTENDER_SECOND_PERSON=0 restores the pre-cye6 gate exactly", () => {
+  it("MARINARA_EXTENDER_SECOND_PERSON=1 turns it on", () => {
     const prev = process.env.MARINARA_EXTENDER_SECOND_PERSON;
-    process.env.MARINARA_EXTENDER_SECOND_PERSON = "0";
+    process.env.MARINARA_EXTENDER_SECOND_PERSON = "1";
     try {
-      expect(secondPersonEnabled()).toBe(false);
-      expect(extractCandidates(s)).toEqual([]);
+      expect(secondPersonEnabled()).toBe(true);
+      expect(extractCandidates(s, { admitSecondPerson: true })).toEqual([s]);
     } finally {
       if (prev === undefined) delete process.env.MARINARA_EXTENDER_SECOND_PERSON;
       else process.env.MARINARA_EXTENDER_SECOND_PERSON = prev;

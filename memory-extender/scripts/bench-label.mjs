@@ -2,9 +2,10 @@
 //
 // I am both the person who wired the change and the person judging whether it
 // worked. Labelling with the arm visible would be worthless — so it is hidden.
-// This shuffles every fact into one deterministic order, strips the arm and the
-// cell, and prints numbered items. Verdicts go into a labels file keyed by the
-// blind id; `join` re-attaches the arm afterwards and computes the cells.
+// This shuffles the pre-registered subset into one deterministic order, strips
+// the arm, and prints numbered items. Verdicts go into a labels file keyed by
+// the blind id; `join` re-attaches the arm afterwards and computes the cells.
+// The CELL is not hidden and cannot be — see the note at the selection below.
 //
 //   node scripts/bench-label.mjs present [from] [count]   print blind items
 //   node scripts/bench-label.mjs join                     score the labels
@@ -37,13 +38,33 @@ function rng(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-const order = rows.map((_, i) => i);
+// THE PRE-REGISTERED SUBSET, chosen by the harness and not by me: every
+// NEW-population fact (that is the population under test), plus up to 60
+// OLD-population facts per arm sampled at random. Selecting by hand would let
+// me choose which items to judge, which is the same failure as labelling with
+// the arm visible.
 const rand = rng(20260825);
-for (let i = order.length - 1; i > 0; i--) {
-  const j = Math.floor(rand() * (i + 1));
-  [order[i], order[j]] = [order[j], order[i]];
+const shuffle = (xs) => {
+  const a = xs.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
+const OLD_CAP = 60;
+const idx = rows.map((_, i) => i);
+const selected = idx.filter((i) => rows[i].cell === "NEW");
+for (const arm of ["A", "B", "C"]) {
+  const pool = shuffle(idx.filter((i) => rows[i].cell === "OLD" && rows[i].arm === arm));
+  selected.push(...pool.slice(0, OLD_CAP));
 }
-const blind = order.map((idx, k) => ({ id: k + 1, idx, r: rows[idx] }));
+// WHAT THE BLIND ACTUALLY HIDES, stated plainly: the ARM. The CELL cannot be
+// hidden — a NEW item is one whose sentence is second-person-only, and the
+// sentence is printed, so anyone reading it can tell. Arm is the axis the
+// decision rule turns on and arm is what stays invisible: an OLD-cell item is
+// indistinguishable across A, B and C.
+const blind = shuffle(selected).map((i, k) => ({ id: k + 1, idx: i, r: rows[i] }));
 
 const cmd = process.argv[2] ?? "present";
 

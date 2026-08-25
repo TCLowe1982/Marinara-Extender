@@ -887,7 +887,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
       void (async () => {
         try {
           const roster = await buildSubjectRoster(characterName, participantIds);
-          const facts = await classifyAmbient({ userText: userMessageText, characterText: messageText, roster });
+          const facts = await classifyAmbient({ userText: userMessageText, characterText: messageText, roster, characterName });
           let saved = 0;
           for (const fact of facts) {
             // ONE ROUTING RULE, ONE PLACE (oc4w). This block used to be an

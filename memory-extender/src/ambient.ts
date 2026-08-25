@@ -12,6 +12,7 @@
 import type { Lane } from "./storage.js";
 import { localUrl, localEnabled, localModel, externalUpstream, externalModel } from "./llm-config.js";
 import { keepUserClause, userSpokenLines } from "./user-clause.js";
+import { USER_SENTINEL } from "./subject.js";
 
 // ── Candidate extraction ──────────────────────────────────────────────────────
 
@@ -77,6 +78,90 @@ export function isSecondPerson(sentence: string): boolean {
   return SECOND_PERSON_RE.test(sentence);
 }
 
+/**
+ * A sentence that survives the gate ONLY because of second person — no "I", no
+ * named subject. These are the 15,739 the gate has been discarding, and they
+ * are the only ones the direction rule has anything to say about. A mixed
+ * sentence ("I told you I'm from Texas") already had a first-person claim and
+ * must keep it.
+ */
+export function isSecondPersonOnly(sentence: string): boolean {
+  return SECOND_PERSON_RE.test(sentence)
+    && !FIRST_PERSON_RE.test(sentence)
+    && !NAMED_SUBJECT_RE.test(sentence);
+}
+
+// DEFAULT ON, WITH A KILL SWITCH — the house posture. Opt-in causes silent
+// degradation: the median user gets a gate that cannot see itself being talked
+// about and has nothing to compare it to. MARINARA_EXTENDER_SECOND_PERSON=0
+// restores the pre-cye6 behaviour exactly.
+export function secondPersonEnabled(): boolean {
+  return process.env.MARINARA_EXTENDER_SECOND_PERSON !== "0";
+}
+
+// ── Direction of address, enforced ───────────────────────────────────────────
+//
+// The prompt is told the rule. This is the half the code decides, because one
+// direction is grammatically CERTAIN and the other is not:
+//
+//   USER BLOCK, second person   "you" said by the user is NEVER the user.
+//     The speaker is one known person, so "not about the speaker" names exactly
+//     who it is not. This is the qhej/hhdr failure — three user_topics rows put
+//     TC in Texas because a character's line was filed as his biography — and
+//     admitting second person is precisely what would scale it. Refused here.
+//
+//   CHARACTER BLOCK, second person   NOT enforceable, and the slice-1 note
+//     overstated it. secondPersonSubject() assumes the character is addressing
+//     the USER, which is true in a 1:1 and false the moment two characters talk
+//     to each other in a group scene. The [character] block carries every
+//     character in the message, so "not about the speaker" cannot name anyone.
+//     The model gets the rule and the block label; the code does not overrule it.
+//
+// 92.7% of the admitted population is the character half — the recall win su6h
+// needs, judged by the model. 7.3% is the user half — the dangerous one, and
+// the one arithmetic can close. Refusals are COUNTED, not silent.
+
+// Compare on the text the model echoes back, which is usually but not always
+// byte-identical to the candidate it was given.
+function normText(s: string): string {
+  return s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+function attributedToUser(f: AmbientFact): boolean {
+  const s = (f.subject ?? "").trim().toLowerCase();
+  return s === USER_SENTINEL || (!s && f.lane === "user_topics");
+}
+
+export interface DirectionCounts {
+  /** Reassigned to the session character — the addressee, in a 1:1. */
+  reassigned: number;
+  /** No addressee to name: kept, but stripped of the false user claim. */
+  refused: number;
+}
+
+export function enforceAddressDirection(
+  facts: AmbientFact[],
+  userAddressed: Iterable<string>,
+  characterName?: string,
+): { facts: AmbientFact[]; counts: DirectionCounts } {
+  const addressed = new Set([...userAddressed].map(normText));
+  if (addressed.size === 0) return { facts, counts: { reassigned: 0, refused: 0 } };
+
+  const counts: DirectionCounts = { reassigned: 0, refused: 0 };
+  const out = facts.map((f) => {
+    if (!addressed.has(normText(f.text)) || !attributedToUser(f)) return f;
+    if (characterName?.trim()) {
+      counts.reassigned++;
+      return { ...f, subject: characterName.trim(), lane: "character_topics" as Lane };
+    }
+    // Nobody to name. Keep the memory, drop the claim, demote out of the
+    // permanent ledger — route and mark, never drop.
+    counts.refused++;
+    return { ...f, subject: undefined, lane: "character_topics" as Lane, scope: "chat" as const };
+  });
+  return { facts: out, counts };
+}
+
 // ── LLM call ──────────────────────────────────────────────────────────────────
 
 export interface AmbientFact {
@@ -100,6 +185,19 @@ SCOPE RULES:
 SUBJECT RULE:
 - subject = who the fact is ABOUT. Use "user" for the human player; use the character's name for a fact about that character.
 - A [character] sentence may describe ANY character in the scene, not just the one whose turn it is — attribute by content, not by block label. Pick names from the "Known characters" list when one is provided.
+
+DIRECTION OF ADDRESS — "you" is the LISTENER, never the speaker.
+The [user] / [character] prefix says who SPOKE the sentence, not who it is about.
+- A [user] sentence about "you" or "your" is NEVER about the user. Nobody is the
+  person they are addressing. It is about a character.
+- A [character] sentence about "you" or "your" is about whoever that character is
+  addressing: the user in a one-on-one scene, possibly another character when
+  several are present. Decide from the content.
+- Nothing else changes. A [user] sentence about "I" is still about the user, and a
+  sentence naming someone is still about the person it names.
+The same words flip subject depending on who said them:
+- [user] "you were grown in a vat on Ceres" → character scope, character_topics, subject = the character
+- [character] "you were grown in a vat on Ceres" → character scope, user_topics, subject "user"
 
 Examples:
 - "I grew up in Texas" (said by user) → character scope, user_topics, subject "user"
@@ -199,6 +297,10 @@ export interface AmbientInput {
   // Known character names shown to the model so fact subjects come back as
   // resolvable names instead of pronouns or invented labels.
   roster?: string[];
+  // The session character — who the user is talking TO. Used only by the
+  // direction rule, to name the addressee of a second-person line the user
+  // spoke. Absent means "no addressee to name", not "the user".
+  characterName?: string;
 }
 
 async function callExternal(prompt: string, system: string = SYSTEM_PROMPT): Promise<string | null> {
@@ -244,8 +346,15 @@ async function declaredUserForms(): Promise<string[]> {
 }
 
 export async function classifyAmbient(input: AmbientInput): Promise<AmbientFact[]> {
-  const userCandidates = extractCandidates(input.userText);
-  const charCandidates = extractCandidates(input.characterText);
+  // cye6: second person is admitted. The gate could see a speaker describing
+  // THEMSELVES and a speaker naming a THIRD PARTY, and was structurally unable
+  // to see a speaker describing THE PERSON THEY ARE TALKING TO — which in a
+  // roleplay is the dominant register for facts about the user. Measured cost
+  // is +1.75 candidate lines per turn in the one batched call; measured gain is
+  // 15,739 sentences, 92.7% of them directionally about the user.
+  const admit = secondPersonEnabled();
+  const userCandidates = extractCandidates(input.userText, { admitSecondPerson: admit });
+  const charCandidates = extractCandidates(input.characterText, { admitSecondPerson: admit });
 
   if (userCandidates.length === 0 && charCandidates.length === 0) return [];
 
@@ -266,14 +375,26 @@ export async function classifyAmbient(input: AmbientInput): Promise<AmbientFact[
   if (raw === null) raw = await callExternal(prompt);
 
   // 2tro: restore the user's clause if the model kept only the third-person half.
-  const facts = keepUserClause(parseFactsJson(raw), {
+  const restored = keepUserClause(parseFactsJson(raw), {
     userText: input.userText,
     userForms: await declaredUserForms(),
     thirdParties: input.roster ?? [],
   });
 
-  if (facts.length > 0) {
-    console.info(`[ME:ambient] found ${facts.length} ambient fact(s) from ${lines.length} candidate(s)`);
+  // The direction rule runs LAST, after keepUserClause — which exists to put a
+  // user claim BACK when the model dropped it, and would happily resurrect the
+  // exact attribution the rule refuses.
+  const { facts, counts } = enforceAddressDirection(
+    restored,
+    admit ? userCandidates.filter(isSecondPersonOnly) : [],
+    input.characterName,
+  );
+
+  if (facts.length > 0 || counts.reassigned || counts.refused) {
+    const dir = counts.reassigned || counts.refused
+      ? ` | direction: ${counts.reassigned} reassigned, ${counts.refused} refused`
+      : "";
+    console.info(`[ME:ambient] found ${facts.length} ambient fact(s) from ${lines.length} candidate(s)${dir}`);
   }
 
   return facts;

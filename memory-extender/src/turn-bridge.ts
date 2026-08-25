@@ -19,7 +19,7 @@
 // The engine then injects that lorebook on the NEXT generation, which is why
 // memory has always been one turn behind on this path.
 
-import { listCharacters, parseData } from "./engine-client.js";
+import { listCharacters, listPersonas, parseData } from "./engine-client.js";
 import { syncMemoryToLorebook } from "./lorebook-writer.js";
 import { recordCapture } from "./capture-status.js";
 import { swipeIndexOf, type DetectedTurn } from "./poller.js";
@@ -58,6 +58,35 @@ async function loadNames(): Promise<Map<string, string>> {
     if (id && name) map.set(id, name);
   }
   return map;
+}
+
+// Personas resolve the same way and change even less often. Separate cache so a
+// character refresh does not pay for a persona lookup or vice versa.
+let personaCache: Map<string, string> | null = null;
+
+export function _resetPersonaCache(): void {
+  personaCache = null;
+}
+
+async function loadPersonas(): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  for (const p of await listPersonas()) {
+    // Personas expose their fields at the TOP level — no nested `data` string.
+    const id = String(p.id ?? "");
+    const name = String(p.name ?? "");
+    if (id && name) map.set(id, name);
+  }
+  return map;
+}
+
+export async function personaNameFor(personaId: string | undefined | null): Promise<string | null> {
+  if (!personaId) return null;
+  if (!personaCache) personaCache = await loadPersonas().catch(() => new Map());
+  const hit = personaCache.get(personaId);
+  if (hit) return hit;
+  // Miss: the persona may have been created since the cache was built.
+  personaCache = await loadPersonas().catch(() => personaCache ?? new Map());
+  return personaCache.get(personaId) ?? null;
 }
 
 export async function characterNameFor(characterId: string): Promise<string | null> {
@@ -132,6 +161,9 @@ export async function handleDetectedTurn(turn: DetectedTurn, opts: BridgeOptions
   }
 
   const characterName = await characterNameFor(turn.characterId);
+  // qhej: who the HUMAN is playing here. Never guessed — null when the chat
+  // names no persona, which the routing reads as "unknown", not "no persona".
+  const personaName = await personaNameFor(turn.personaId);
 
   let result: ProcessTurnResult;
   try {
@@ -141,6 +173,7 @@ export async function handleDetectedTurn(turn: DetectedTurn, opts: BridgeOptions
       participantIds: turn.participantIds,
       chatId: turn.chatId,
       sceneTitle: turn.chatName,
+      ...(personaName ? { personaName } : {}),
       messageText,
       userMessageText: turn.precedingUserText,
       // 06pq: which message, and which swipe of it. The poller sends no

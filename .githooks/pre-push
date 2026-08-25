@@ -34,6 +34,26 @@
 set -e
 cd "$(dirname "$0")/../memory-extender" || exit 0
 
+# ── SELF-EVIDENCING (2026-08-25) ─────────────────────────────────────────────
+# This gate failed twice and passed on immediate retry, and neither failure left
+# an artifact — the output had been piped to `tail` both times, so the reason
+# scrolled away and the retry made it look fine. A gate that passes on retry
+# teaches you to re-roll until you like the result, which is worse than no gate.
+#
+# So the hook now records its OWN transcript and exit status, unconditionally.
+# The next failure explains itself instead of needing to be reproduced.
+mkdir -p logs
+_pp_log="logs/pre-push.log"
+{
+  echo ""
+  echo "═══ pre-push $(date -u +%Y-%m-%dT%H:%M:%SZ) — $(git rev-parse --short HEAD) ═══"
+} >> "$_pp_log"
+# Mirror everything below to the log as well as the terminal, and stamp the exit
+# code on the way out however we leave.
+exec > >(tee -a "$_pp_log") 2>&1
+_pp_done() { _c=$?; echo "─── exit $_c ───" >> "$_pp_log"; }
+trap _pp_done EXIT
+
 # First, and deliberately ABOVE the dist guard below: typechecking needs no build
 # output, so it must not be skipped on a fresh clone.
 echo "pre-push: typecheck..."

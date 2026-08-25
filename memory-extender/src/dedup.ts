@@ -46,6 +46,7 @@ import {
 } from "./storage.js";
 import { nanoid } from "./nanoid.js";
 import { queueEnabled, enqueueReconcileTask } from "./reconcile-queue.js";
+import { normalizeSubjects, type SubjectRef } from "./subject.js";
 
 export const DEDUP_SIMILARITY_THRESHOLD = 0.35;
 // Incident-vs-incident: only a re-capture of the SAME moment should collapse.
@@ -179,6 +180,13 @@ export interface CreateEntryInput {
   // standing pattern/fact about who someone is). Drives the character_topics
   // dedup matrix; omitted = legacy behavior (aggressive dedup).
   kind?: EntryKind;
+  /**
+   * Who this memory is ABOUT (4g9w/qlib) — not who can recall it. Invalid names
+   * (the prompt's own "[character]" placeholder, bare pronouns, "unknown") are
+   * refused by normalizeSubjects and counted, so a non-name can never reach the
+   * store; the field then stays ABSENT rather than empty.
+   */
+  subjects?: SubjectRef[];
 }
 
 // Lane/kind-aware duplicate decision. Returns the blocking entry, or a
@@ -283,6 +291,7 @@ export async function createEntry(
   const id = `${idPrefix(input.lane)}-${nanoid(8)}`;
   const now = today();
   const status: EntryStatus = input.status ?? "open";
+  const subjects = normalizeSubjects(input.subjects);
   const entry: Entry = {
     id,
     lane: input.lane,
@@ -299,6 +308,7 @@ export async function createEntry(
     ...(typeof input.turnStart === "number" ? { turnStart: input.turnStart } : {}),
     ...(input.sourceMessageId ? { sourceMessageId: input.sourceMessageId } : {}),
     ...(typeof input.sourceSwipeIndex === "number" ? { sourceSwipeIndex: input.sourceSwipeIndex } : {}),
+    ...(subjects ? { subjects } : {}),
   };
 
   const relativePath = await writeEntry(scope, scopeId, entry);
@@ -317,6 +327,7 @@ export async function createEntry(
     ...(typeof input.turnStart === "number" ? { turnStart: input.turnStart } : {}),
     ...(input.sourceMessageId ? { sourceMessageId: input.sourceMessageId } : {}),
     ...(typeof input.sourceSwipeIndex === "number" ? { sourceSwipeIndex: input.sourceSwipeIndex } : {}),
+    ...(subjects ? { subjects } : {}),
   });
   return entry;
 }

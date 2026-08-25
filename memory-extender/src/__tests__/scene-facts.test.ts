@@ -34,7 +34,12 @@ describe("resolveFactTarget routing", () => {
       { text: "I've DMed since 2nd edition", fact: "User has DMed since D&D 2e", lane: "user_topics", scope: "character", subject: "user" },
       ctx,
     );
-    expect(t).toEqual({ scope: "character", scopeId: "mari", summary: "User has DMed since D&D 2e" });
+    expect(t).toEqual({
+      scope: "character", scopeId: "mari", summary: "User has DMed since D&D 2e",
+      // 4g9w/qlib: aboutness is a FIELD now. "user" is the one kind knowable
+      // without a roster, so it is the one this path can assert.
+      subjects: [{ name: "user", kind: "user" }],
+    });
   });
 
   it("a fact about the session character itself stays on its own ledger (no misroute)", async () => {
@@ -53,7 +58,14 @@ describe("resolveFactTarget routing", () => {
     );
     expect(t?.scope).toBe("chat");
     expect(t?.scopeId).toBe("chat-1");
-    expect(t?.summary).toMatch(/^\[about: Cole\]/);
+    // 4g9w/qlib: the aboutness tag moved OUT of the summary prose and into the
+    // subjects field. The summary is now just the fact.
+    expect(t?.summary).toBe("Cole mains a blood elf affliction warlock");
+    expect(t?.summary).not.toMatch(/\[about:/);
+    expect(t?.subjects).toEqual([{ name: "Cole" }]);
+    // kind is deliberately UNSET for an unresolved name — it is usually an
+    // entity the index has not seen yet, not a non-character.
+    expect(t?.subjects?.[0].kind).toBeUndefined();
   });
 
   it("drops a fact with an empty extracted summary", async () => {

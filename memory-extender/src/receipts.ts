@@ -28,7 +28,7 @@ import { createHash } from "crypto";
 import { readdir } from "fs/promises";
 import { join } from "path";
 import { stringify } from "yaml";
-import { atomicWriteFile, getDataDir, assertSafeId, readYamlFile, type Scope } from "./storage.js";
+import { atomicWriteFile_UNLOCKED_takeSerializedWriteYourself, getDataDir, assertSafeId, readYamlFile, type Scope } from "./storage.js";
 
 // ── Reason vocabularies ──────────────────────────────────────────────────────
 // Both are closed sets on purpose. A free-text reason is a reason nobody can
@@ -140,7 +140,7 @@ export function hashBlock(block: string): string {
 }
 
 // ── Storage ──────────────────────────────────────────────────────────────────
-// One file per chat, overwritten each turn. Written through atomicWriteFile so
+// One file per chat, overwritten each turn. Written through atomicWriteFile_UNLOCKED_takeSerializedWriteYourself so
 // a torn receipt can never be read back as truth — the same discipline the
 // entry store uses, for the same reason.
 
@@ -154,7 +154,7 @@ export function receiptPath(chatId: string): string {
 }
 
 export async function writeReceipt(receipt: RetrievalReceipt): Promise<void> {
-  await atomicWriteFile(receiptPath(receipt.chatId), stringify(receipt));
+  await atomicWriteFile_UNLOCKED_takeSerializedWriteYourself(receiptPath(receipt.chatId), stringify(receipt));
 }
 
 export async function readReceipt(chatId: string): Promise<RetrievalReceipt | null> {

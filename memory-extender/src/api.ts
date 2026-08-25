@@ -922,7 +922,14 @@ export function registerApiRoutes(app: FastifyInstance): void {
             [{ role: "user", content: userMessageText, ...(userSourceMessageId ? { messageId: userSourceMessageId } : {}) }],
             identityKey,
             characterName ?? identityKey,
-            { sourceType: "chat", ...(chatId ? { citesChatId: chatId } : {}) },
+            // personaName (qhej): this route already received it and used it for
+            // tier-3 routing, but never forwarded it to the pipeline — so the
+            // fact pass could not tell the player's persona from a stranger.
+            {
+              sourceType: "chat",
+              ...(chatId ? { citesChatId: chatId } : {}),
+              ...(personaName?.trim() ? { personaName: personaName.trim() } : {}),
+            },
           );
           console.info(`[ME:longform] user story (${userMessageText.length} chars) → ${r.beats.length} beat(s)`);
         } catch (err) {

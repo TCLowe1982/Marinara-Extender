@@ -29,7 +29,7 @@
 
 import { join } from "path";
 import { stringify } from "yaml";
-import { atomicWriteFile, getDataDir, readYamlFile } from "./storage.js";
+import { atomicWriteFile_UNLOCKED_takeSerializedWriteYourself, getDataDir, readYamlFile } from "./storage.js";
 
 export interface UserIdentity {
   version: 1;
@@ -87,7 +87,7 @@ export async function writeUserIdentity(
     excludes: normalizeForms(input.excludes).filter((x) => !aliases.includes(x)),
     updated: new Date().toISOString(),
   };
-  await atomicWriteFile(userIdentityPath(), stringify(identity));
+  await atomicWriteFile_UNLOCKED_takeSerializedWriteYourself(userIdentityPath(), stringify(identity));
   return identity;
 }
 

@@ -105,7 +105,7 @@ export interface ClassificationResult {
    * was merely dull, or the next person measuring "how much did we skip" cannot tell
    * a guard working from a guard misfiring.
    */
-  suppressedReason?: "content-floor" | "self-prompt" | "ops-lane" | "changelog";
+  suppressedReason?: "content-floor" | "self-prompt" | "ops-lane" | "changelog" | "mirror";
   /**
    * Lines routed to the ops sink (hjt9). Present whenever partitioning removed
    * anything, INCLUDING when the chunk still passes — the prose around a paste stays

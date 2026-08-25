@@ -9,7 +9,7 @@
 import type { FastifyInstance } from "fastify";
 import { readFile } from "fs/promises";
 import { defaultEnvPath, extensionJsCandidates } from "./paths.js";
-import { atomicWriteFile } from "./storage.js";
+import { atomicWriteFile_UNLOCKED_takeSerializedWriteYourself } from "./storage.js";
 import { buildVersion } from "./update.js";
 import { localUrl, localModel, localEnabled, externalUpstream, externalModel } from "./llm-config.js";
 
@@ -39,7 +39,7 @@ async function saveEnvVars(vars: Record<string, string>): Promise<void> {
   const keys = Object.keys(vars);
   const lines = existing.split("\n").filter((l) => !keys.some((k) => l.startsWith(`${k}=`)));
   for (const k of keys) lines.push(`${k}=${vars[k]}`);
-  await atomicWriteFile(envPath, lines.filter(Boolean).join("\n") + "\n");
+  await atomicWriteFile_UNLOCKED_takeSerializedWriteYourself(envPath, lines.filter(Boolean).join("\n") + "\n");
 
   for (const k of keys) process.env[k] = vars[k];
 }

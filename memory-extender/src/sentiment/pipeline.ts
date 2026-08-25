@@ -11,6 +11,7 @@ import { chunkMessages } from "./chunker.js";
 import { classifyChunks } from "./classifier.js";
 import { recordOps, routeOps, type OpsRecord } from "./ops-lane.js";
 import { classifyChangelog, recordChangelog, type ChangelogRecord } from "./changelog.js";
+import { detectMirror, isMirror, recordMirror, noteMirrorRefusal, mirrorRefusalCounts, type MirrorRecord } from "./mirror.js";
 import { analyzeChunk } from "./analyzer.js";
 import { encodeBeat, beatIdForChunk, provenanceKeyForChunk, readBeatIndex, readBeat, companionEntryFromBeat } from "./encoder.js";
 import { createEntryIfUnique } from "../dedup.js";
@@ -30,6 +31,11 @@ export interface PipelineOptions {
   // before filtering. Use for first-person prose where the narrator IS a
   // named character (e.g. povCharacter: "Mark").
   povCharacter?: string;
+  // Who the HUMAN is playing (qhej). Threaded so the fact path can tell a fact
+  // about the PERSONA from a fact about the person — resolveFactTarget has had
+  // a persona branch since it was written and no caller ever populated the
+  // field, so it was dead code and every persona fact routed as a stranger's.
+  personaName?: string;
   // Label for console progress output (e.g. the story title). Defaults to the
   // character name.
   progressLabel?: string;
@@ -101,7 +107,7 @@ export async function runSentimentPipeline(
   characterName: string,
   options: PipelineOptions = {},
 ): Promise<PipelineResult> {
-  const { sourceType = "chat", characters, povCharacter, progressLabel } = options;
+  const { sourceType = "chat", characters, povCharacter, progressLabel, personaName } = options;
   const report = new Progress(progressLabel ?? characterName, options.progress ?? progressEnabled());
 
   // Stage -1a: THIRD-PARTY RELEASE NOTES (mln9), before ops routing and for the same
@@ -172,7 +178,48 @@ export async function runSentimentPipeline(
   // prose. The chunk-level gate in classifyChunk stays as defence in depth for paths
   // that reach it with newlines intact (story imports, re-analysis of stored text).
   const opsRecords: OpsRecord[] = [];
-  const routedMessages = afterChangelog.map((m) => {
+  // ── Stage -1b: THE MIRROR (i83s) ─────────────────────────────────────────
+  // The store's own output, pasted into chat and ingested as dialogue. Found
+  // when 12 beats containing the literal "[about: Thomas]" were counted as if
+  // they were entries: the store described itself, the description became a
+  // memory, and the memory inflated the next measurement of what it described.
+  // A mirror, not a race — one utterance ending up at several weights.
+  //
+  // Runs AFTER the changelog gate and BEFORE routeOps, on what ARRIVED. Decides
+  // on COVERAGE, never on a hit: 21 live beats carry one of our ids inside
+  // ordinary shop talk ("the [remember:] tag writes character-scope because…"),
+  // and a chunk-level verdict would misfile every word wrapped around it — the
+  // pe4o failure. Calibrated in scripts/mirror-bench.mjs.
+  const mirrorRecords: MirrorRecord[] = [];
+  const afterMirror = afterChangelog.map((m) => {
+    const content = String(m.content ?? "");
+    if (!content.trim()) return m;
+    const hit = detectMirror(content);
+    if (!hit) return m;
+
+    const base = {
+      at: new Date().toISOString(), chatId: options.sourceChatId, speaker: m.role,
+      signals: hit.signals, matches: hit.matches, coverage: hit.coverage, text: content,
+    };
+    if (!isMirror(hit)) {
+      // THE SAVE IS RECORDED TOO — conversation that merely cites us.
+      mirrorRecords.push({ ...base, outcome: "spared-conversation" });
+      return m;
+    }
+    mirrorRecords.push({ ...base, outcome: "suppressed" });
+    noteMirrorRefusal(hit.signals);
+    return { ...m, content: "" };
+  });
+
+  if (mirrorRecords.length) {
+    recordMirror(getDataDir(), mirrorRecords);
+    const supp = mirrorRecords.filter((r) => r.outcome === "suppressed").length;
+    const spared = mirrorRecords.length - supp;
+    const byReason = Object.entries(mirrorRefusalCounts()).map(([k, v]) => `${k}:${v}`).join(" ");
+    console.info(`[ME:pipeline] mirror lane: ${supp} message(s) REFUSED as our own output, ${spared} spared as conversation${byReason ? ` [${byReason} cumulative]` : ""}`);
+  }
+
+  const routedMessages = afterMirror.map((m) => {
     const content = String(m.content ?? "");
     if (!content.includes("\n")) return m;
     const routed = routeOps(content);
@@ -193,7 +240,7 @@ export async function runSentimentPipeline(
 
   if (opsRecords.length) {
     recordOps(getDataDir(), opsRecords);
-    console.info(`[ME:pipeline] ops lane: routed ${opsRecords.length} line(s) from ${afterChangelog.filter((m) => String(m.content ?? "").trim().length > 0).length - routedMessages.length} dropped message(s) + reductions`);
+    console.info(`[ME:pipeline] ops lane: routed ${opsRecords.length} line(s) from ${afterMirror.filter((m) => String(m.content ?? "").trim().length > 0).length - routedMessages.length} dropped message(s) + reductions`);
   }
 
   // Stage 0: chunk
@@ -429,7 +476,11 @@ export async function runSentimentPipeline(
   // chunk set (not just `filtered`/salient) so they're captured anyway. Guarded
   // — a fact-pass failure must never fail an import that already saved its beats.
   try {
-    await ingestSceneFacts({ characterId, characterName, chunks, roster, sourceChatId: options.sourceChatId });
+    await ingestSceneFacts({
+      characterId, characterName, chunks, roster,
+      sourceChatId: options.sourceChatId,
+      ...(personaName ? { personaName } : {}),
+    });
   } catch (err) {
     console.warn("[ME:pipeline] scene-fact pass failed:", err);
   }

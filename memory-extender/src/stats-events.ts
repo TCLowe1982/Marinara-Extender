@@ -24,7 +24,7 @@
 import { join } from "path";
 import { readFile } from "fs/promises";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
-import { getDataDir, atomicWriteFile } from "./storage.js";
+import { getDataDir, atomicWriteFile_UNLOCKED_takeSerializedWriteYourself } from "./storage.js";
 import { nanoid } from "./nanoid.js";
 
 export interface StatsEvent {
@@ -77,6 +77,6 @@ export async function recordStatsEvent(
   };
   const events = await readStatsEvents();
   events.push(full);
-  await atomicWriteFile(eventsPath(), toYaml({ events } satisfies StatsEventFile));
+  await atomicWriteFile_UNLOCKED_takeSerializedWriteYourself(eventsPath(), toYaml({ events } satisfies StatsEventFile));
   return full;
 }

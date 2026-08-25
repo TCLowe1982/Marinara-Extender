@@ -21,6 +21,7 @@ import { createEntry, createEntryIfUnique } from "./dedup.js";
 import { resolveNameToKey, matchesSessionName } from "./identity.js";
 import { normalizeLabel, readAliasTable, USER_IDENTITY_KEY } from "./aliases.js";
 import { fetchEmbeddings, cosineSim } from "./embeddings.js";
+import { makeSubject, subjectKindFor, subjectRejectionCounts, type SubjectRef, type SubjectKind } from "./subject.js";
 
 // Scope the subject roster to characters actually MENTIONED in the scene, not
 // the whole cast. With the global cast in the prompt the model attributed a
@@ -72,7 +73,7 @@ export interface FactContext {
 export async function resolveFactTarget(
   fact: AmbientFact,
   ctx: FactContext,
-): Promise<{ scope: "character" | "chat"; scopeId: string; summary: string } | null> {
+): Promise<{ scope: "character" | "chat"; scopeId: string; summary: string; subjects?: SubjectRef[] } | null> {
   let summary = truncateSummary(fact.fact);
   if (!summary) return null;
 
@@ -87,20 +88,51 @@ export async function resolveFactTarget(
     !(ctx.personaName && matchesSessionName(subject, ctx.personaName)) &&
     !matchesSessionName(subject, ctx.characterName ?? ctx.identityKey);
 
+  // ABOUTNESS IS A FIELD NOW, NOT A PREFIX (4g9w/qlib). This function has always
+  // known who the fact is about; it had nowhere to put it, so it encoded the
+  // answer into the summary TEXT as "[about: X] …". 3,380 entries carry one.
+  // The routing below is unchanged — only where the answer is written changes.
+  //
+  // makeSubject REFUSES a value that is not a name (the prompt's own
+  // "[character]" placeholder, a bare pronoun, "unknown") and counts the
+  // refusal, so q5pk's population can never be recreated. A refused subject does
+  // not discard the fact: the entry is still routed and stored, just without an
+  // aboutness claim. Route and mark, never drop.
+  let subject_: SubjectRef | null = null;
+
   if (aboutSomeoneElse) {
     const key = await resolveNameToKey(subject!);
     if (key) {
       scopeId = key;
+      subject_ = makeSubject(subject, { key, kind: "character" });
     } else {
-      // Unknown subject: facts have no holding-pool lane, so keep the data
-      // without polluting a permanent ledger — demote to chat scope, tagged.
+      // Unresolved subject: facts have no holding-pool lane, so keep the data
+      // without polluting a permanent ledger — demote to chat scope. `kind` is
+      // left UNSET rather than guessed at "third-party": an unresolved name is
+      // usually just an entity the index has not seen yet (89l3 — entities.yaml
+      // has no refresh trigger). Absent means unknown, never means none.
       scope = "chat";
       scopeId = ctx.fallbackChatId;
-      summary = truncateSummary(`[about: ${subject}] ${fact.fact}`);
+      subject_ = makeSubject(subject);
     }
+  } else if (subject) {
+    // The fact is about the user, the player's PERSONA, or the scope owner —
+    // all three stay on this ledger, and until qhej they were indistinguishable
+    // once stored. `kind` is what separates them.
+    //
+    // ORDER MATTERS. The persona check runs BEFORE the character check because
+    // a persona name can legitimately collide with the session character's
+    // (TC's persona is "Thomas"; a character could be too). Whoever the human
+    // declared themselves to be wins that tie — a declaration is not a guess.
+    const kind: SubjectKind | undefined =
+      subjectKindFor(subject) ??
+      (ctx.personaName && matchesSessionName(subject, ctx.personaName) ? "persona"
+        : matchesSessionName(subject, ctx.characterName ?? ctx.identityKey) ? "character"
+        : undefined);
+    subject_ = makeSubject(subject, { kind });
   }
 
-  return { scope, scopeId, summary };
+  return { scope, scopeId, summary, ...(subject_ ? { subjects: [subject_] } : {}) };
 }
 
 // Persist one fact: resolve its home, then create it (deduped). character_topics
@@ -118,6 +150,7 @@ export async function saveFact(
     lane: fact.lane,
     summary: target.summary,
     content: capContent(fact.text),
+    ...(target.subjects ? { subjects: target.subjects } : {}),
     ...(sourceChatId ? { sourceChatId } : {}),
     ...(fact.lane === "character_topics" ? { kind: "trait" as const } : {}),
   };
@@ -237,6 +270,7 @@ export interface IngestSceneFactsInput {
   characterName: string;
   chunks: Chunk[];          // the FULL chunk set, before the salience threshold
   roster: string[];         // known character names, for subject attribution
+  personaName?: string;     // who the HUMAN is playing (qhej) — see FactContext
   sourceChatId?: string;    // so a re-import cleanly replaces these facts
   classify?: FactClassifier; // injectable for tests
   judge?: FactJudge;         // injectable for tests; default = durability judge
@@ -264,6 +298,7 @@ export async function ingestSceneFacts(
     identityKey: input.characterId,
     fallbackChatId: input.sourceChatId ?? input.characterId,
     characterName: input.characterName,
+    ...(input.personaName ? { personaName: input.personaName } : {}),
   };
 
   // Only the characters present in this scene, so the model can't attribute a
@@ -317,6 +352,10 @@ export async function ingestSceneFacts(
   const durable = await judge(candidates);
 
   // Pass 3 — route + persist the survivors.
+  // Snapshot the subject-refusal counters so this run's refusals are reportable.
+  // A guard that drops silently is a guard nobody can audit (q5pk accumulated
+  // 2,768 entries behind exactly that).
+  const rejectedBefore = Object.values(subjectRejectionCounts()).reduce((a, b) => a + b, 0);
   let saved = 0;
   const planned: PlannedFact[] = [];
   for (const fact of durable) {
@@ -328,8 +367,12 @@ export async function ingestSceneFacts(
     if (entry) saved++;
   }
 
-  if (saved > 0) {
-    console.info(`[ME:scene-facts] ${input.characterName}: saved ${saved} durable fact(s) (${candidates.length} candidates) from ${input.chunks.length} chunks`);
+  const rejected = Object.values(subjectRejectionCounts()).reduce((a, b) => a + b, 0) - rejectedBefore;
+  if (saved > 0 || rejected > 0) {
+    const subjectNote = rejected > 0
+      ? `, ${rejected} subject(s) refused as non-names [${Object.entries(subjectRejectionCounts()).map(([k, v]) => `${k}:${v}`).join(" ")} cumulative]`
+      : "";
+    console.info(`[ME:scene-facts] ${input.characterName}: saved ${saved} durable fact(s) (${candidates.length} candidates) from ${input.chunks.length} chunks${subjectNote}`);
   }
   return { saved, facts: candidates.length, planned, durable };
 }

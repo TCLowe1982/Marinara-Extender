@@ -348,7 +348,13 @@ async function writeYaml(filePath: string, data: unknown): Promise<void> {
 
 const _writeLocks = new Map<string, Promise<void>>();
 
-function serializedWrite(filePath: string, fn: () => Promise<void>): Promise<void> {
+// EXPORTED (i83s) so hot files outside this module can share the same per-path
+// lock. NOTE THE DEADLOCK HAZARD before moving this inside atomicWriteFile: the
+// index path already takes this lock and then calls writeYaml -> atomicWriteFile
+// on THE SAME PATH, so a lock inside atomicWriteFile would wait on itself. That
+// is why writeIndex is deliberately unserialized (see its comment above) and why
+// the fix for a new hot file is to take the lock at the CALL SITE, not deeper.
+export function serializedWrite(filePath: string, fn: () => Promise<void>): Promise<void> {
   const prev = _writeLocks.get(filePath) ?? Promise.resolve();
   const next = prev.then(fn, fn);
   _writeLocks.set(filePath, next);

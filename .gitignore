@@ -25,3 +25,6 @@ local-notes/
 # Tripwire log: local ingestion telemetry, not shared state.
 memory-extender/data/bait-contamination.jsonl
 memory-extender/data/ops-lane.jsonl
+
+# pre-push transcripts (self-evidencing gate)
+memory-extender/logs/pre-push.log

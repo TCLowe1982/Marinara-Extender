@@ -6,6 +6,7 @@ import { readFile, mkdir, access, unlink, readdir, rename, open } from "fs/promi
 import { join, dirname } from "path";
 import { parse, stringify } from "yaml";
 import { defaultDataDir } from "./paths.js";
+import type { SubjectRef } from "./subject.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -132,6 +133,13 @@ export interface IndexEntry {
    * tp5 — treat as "not yet harvested", never as "this entry has no names".
    */
   bodyTerms?: string[];
+  /**
+   * Who this memory is ABOUT (4g9w/qlib). Distinct from SCOPE, which says who
+   * can RECALL it: "Thomas's sister is Becky" is about Thomas and recallable by
+   * Mari, and before this field the store could express only the second half.
+   * ABSENT MEANS UNASSESSED, never "about nobody" — the bodyTerms rule.
+   */
+  subjects?: SubjectRef[];
 }
 
 export interface ScopeIndex {
@@ -177,6 +185,13 @@ export interface Entry {
   provenance?: EntryProvenance; // "unplayed" = outline; never recalled (see EntryProvenance)
   // Soft clock context at time of encoding
   timeContext?: { timeOfDay: string; dayOfWeek: string; inferredFrom?: string };
+  /**
+   * Who this memory is ABOUT (4g9w/qlib). Distinct from SCOPE, which says who
+   * can RECALL it: "Thomas's sister is Becky" is about Thomas and recallable by
+   * Mari, and before this field the store could express only the second half.
+   * ABSENT MEANS UNASSESSED, never "about nobody" — the bodyTerms rule.
+   */
+  subjects?: SubjectRef[];
 }
 
 export interface Bookmark {

@@ -260,7 +260,9 @@ async function callLocal(prompt: string, system: string = SYSTEM_PROMPT): Promis
   }
 }
 
-function parseFactsJson(raw: string | null): AmbientFact[] {
+// Exported for the precision bench (cye6 slice 3). A bench that reimplements the
+// parser is measuring its own reimplementation, not the pipeline. Pure, no I/O.
+export function parseFactsJson(raw: string | null): AmbientFact[] {
   if (!raw) return [];
   const attempts = [raw.trim(), raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim() ?? ""];
   for (const attempt of attempts) {

@@ -28,3 +28,6 @@ memory-extender/data/ops-lane.jsonl
 
 # pre-push transcripts (self-evidencing gate)
 memory-extender/logs/pre-push.log
+
+# Bench scratch (cye6) — regenerable from the seed; never committed.
+memory-extender/scratch/

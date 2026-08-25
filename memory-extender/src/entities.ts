@@ -39,7 +39,7 @@
 
 import { join } from "path";
 import { stringify } from "yaml";
-import { atomicWriteFile, getDataDir, readYamlFile } from "./storage.js";
+import { atomicWriteFile_UNLOCKED_takeSerializedWriteYourself, getDataDir, readYamlFile } from "./storage.js";
 import { excludedForms, userCueLinks, type UserIdentity } from "./user-identity.js";
 
 // ── Extraction ───────────────────────────────────────────────────────────────
@@ -264,7 +264,7 @@ export async function readEntityIndex(): Promise<EntityIndex | null> {
 }
 
 export async function writeEntityIndex(index: EntityIndex): Promise<void> {
-  await atomicWriteFile(entityIndexPath(), stringify(index));
+  await atomicWriteFile_UNLOCKED_takeSerializedWriteYourself(entityIndexPath(), stringify(index));
 }
 
 // ── Cue expansion ────────────────────────────────────────────────────────────

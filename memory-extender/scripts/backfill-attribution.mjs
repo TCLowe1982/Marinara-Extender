@@ -50,7 +50,7 @@ const { normalizeLabel } = await import(distUrl("dist/aliases.js"));
 const { addPending } = await import(distUrl("dist/holding-pool.js"));
 const { createEntryIfUnique } = await import(distUrl("dist/dedup.js"));
 const storage = await import(distUrl("dist/storage.js"));
-const { readIndex, removeIndexEntry, deleteEntryFile, listScopeIds, getDataDir, atomicWriteFile } = storage;
+const { readIndex, removeIndexEntry, deleteEntryFile, listScopeIds, getDataDir, atomicWriteFile_UNLOCKED_takeSerializedWriteYourself } = storage;
 const { stringify: toYaml } = await import("yaml");
 
 // ── Args ─────────────────────────────────────────────────────────────────────
@@ -87,7 +87,7 @@ async function removeBeatRow(identityKey, beatId) {
   index.entries = index.entries.filter((e) => e.id !== beatId);
   if (index.entries.length === before) return false;
   index.lastUpdated = new Date().toISOString();
-  await atomicWriteFile(join(dataDir, "characters", identityKey, "beats", "index.yaml"), toYaml(index));
+  await atomicWriteFile_UNLOCKED_takeSerializedWriteYourself(join(dataDir, "characters", identityKey, "beats", "index.yaml"), toYaml(index));
   await unlink(join(dataDir, "characters", identityKey, "beats", `${beatId}.yaml`)).catch(() => {});
   return true;
 }

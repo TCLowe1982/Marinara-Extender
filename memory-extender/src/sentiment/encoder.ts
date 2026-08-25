@@ -15,7 +15,7 @@ import { readFile, access, rm } from "fs/promises";
 import { join } from "path";
 import { createHash } from "crypto";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
-import { getDataDir, assertSafeId, atomicWriteFile, readIndex, retireEntries } from "../storage.js";
+import { getDataDir, assertSafeId, atomicWriteFile_UNLOCKED_takeSerializedWriteYourself, readIndex, retireEntries } from "../storage.js";
 import type { Emotion } from "./types.js";
 import type { EmotionalBeat, ClassificationResult, BeatAnalysis, Chunk } from "./types.js";
 import type { AnalyzedBeat } from "./analyzer.js";
@@ -149,7 +149,7 @@ async function readYaml<T>(filePath: string): Promise<T | null> {
 }
 
 async function writeYaml(filePath: string, data: unknown): Promise<void> {
-  await atomicWriteFile(filePath, toYaml(data));
+  await atomicWriteFile_UNLOCKED_takeSerializedWriteYourself(filePath, toYaml(data));
 }
 
 // ── Beat index ─────────────────────────────────────────────────────────────

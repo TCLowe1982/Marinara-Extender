@@ -13,9 +13,28 @@
 //
 // These pin the branch alive, and the collision rule that decides ties.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtemp, rm } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
 import { resolveFactTarget } from "../facts.js";
 import type { AmbientFact } from "../ambient.js";
+
+// MUST be isolated. resolveFactTarget calls resolveNameToKey, which reads the
+// alias map out of MARINARA_EXTENDER_DATA — so without a temp dir these tests
+// read the LIVE store and their verdicts change as it does. That is not
+// hypothetical: once the sidecar started registering the player's persona as a
+// user alias (api.ts addAlias on process-turn), "Thomas" began resolving and
+// the demotion case below silently inverted.
+let dir: string;
+beforeEach(async () => {
+  dir = await mkdtemp(join(tmpdir(), "me-persona-"));
+  process.env.MARINARA_EXTENDER_DATA = join(dir, "data");
+});
+afterEach(async () => {
+  delete process.env.MARINARA_EXTENDER_DATA;
+  await rm(dir, { recursive: true, force: true });
+});
 
 const fact = (over: Partial<AmbientFact>): AmbientFact => ({
   text: "…", fact: "…", lane: "character_topics", scope: "character", ...over,

@@ -292,7 +292,25 @@ async function readYaml<T>(filePath: string): Promise<T | null> {
 // we wrote through — fsync on a handle opened "r" fails with EPERM on Windows
 // (FlushFileBuffers needs write access), which is exactly how the engine's own
 // flushFile() silently no-opped and lost tables in the 2026-06-10 incident.
-export async function atomicWriteFile(filePath: string, content: string): Promise<void> {
+/**
+ * Atomic write with NO LOCK. The name is deliberately awful: this is the wrong
+ * path for anything written more than once, and it should be unpleasant to
+ * choose at 2am. A hazard note in a comment is optional correctness wearing a
+ * lanyard — the identifier itself has to say it.
+ *
+ * WHAT IT DOES: tmp -> fsync -> atomic rename, with Windows EPERM/EBUSY retry.
+ * That makes a single write crash-safe. It does NOT make CONCURRENT writes to
+ * one path safe: two callers race, the losers retry, and a process exit in that
+ * window leaves an orphaned .tmp and a write that never landed. capture-status
+ * accumulated 146 such orphans that way (i83s), five from one process in one
+ * millisecond.
+ *
+ * WHAT YOU PROBABLY WANT: serializedWrite(path, () => this(path, content)).
+ * Take the lock at the CALL SITE — it cannot be taken inside here, because the
+ * index path already holds it before calling through writeYaml, so a lock in
+ * here would wait on its own caller.
+ */
+export async function atomicWriteFile_UNLOCKED_takeSerializedWriteYourself(filePath: string, content: string): Promise<void> {
   await ensureDir(filePath);
   const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
   const fh = await open(tmp, "w");
@@ -339,7 +357,7 @@ function warnFsyncFailedOnce(err: unknown): void {
 }
 
 async function writeYaml(filePath: string, data: unknown): Promise<void> {
-  await atomicWriteFile(filePath, stringify(data));
+  await atomicWriteFile_UNLOCKED_takeSerializedWriteYourself(filePath, stringify(data));
 }
 
 // ── Write serialization ───────────────────────────────────────────────────────
@@ -349,9 +367,9 @@ async function writeYaml(filePath: string, data: unknown): Promise<void> {
 const _writeLocks = new Map<string, Promise<void>>();
 
 // EXPORTED (i83s) so hot files outside this module can share the same per-path
-// lock. NOTE THE DEADLOCK HAZARD before moving this inside atomicWriteFile: the
-// index path already takes this lock and then calls writeYaml -> atomicWriteFile
-// on THE SAME PATH, so a lock inside atomicWriteFile would wait on itself. That
+// lock. NOTE THE DEADLOCK HAZARD before moving this inside atomicWriteFile_UNLOCKED_takeSerializedWriteYourself: the
+// index path already takes this lock and then calls writeYaml -> atomicWriteFile_UNLOCKED_takeSerializedWriteYourself
+// on THE SAME PATH, so a lock inside atomicWriteFile_UNLOCKED_takeSerializedWriteYourself would wait on itself. That
 // is why writeIndex is deliberately unserialized (see its comment above) and why
 // the fix for a new hot file is to take the lock at the CALL SITE, not deeper.
 export function serializedWrite(filePath: string, fn: () => Promise<void>): Promise<void> {

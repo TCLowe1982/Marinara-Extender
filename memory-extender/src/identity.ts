@@ -26,7 +26,7 @@ import {
   readEntry,
   writeEntry,
   upsertIndexEntry,
-  atomicWriteFile,
+  atomicWriteFile_UNLOCKED_takeSerializedWriteYourself,
   type Entry,
 } from "./storage.js";
 import { readBeatIndex, readBeat, writeBeat, type BeatIndex } from "./sentiment/encoder.js";
@@ -78,7 +78,7 @@ async function readMapFile(): Promise<IdentityMapFile> {
 }
 
 async function writeMapFile(map: IdentityMapFile): Promise<void> {
-  await atomicWriteFile(identityMapPath(), toYaml(map));
+  await atomicWriteFile_UNLOCKED_takeSerializedWriteYourself(identityMapPath(), toYaml(map));
 }
 
 async function dirExists(path: string): Promise<boolean> {

@@ -15,7 +15,7 @@
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
-import { getDataDir, atomicWriteFile, serializedWrite } from "./storage.js";
+import { getDataDir, atomicWriteFile_UNLOCKED_takeSerializedWriteYourself, serializedWrite } from "./storage.js";
 
 export interface CaptureStatus {
   /** ISO timestamp of the last successfully ingested turn. */
@@ -37,10 +37,10 @@ export async function recordCapture(s: Omit<CaptureStatus, "lastCaptureAt">): Pr
     // SERIALIZED (i83s). This is the hottest-written file in the store and it
     // took no lock, so concurrent ingests raced: 146 orphaned .tmp files, up to
     // FIVE from one process in one millisecond. Each orphan is a write that
-    // never landed. atomicWriteFile cannot take the lock itself — the index path
+    // never landed. atomicWriteFile_UNLOCKED_takeSerializedWriteYourself cannot take the lock itself — the index path
     // already holds it for the same file — so it is taken here, at the call site.
     const p = captureStatusPath();
-    await serializedWrite(p, () => atomicWriteFile(p, toYaml(status)));
+    await serializedWrite(p, () => atomicWriteFile_UNLOCKED_takeSerializedWriteYourself(p, toYaml(status)));
   } catch (e) {
     console.warn(`[ME:capture-status] could not record — ${String(e)}`);
   }

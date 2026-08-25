@@ -40,7 +40,7 @@ async function countFiles(dir: string): Promise<number> {
   return n;
 }
 
-// Atomic-write intermediates (storage.ts atomicWriteFile): born and renamed away
+// Atomic-write intermediates (storage.ts atomicWriteFile_UNLOCKED_takeSerializedWriteYourself): born and renamed away
 // within one write. Never wanted in a backup, and the reason to filter them is
 // harder than tidiness: cp() walks the tree, a LIVE sidecar renames these out
 // from under the walk, and the resulting lstat ENOENT aborts the whole backup —

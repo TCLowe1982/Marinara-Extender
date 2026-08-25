@@ -14,7 +14,7 @@
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
-import { getDataDir, assertSafeId, atomicWriteFile } from "./storage.js";
+import { getDataDir, assertSafeId, atomicWriteFile_UNLOCKED_takeSerializedWriteYourself } from "./storage.js";
 
 // Feature flag — the conversational time-sense (narrative time-of-day + presence
 // inference) is OFF by default for v1.0. It behaved well under Claude 4.6 but
@@ -130,7 +130,7 @@ async function readClock(chatId: string): Promise<SoftClockState | null> {
 }
 
 async function writeClock(chatId: string, state: SoftClockState): Promise<void> {
-  await atomicWriteFile(clockPath(chatId), toYaml(state));
+  await atomicWriteFile_UNLOCKED_takeSerializedWriteYourself(clockPath(chatId), toYaml(state));
 }
 
 function defaultClock(): SoftClockState {

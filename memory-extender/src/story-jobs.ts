@@ -15,7 +15,7 @@ import { readFile, readdir, unlink } from "fs/promises";
 import { join } from "path";
 import { createHash } from "crypto";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
-import { getDataDir, atomicWriteFile } from "./storage.js";
+import { getDataDir, atomicWriteFile_UNLOCKED_takeSerializedWriteYourself } from "./storage.js";
 import type { DigestMessage } from "./digest.js";
 
 export interface ImportJob {
@@ -60,7 +60,7 @@ export async function loadJob(characterId: string, jobKey: string): Promise<Impo
 
 export async function saveJob(characterId: string, job: ImportJob): Promise<void> {
   const p = jobPath(characterId, job.jobKey);
-  await atomicWriteFile(p, toYaml({ ...job, updatedAt: new Date().toISOString() }));
+  await atomicWriteFile_UNLOCKED_takeSerializedWriteYourself(p, toYaml({ ...job, updatedAt: new Date().toISOString() }));
 }
 
 export async function deleteJob(characterId: string, jobKey: string): Promise<void> {

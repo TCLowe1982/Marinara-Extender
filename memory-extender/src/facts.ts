@@ -69,7 +69,15 @@ export interface FactContext {
 // Decide where a fact lives, applying the subject-routing rules. A fact about a
 // named character goes to THAT character's ledger; a fact whose subject can't be
 // resolved is demoted to chat scope (tagged with who it's about) rather than
-// guessed into a permanent ledger. Mirrors the live tier-3 routing in api.ts.
+// guessed into a permanent ledger.
+//
+// THIS IS THE ONLY COPY (oc4w). It used to say it "mirrors the live tier-3
+// routing in api.ts", and a mirror is not a safety property — it is a promise
+// that two people will remember to edit both. They did not. qlib moved
+// aboutness off the summary prose and into subjects[] here, while api.ts's
+// inline twin — the path that runs on EVERY live turn — went on writing
+// "[about: X]" prefixes and no subject for another day and 1,552 entries.
+// api.ts now calls this. Do not re-inline it.
 export async function resolveFactTarget(
   fact: AmbientFact,
   ctx: FactContext,

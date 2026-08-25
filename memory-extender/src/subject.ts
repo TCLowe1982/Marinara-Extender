@@ -170,3 +170,58 @@ export function normalizeSubjects(subjects: Array<SubjectRef | null | undefined>
   }
   return out.length ? out : undefined;
 }
+
+// ── The prose prefix, absorbed at the boundary ───────────────────────────────
+//
+// Aboutness used to be written into the summary TEXT as "[about: X] …" because
+// there was no field for it. There is now — but a prefix reaching the store is
+// not a formatting nit, it is the tell that some caller is routing subjects on
+// its own instead of going through resolveFactTarget. That is exactly how oc4w
+// happened: an inline COPY of the router in api.ts kept minting prefixes for a
+// day after the field shipped, across 1,552 entries, and nothing noticed
+// because the only guard was that both copies would be edited together.
+//
+// So the prefix stops being writable. Rung 3, not rung 5: this does not refuse
+// the entry — it ABSORBS the claim into the field where it belongs, keeps the
+// memory, and counts the event so a re-inlined router shows up as a number
+// instead of as archaeology in October. Route and mark, never drop.
+//
+// One level of nesting is matched on purpose: "[about: [character]]" is 373
+// live entries, and a naive [^\]]* would leave a stray "]" welded to the prose.
+const ABOUT_PREFIX_RE = /^\s*\[about:\s*(\[[^\]]*\]|[^\]]*)\]\s*/i;
+
+let aboutPrefixesAbsorbed = 0;
+
+export function aboutPrefixAbsorptions(): number {
+  return aboutPrefixesAbsorbed;
+}
+
+export function resetAboutPrefixAbsorptions(): void {
+  aboutPrefixesAbsorbed = 0;
+}
+
+/**
+ * Strip a legacy "[about: X]" prefix off a summary and move X into subjects[].
+ *
+ * An EXPLICIT subjects[] always wins — the field is the assertion, the prefix is
+ * a symptom — so a caller that supplies both keeps its own and only loses the
+ * prose. When no subject was supplied, X goes through makeSubject, which refuses
+ * a non-name and counts the refusal; a refused X leaves the field absent rather
+ * than recording "[character]" as a person, which is q5pk closing from the other
+ * end.
+ */
+export function absorbAboutPrefix(
+  summary: string,
+  subjects?: Array<SubjectRef | null | undefined>,
+): { summary: string; subjects?: SubjectRef[] } {
+  const m = ABOUT_PREFIX_RE.exec(summary);
+  if (!m) return { summary, ...(subjects ? { subjects: normalizeSubjects(subjects) } : {}) };
+
+  aboutPrefixesAbsorbed++;
+  const stripped = summary.slice(m[0].length).trim();
+  const existing = normalizeSubjects(subjects);
+  if (existing) return { summary: stripped, subjects: existing };
+
+  const recovered = makeSubject(m[1]);
+  return { summary: stripped, ...(recovered ? { subjects: [recovered] } : {}) };
+}

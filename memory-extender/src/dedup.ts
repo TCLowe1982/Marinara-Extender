@@ -46,7 +46,7 @@ import {
 } from "./storage.js";
 import { nanoid } from "./nanoid.js";
 import { queueEnabled, enqueueReconcileTask } from "./reconcile-queue.js";
-import { normalizeSubjects, type SubjectRef } from "./subject.js";
+import { absorbAboutPrefix, type SubjectRef } from "./subject.js";
 
 export const DEDUP_SIMILARITY_THRESHOLD = 0.35;
 // Incident-vs-incident: only a re-capture of the SAME moment should collapse.
@@ -183,7 +183,7 @@ export interface CreateEntryInput {
   /**
    * Who this memory is ABOUT (4g9w/qlib) — not who can recall it. Invalid names
    * (the prompt's own "[character]" placeholder, bare pronouns, "unknown") are
-   * refused by normalizeSubjects and counted, so a non-name can never reach the
+   * refused by absorbAboutPrefix->normalizeSubjects and counted, so a non-name can never reach the
    * store; the field then stays ABSENT rather than empty.
    */
   subjects?: SubjectRef[];
@@ -286,12 +286,18 @@ export async function createEntry(
   scopeId: string,
   input: CreateEntryInput,
 ): Promise<Entry> {
-  const summary = input.summary.trim();
+  // The "[about: X]" prefix is absorbed here, at the mint point, rather than
+  // trusted to every caller (oc4w). A prefix arriving at storage means some
+  // caller routed a subject on its own instead of going through
+  // resolveFactTarget — so it is stripped, X is moved into subjects[], and the
+  // event is counted. The entry is never refused; the memory survives.
+  const absorbed = absorbAboutPrefix(input.summary.trim(), input.subjects);
+  const summary = absorbed.summary;
   const content = (input.content ?? "").trim();
   const id = `${idPrefix(input.lane)}-${nanoid(8)}`;
   const now = today();
   const status: EntryStatus = input.status ?? "open";
-  const subjects = normalizeSubjects(input.subjects);
+  const subjects = absorbed.subjects;
   const entry: Entry = {
     id,
     lane: input.lane,

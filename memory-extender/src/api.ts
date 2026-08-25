@@ -92,6 +92,7 @@ import { classifyChunks } from "./sentiment/classifier.js";
 import { analyzeChunks } from "./sentiment/analyzer.js";
 import { encodeBeat } from "./sentiment/encoder.js";
 import { classifyAmbient } from "./ambient.js";
+import { resolveFactTarget } from "./facts.js";
 import { createEntryIfUnique, isDuplicate, readSupersessionCandidates } from "./dedup.js";
 import { Progress, progressEnabled } from "./progress.js";
 import { reviewDiscardedEntries } from "./discard-review.js";
@@ -889,32 +890,25 @@ export function registerApiRoutes(app: FastifyInstance): void {
           const facts = await classifyAmbient({ userText: userMessageText, characterText: messageText, roster });
           let saved = 0;
           for (const fact of facts) {
-            let summary = truncateSummary(fact.fact);
-            if (!summary.trim()) continue;
-            let scope   = (fact.scope ?? "character") as "character" | "chat";
-            let scopeId = scope === "character" ? identityKey : chatId;
-            // Route character-scope facts to the subject's ledger — the
-            // [character] block carries every character in an RP message, so
-            // the session identity is only the right home for its own facts.
-            const subject = fact.subject;
-            if (scope === "character" && subject && normalizeLabel(subject) !== "user"
-                && !matchesSessionName(subject, personaName) // persona = the player = session ledger
-                && !matchesSessionName(subject, characterName ?? identityKey)) {
-              const key = await resolveNameToKey(subject);
-              if (key) {
-                scopeId = key;
-              } else {
-                // Unknown subject: facts have no holding-pool lane, so keep the
-                // data without polluting a permanent ledger — demote to chat
-                // scope, tagged with who it's about.
-                scope = "chat";
-                scopeId = chatId;
-                summary = truncateSummary(`[about: ${subject}] ${fact.fact}`);
-              }
-            }
-            console.info(`[ME:tier3] subject="${subject ?? "(none)"}" → ${scope}:${scopeId}`);
-            const entry = await createEntryIfUnique(scope, scopeId, {
-              lane: fact.lane, summary, content: capContent(fact.text), timeContext: timeCtx,
+            // ONE ROUTING RULE, ONE PLACE (oc4w). This block used to be an
+            // inline COPY of resolveFactTarget, and resolveFactTarget's own
+            // header still says it "mirrors the live tier-3 routing in api.ts".
+            // Two copies of a rule is a guarantee of drift, and it drifted
+            // inside a day: qlib moved aboutness from a prose "[about: X]"
+            // prefix to a real subjects[] field in facts.ts, and the live turn
+            // — the only path that runs on every message — kept minting
+            // prefixes and recording no subject at all. 1,552 entries carry one.
+            const target = await resolveFactTarget(fact, {
+              identityKey, fallbackChatId: chatId, personaName, characterName,
+            });
+            if (!target) continue;
+            console.info(
+              `[ME:tier3] subject="${fact.subject ?? "(none)"}" → ${target.scope}:${target.scopeId}` +
+              (target.subjects ? ` kind=${target.subjects[0].kind ?? "(unresolved)"}` : " (refused)"),
+            );
+            const entry = await createEntryIfUnique(target.scope, target.scopeId, {
+              lane: fact.lane, summary: target.summary, content: capContent(fact.text), timeContext: timeCtx,
+              ...(target.subjects ? { subjects: target.subjects } : {}),
               // Ambient facts describe who someone IS — the trait side of the matrix.
               ...(fact.lane === "character_topics" ? { kind: "trait" as const } : {}),
               // 06pq/s2lw provenance. Traits do not use the same-moment test, but

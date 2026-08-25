@@ -19,7 +19,33 @@ const FIRST_PERSON_RE  = /\b(I|my|me|we|our|I'm|I've|I'd|I'll)\b/i;
 // Proper noun as sentence subject: "Sarah said", "Dr. Johnson is", "Mom called"
 const NAMED_SUBJECT_RE = /^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+(is|was|said|told|called|mentioned|asked|works|lives|has|had|goes|studies|knows|thinks|feels|told|gave|came|left|helped|showed|found)/;
 
-export function extractCandidates(text: string): string[] {
+// SECOND PERSON (cye6) — the missing grammatical person.
+//
+// The two patterns above admit a speaker describing THEMSELVES and a speaker
+// describing a THIRD PARTY BY NAME. Neither admits a speaker describing THE
+// PERSON THEY ARE TALKING TO, which in a roleplay is the dominant register for
+// facts about the user. Measured store-wide: 118,405 sentences sit inside the
+// length/question window, 33,411 pass the person test, and 15,681 are dropped
+// though second-person — the gate discards 31.9% of what it could admit, purely
+// for addressing the user directly.
+//
+// The concrete loss: of 23 sentences asserting Thomas's origin, 3 survive and
+// none of them states it. "you're from independence, missouri, dead center of
+// the dialect zone" is 68 characters — well inside the window — and dies here.
+const SECOND_PERSON_RE = /\b(you|your|yours|you're|youre|you've|you'd|you'll)\b/i;
+
+export interface CandidateOptions {
+  /**
+   * Admit second-person sentences. OFF by default so production behaviour is
+   * unchanged until downstream precision has been RE-MEASURED at the new scope
+   * — admitting these is a large increase in candidate volume, and every
+   * precision figure downstream was measured without them ("rule breadth
+   * survives its scope", the code-filter lesson).
+   */
+  admitSecondPerson?: boolean;
+}
+
+export function extractCandidates(text: string, opts: CandidateOptions = {}): string[] {
   return text
     .split(/(?<=[.!])\s+|\n+/)
     .map(s => s.trim())
@@ -27,8 +53,28 @@ export function extractCandidates(text: string): string[] {
       s.length > 10 &&
       s.length <= 120 &&
       !s.endsWith("?") &&
-      (FIRST_PERSON_RE.test(s) || NAMED_SUBJECT_RE.test(s)),
+      (FIRST_PERSON_RE.test(s) || NAMED_SUBJECT_RE.test(s) ||
+        (!!opts.admitSecondPerson && SECOND_PERSON_RE.test(s))),
     );
+}
+
+/**
+ * Who a second-person sentence is ABOUT, given who said it. This is the whole
+ * reason the fix is not "add you|your to the regex": second person is
+ * DIRECTIONAL. "you're from Independence" said BY a character is about the
+ * USER; said BY the user it is about the CHARACTER. Getting this backwards is
+ * the referent bleed that filed three RP lines as biography of TC (qhej/hhdr).
+ *
+ * The direction is already structural at the call site — classifyAmbient
+ * receives userText and characterText separately and tags the prompt lines
+ * [user] / [character] — so nothing needs threading; it only needs using.
+ */
+export function secondPersonSubject(speaker: "user" | "character"): "user" | "character" {
+  return speaker === "user" ? "character" : "user";
+}
+
+export function isSecondPerson(sentence: string): boolean {
+  return SECOND_PERSON_RE.test(sentence);
 }
 
 // ── LLM call ──────────────────────────────────────────────────────────────────

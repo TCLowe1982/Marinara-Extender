@@ -681,6 +681,43 @@ export async function listDeleted(
     .sort((a, b) => (b.deletedAt ?? "").localeCompare(a.deletedAt ?? ""));
 }
 
+/**
+ * The SYSTEM-retired rows (ud30) — the third retirement, and until now the only
+ * one with no surface.
+ *
+ *   deletedAt     THE USER deleted it        -> listDeleted, restore + purge
+ *   supersededBy  a newer fact replaced it   -> the supersession view, rollback
+ *   discardedAt   THE SYSTEM retired it      -> here
+ *
+ * The three stay separate on purpose (see restoreDiscardedEntry's note, and the
+ * 4z0h block in ui.ts: "filing them under deletes would reassert exactly the
+ * conflation that discardedAt exists to prevent"). A row carrying more than one
+ * marker is excluded here so it cannot appear in two views at once and be
+ * "restored" from the wrong one.
+ *
+ * retiredReason is returned because it is the entire question a reader has. It is
+ * free text written by whatever did the retiring — wct1's rows say "derived from a
+ * pasted Engine changelog, not a lived moment (mln9)" — and a code would not help
+ * somebody decide whether to put a memory back.
+ */
+export async function listDiscarded(
+  scope: Scope,
+  scopeId: string,
+): Promise<{ id: string; summary: string; lane: Lane; discardedAt?: string; retiredReason?: string; retrievalCount?: number; recitationCount?: number }[]> {
+  const cold = await readColdIndex(scope, scopeId);
+  return (cold?.entries ?? [])
+    .filter((e) => e.discardedAt && !e.deletedAt && !e.supersededBy)
+    .map((e) => ({
+      id: e.id, summary: e.summary, lane: e.lane,
+      discardedAt: e.discardedAt, retiredReason: e.retiredReason,
+      // Surfaced because they change the stakes of restoring: a row the character
+      // already RECITED is one the conversation has seen. Same signals the held
+      // lane ranks on (discard-review.ts entanglementReasons).
+      retrievalCount: e.retrievalCount, recitationCount: e.recitationCount,
+    }))
+    .sort((a, b) => (b.discardedAt ?? "").localeCompare(a.discardedAt ?? ""));
+}
+
 // Bring a DISCARDED entry back to active (4z0h) — the user looked at a held
 // review record and decided the thrown-away reply had it right after all.
 //

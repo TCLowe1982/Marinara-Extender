@@ -365,7 +365,7 @@ function select(scope, scopeId, label) {
   render();
 }
 
-const VIEWS = { entries: renderEntries, turn: renderReceipt, deleted: renderDeleted, held: renderHeld };
+const VIEWS = { entries: renderEntries, turn: renderReceipt, deleted: renderDeleted, discarded: renderDiscarded, held: renderHeld };
 
 // ── Held for review (4z0h) ───────────────────────────────────────────────────
 // Its OWN sidebar entry, deliberately not folded under "Recently deleted". These
@@ -516,10 +516,15 @@ async function render() {
 
 async function renderEntries(el) {
   const rows = await get("/api/entries?" + q() + "&status=all");
-  const bar = '<div class="viewbar"><button class="act" id="see-deleted">Recently deleted…</button></div>';
+  // Two PEER buttons, not one menu: "deleted" is what the user did, "discarded" is
+  // what the sidecar did on its own behalf (ud30). Same reason discardedAt is a
+  // third field — see the 4z0h note above.
+  const bar = '<div class="viewbar"><button class="act" id="see-deleted">Recently deleted…</button>' +
+    '<button class="act" id="see-discarded">Discarded by the system…</button></div>';
   if (!rows.length) {
     el.innerHTML = bar + '<div class="empty">No memories stored for ' + esc(state.label) + " yet.</div>";
     $("see-deleted").onclick = () => { state.mode = "deleted"; render(); };
+    $("see-discarded").onclick = () => { state.mode = "discarded"; render(); };
     return;
   }
   el.innerHTML = bar +
@@ -543,6 +548,7 @@ async function renderEntries(el) {
       '<div class="pane"></div></div>').join("");
 
   $("see-deleted").onclick = () => { state.mode = "deleted"; render(); };
+  $("see-discarded").onclick = () => { state.mode = "discarded"; render(); };
 
   for (const card of el.querySelectorAll(".card")) {
     const body = card.querySelector(".body");
@@ -687,6 +693,69 @@ function openDeleteConfirm(card, pane, id) {
  * on the main list at all, because a control that destroys data should never sit
  * one misclick from a control that does not.
  */
+// ── Discarded by the system (ud30) ───────────────────────────────────────────
+// The THIRD retirement, and until now the only one with no surface:
+//   deleted    THE USER did it        -> renderDeleted, restore + purge
+//   superseded a newer fact replaced  -> rollback
+//   discarded  THE SYSTEM did it      -> here
+// Kept apart deliberately; folding this into deletes would reassert the exact
+// conflation discardedAt exists to prevent. (No backticks — String.raw template.)
+async function renderDiscarded(el) {
+  const { discarded } = await get("/api/discarded?" + q());
+  const bar = '<button class="back" id="back-disc">← back to memories</button>';
+  if (!discarded || !discarded.length) {
+    // Empty is the NORMAL state here and should read as reassuring, not broken.
+    el.innerHTML = bar + '<div class="empty">Nothing has been retired by the system in ' +
+      esc(state.label) + ".</div>";
+    $("back-disc").onclick = back;
+    return;
+  }
+  el.innerHTML = bar +
+    '<div class="note">' + discarded.length + " memory(ies) the system retired in " + esc(state.label) +
+      " · <b>you did not delete these</b> · they are out of recall but kept in full · restore puts one back</div>" +
+    discarded.map(function (r) {
+      // The reason is the whole question a reader has. It is free text written by
+      // whatever did the retiring, so it is shown verbatim rather than mapped to a code.
+      var reason = r.retiredReason
+        ? '<div class="why-line">Retired because: ' + esc(r.retiredReason) + "</div>"
+        : '<div class="why-line">No reason was recorded.</div>';
+      // These change the stakes of leaving it retired, so they are stated plainly.
+      var seen = "";
+      if (r.recitationCount > 0) {
+        seen = '<span class="pill nope">the character said this ' + r.recitationCount +
+          (r.recitationCount === 1 ? " time" : " times") + "</span>";
+      } else if (r.retrievalCount > 0) {
+        seen = '<span class="pill nope">reached a prompt ' + r.retrievalCount +
+          (r.retrievalCount === 1 ? " time" : " times") + "</span>";
+      }
+      return '<div class="card" data-id="' + esc(r.id) + '">' +
+        '<div class="sum">' + esc(r.summary) + "</div>" +
+        '<div class="meta"><span class="pill lane-' + esc(r.lane) + '">' +
+          esc(String(r.lane).replace(/_/g, " ")) + "</span>" + seen +
+        "<span>retired " + esc(String(r.discardedAt || "").replace("T", " ").slice(0, 16)) + "</span>" +
+        '<span class="acts"><button class="act go restore-btn">Restore</button></span></div>' +
+        reason +
+        '<div class="pane"></div></div>';
+    }).join("");
+
+  $("back-disc").onclick = back;
+
+  for (const card of el.querySelectorAll(".card")) {
+    const id = card.dataset.id;
+    // Restore only. NO PURGE here, deliberately: the user did not discard these, so
+    // the destructive action is the one they have least context for. Machine text
+    // left in recall is recoverable; a real memory destroyed is not.
+    card.querySelector(".restore-btn").onclick = async (ev) => {
+      ev.target.disabled = true;
+      try {
+        await send("POST", "/api/entries/" + encodeURIComponent(id) + "/restore-discarded?" + q());
+        card.remove();
+        toast("Restored to recall.");
+      } catch (err) { ev.target.disabled = false; toast(err.message, true); }
+    };
+  }
+}
+
 async function renderDeleted(el) {
   const { deleted } = await get("/api/deleted?" + q());
   const bar = '<button class="back" id="back-del">← back to memories</button>';

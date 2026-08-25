@@ -21,6 +21,7 @@ import {
   listDeleted,
   restoreDeletedEntry,
   restoreDiscardedEntry,
+  listDiscarded,
   restoreSupersededEntry,
   discardLosingSwipe,
   readColdIndex,
@@ -399,6 +400,45 @@ export function registerApiRoutes(app: FastifyInstance): void {
     }
     const restored = await restoreDeletedEntry(scope, scopeId, id);
     if (!restored) return reply.code(404).send({ error: "not a recoverable deleted entry" });
+    return reply.send({ ok: true });
+  });
+
+  // ── GET /api/discarded ────────────────────────────────────────────────────
+  // The SYSTEM-retired rows (ud30) — the third retirement, and the only one that
+  // had no surface. Deliberately its own endpoint rather than a flag on
+  // /api/deleted: the user did not do this, and folding it under deletes would
+  // reassert the conflation discardedAt exists to prevent (the 4z0h note in
+  // ui.ts). Query: scope, scopeId.
+
+  app.get<{
+    Querystring: { scope: Scope; scopeId: string };
+  }>("/api/discarded", async (req, reply) => {
+    const { scope, scopeId } = req.query;
+    if (!VALID_SCOPES.includes(scope) || !scopeId) {
+      return reply.code(400).send({ error: "scope and scopeId are required" });
+    }
+    return reply.send({ discarded: await listDiscarded(scope, scopeId) });
+  });
+
+  // ── POST /api/entries/:id/restore-discarded ───────────────────────────────
+  // Put a system-retired memory back into recall. A THIRD restore rather than a
+  // flag on the other two, for the reason recorded at restoreDiscardedEntry:
+  // each restore is guarded to exactly one retirement cause, so no path can
+  // resurrect a row that a different mechanism retired for a different reason.
+  // Widening either existing guard would quietly make "restore a delete" capable
+  // of undoing a supersession. Query: scope, scopeId.
+
+  app.post<{
+    Params: { id: string };
+    Querystring: { scope: Scope; scopeId: string };
+  }>("/api/entries/:id/restore-discarded", async (req, reply) => {
+    const { id } = req.params;
+    const { scope, scopeId } = req.query;
+    if (!VALID_SCOPES.includes(scope) || !scopeId) {
+      return reply.code(400).send({ error: "scope and scopeId are required" });
+    }
+    const restored = await restoreDiscardedEntry(scope, scopeId, id);
+    if (!restored) return reply.code(404).send({ error: "not a recoverable discarded entry" });
     return reply.send({ ok: true });
   });
 

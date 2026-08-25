@@ -35,9 +35,38 @@ describe("currentVersion", () => {
 });
 
 describe("buildVersion", () => {
-  it("starts with the release version, optionally followed by +commit", () => {
-    expect(buildVersion()).toMatch(/^\d+\.\d+\.\d+(\+[0-9a-f]+)?$/);
+  // Accepted build codes, all three real:
+  //   +345da35        git sha, or the build stamp's sha
+  //   +345da35-dirty  built from a MODIFIED tree — it is not the commit it names,
+  //                   and saying so beats impersonating a clean checkout
+  //   +c1a2b3c4       content hash, for a ZIP/release install with no .git
+  const BUILD_CODE = /^\d+\.\d+\.\d+(\+(?:[0-9a-f]+(?:-dirty)?|c[0-9a-f]{8}))?$/;
+
+  it("starts with the release version, optionally followed by a build code", () => {
+    expect(buildVersion()).toMatch(BUILD_CODE);
     expect(buildVersion().startsWith(currentVersion())).toBe(true);
+  });
+
+  it("is STABLE across calls — the value must not depend on when it is asked", () => {
+    // The defect this replaced: buildVersion() was memoized and reachable only
+    // from request handlers, so the sha froze at whatever HEAD was when somebody
+    // first happened to look. Ask early and a stale process looked honest; ask
+    // only after a commit and it reported a HEAD it never ran. The observer
+    // changed the answer, which is the one thing a build identifier must not do.
+    const a = buildVersion();
+    const b = buildVersion();
+    expect(b).toBe(a);
+  });
+
+  it("builtAt is an ISO timestamp when a build stamp exists, else null", async () => {
+    const { builtAt } = await import("../update.js");
+    const t = builtAt();
+    if (t !== null) {
+      expect(t).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+      expect(Number.isNaN(Date.parse(t))).toBe(false);
+    }
+    // null is correct and expected when running from src (tsx/vitest) with no
+    // dist/build-info.json — absent means "unstamped", never "built at epoch".
   });
 });
 

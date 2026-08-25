@@ -18,7 +18,7 @@ import { handleDetectedTurn } from "./turn-bridge.js";
 import { engineUrl } from "./engine-client.js";
 import { registerSetupRoutes } from "./setup.js";
 import { registerUiRoutes } from "./ui.js";
-import { updateStatus } from "./update.js";
+import { updateStatus, builtAt, buildVersion } from "./update.js";
 import { embeddingsStatus, describeEmbeddingsStatus } from "./embeddings.js";
 import { isEideticMode } from "./loader.js";
 import { readCaptureStatus } from "./capture-status.js";
@@ -55,6 +55,17 @@ app.addHook("onSend", async (req, reply) => {
 
 app.options("*", { logLevel: "silent" }, async (_req, reply) => reply.send());
 
+// When THIS process started. Paired with builtAt() on /api/health so "is the
+// sidecar running current code?" is answerable from one request instead of by
+// comparing a process start time against dist mtime in PowerShell.
+const STARTED_AT = new Date().toISOString();
+
+// Compute the build string ONCE, at boot, before any request can ask for it.
+// It is memoized, and it used to be reached only from request handlers — so its
+// value was fixed by whenever somebody first happened to look. Warming it here
+// removes that entirely: the answer is decided by the process, not the observer.
+buildVersion();
+
 // ── Health ────────────────────────────────────────────────────────────────────
 
 app.get("/api/health", { logLevel: "silent" }, async (_req, reply) => {
@@ -70,11 +81,21 @@ app.get("/api/health", { logLevel: "silent" }, async (_req, reply) => {
     }
   }
   const [update, embeddings, capture] = await Promise.all([updateStatus(), embeddingsStatus(), readCaptureStatus()]);
+  // "Is this process running current code?" used to need a PowerShell dance
+  // comparing process start time against dist/index.js mtime, because the version
+  // string answered a different question (what is git HEAD) and answered it at
+  // whatever moment it was first asked. startedAt + builtAt answer it directly
+  // and honestly: if builtAt is NEWER than startedAt, the process predates its
+  // own dist and is stale. One curl, no self-report to trust.
+  const built = builtAt();
   // Capture liveness (the 08-04 outage lesson): state AND event, together.
   // pollerOn says whether a capture path exists; lastCaptureAt says when one
   // last did real work. Either alone let six days of silence look healthy.
   return reply.send({
     ok: true, ollama, embeddings, ...update,
+    startedAt: STARTED_AT,
+    builtAt: built,
+    stale: built ? built > STARTED_AT : null,
     capture: {
       pollerOn: process.env.MARINARA_EXTENDER_POLLER === "1",
       turnHookOn: process.env.MARINARA_EXTENDER_TURN_HOOK === "1",

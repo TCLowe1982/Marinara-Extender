@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc && node scripts/copy-fixtures.mjs",
+    "build": "tsc && node scripts/copy-fixtures.mjs && node scripts/stamp-build.mjs",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",

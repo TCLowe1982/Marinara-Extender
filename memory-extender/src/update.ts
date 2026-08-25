@@ -36,9 +36,44 @@ export function currentVersion(): string {
 // string (and the tab/server match check compares the FULL string, so a tab
 // served by an older build alarms even within the same release).
 let _build: string | null = null;
+let _builtAt: string | null = null;
+
+/** When the RUNNING code was built, from the build stamp. null if unstamped. */
+export function builtAt(): string | null {
+  buildVersion(); // populates _builtAt as a side effect of the same read
+  return _builtAt;
+}
+
 export function buildVersion(): string {
   if (_build) return _build;
   let code = "";
+
+  // 0. THE BUILD STAMP — authoritative, because it describes THIS CODE.
+  //
+  // Everything below answers "what does the repo say right now?", which is a
+  // different question from "which build am I running?" and diverges the moment
+  // HEAD moves without a rebuild. Worse, this function is memoized and is only
+  // called from REQUEST HANDLERS, so the git answer froze at whatever HEAD was
+  // when somebody first asked: query early and a stale process looked honest,
+  // query only after a commit and it reported a HEAD IT NEVER RAN. The observer
+  // changed the answer. A stamp written by the build cannot do that.
+  //
+  // "-dirty" is not decoration: a build from a modified tree is not the commit
+  // it names, and saying so beats letting it impersonate a clean checkout.
+  try {
+    const stamp = JSON.parse(readFileSync(join(PKG_ROOT, "dist", "build-info.json"), "utf8")) as
+      { sha?: string; dirty?: boolean; builtAt?: string };
+    if (stamp.builtAt) _builtAt = stamp.builtAt;
+    if (stamp.sha) {
+      _build = `${currentVersion()}+${stamp.sha}${stamp.dirty ? "-dirty" : ""}`;
+      return _build;
+    }
+  } catch {
+    // No stamp: running from src (tsx/vitest) or a pre-stamp build. Fall through
+    // to the git answer, which is the best available and now clearly labelled as
+    // second choice rather than as the truth.
+  }
+
   // 1. Git checkout — short HEAD sha. The .git lives at the REPO ROOT, but this
   // package is memory-extender/ (PKG_ROOT), so .git is PKG_ROOT/.. — checking
   // only PKG_ROOT silently missed every normal checkout, leaving the panel on a

@@ -136,3 +136,31 @@ Cross-cutting standalone files (under `data/`, via `mutateYamlFile`): `threads/r
 - Replace a fact → `supersedeEntry` (+ `restoreSupersededEntry`).
 - User delete / restore / purge → `softDeleteEntry` / `restoreDeletedEntry` / `purgeColdEntry`; list via `listDeleted`.
 - Re-import a chat cleanly → `removeEntriesBySourceChat` (skips `recap-*` rows — those aren't import artifacts).
+
+### Identity FORK — two cards, one person until a date (`yi70`, 2026-08-25)
+
+`identity-map.yaml` collapses several card ids onto one `identityKey` so a character survives a card **replacement**. A **fork** is the opposite need: TC's "Professor Mari" card was read-only and reverted version changes, so "Dr. Mari Zielińska" was built from it — and the old card is *still played*. Ten chats still use it (a card the Engine no longer has), and one ran a month past the split loading the current character's whole memory.
+
+**TC's ruling:** *"They should read more as sisters who shared the same household, ie, the pre-split memories, rather than be shared."* Symmetric — neither sees the other's post-split life.
+
+**It is a UNION, not a cutoff, and the numbers are why.** Of 7,052 beats, **6,983 (99.0%) postdate the split** and 69 predate it. "Ignore everything after `splitAt`" leaves the retired card with 1% of its memory — amnesia, not separation. The rule:
+
+```
+admit  if  created <= splitAt            (the shared childhood)
+  or   if  the entry came from MY chats  (my own life since)
+```
+
+**Data, never a code branch.** Two optional fields on the identity-map entry: `forkSplitAt` (the date, set on *every* card of the fork) and `forkPrimary`. Absent = not forked = today's behaviour exactly.
+
+**`forkPrimary` exists because 42.9% of entries have no `sourceChatId`** — the legacy unprovenanced population, whose branch cannot be derived. They go to the primary (the card still in the Engine): the retired fork gets nothing it cannot prove, the live character loses nothing. Absent provenance means *unknown*, never *shared* — the same rule `bodyTerms` and `subjects` follow.
+
+**The hook is the chat, not the card.** `loadContext` receives a resolved `identityKey` and cannot tell which card it is serving — but it receives `chatId`, and a chat belongs to exactly one card. `forkFilterForChat` resolves chat → owning card → fork config; `fork.ts` caches chat ownership from the Engine like `characterNameFor` does. The filter is applied in `loadIndexes` to the **character** index only: the chat index is per-chat and therefore already on the right branch, and global is global.
+
+**Measured live after configuring the split at 2026-05-23:**
+
+| | sees | hidden | composition |
+|---|---|---|---|
+| Professor Mari (retired) | 742 / 8,431 | 7,689 | 16 shared + 726 from her own 10 chats |
+| Dr. Mari Zielińska (current) | 7,702 / 8,431 | 729 | 16 shared + 0 from the retired card |
+
+⚠ **The obvious estimate was wrong by 7×.** A first pass predicted ~109 memories for the retired card by counting only the *one surviving* chat. She has ten — nine that closed before the split plus the survivor — and all of their memories are hers. Count every chat a branch owns, not just the active one.

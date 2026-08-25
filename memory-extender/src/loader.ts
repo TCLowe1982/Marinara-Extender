@@ -24,6 +24,7 @@ import { listActiveThreads } from "./threads.js";
 import type { RecapEntry } from "./arcs.js";
 import { readBeat, companionEntryFromBeat } from "./sentiment/encoder.js";
 import { activateRecaps } from "./recap-activation.js";
+import { forkFilterForChat, applyForkFilter } from "./fork.js";
 import {
   capRejections,
   hashBlock,
@@ -106,6 +107,26 @@ async function loadIndexes(session: LoaderSession): Promise<LoadedIndexes> {
     readIndex("character", session.characterId),
     readIndex("global", "global"),
   ]);
+
+  // IDENTITY FORK (yi70). Two cards can share one identity key and one store
+  // while being the same person only UP TO A DATE. The character index is that
+  // shared store, so it is the only one that needs splitting: the chat index is
+  // per-chat and therefore already on the right branch, and global is global.
+  //
+  // The loader is handed a resolved identityKey and cannot tell which CARD it is
+  // serving — but it is handed the chatId, and a chat belongs to exactly one
+  // card. That is the hook. Returns unchanged when the card is not forked, which
+  // is every character today except the one TC forked.
+  const fork = await forkFilterForChat(session.chatId).catch(() => null);
+  if (fork && character) {
+    const before = character.entries.length;
+    const kept = await applyForkFilter(character.entries, fork);
+    if (kept.length !== before) {
+      dbg(`fork — ${before} rows to ${kept.length} for the branch owning chat ${session.chatId} (split ${fork.splitAt})`);
+    }
+    return { chat, character: { ...character, entries: kept }, global: global_ };
+  }
+
   return { chat, character, global: global_ };
 }
 

@@ -40,6 +40,31 @@ export interface IdentityEntry {
   identityKey: string;
   name: string;
   created: string;
+  /**
+   * IDENTITY FORK (yi70). Two cards can be the SAME person up to a date and
+   * DIFFERENT people after it — TC's case: "Professor Mari" was read-only and
+   * reverted version changes, so "Dr. Mari Zielinska" was built from it, and the
+   * old card is still played. His ruling: "They should read more as sisters who
+   * shared the same household, ie, the pre-split memories, rather than be shared."
+   *
+   * The map exists to collapse card ids onto one key so a character survives a
+   * card REPLACEMENT. A fork is the opposite need, and this is the one field that
+   * separates them. Absent = not forked = today's behaviour exactly.
+   *
+   * Set on EVERY card of the fork, with the same date. Memory is then a union,
+   * not a cutoff: everything up to splitAt, PLUS everything from this card's own
+   * chats. A pure cutoff was measured and would leave the retired card with 1%
+   * of the store — amnesia, not separation.
+   */
+  forkSplitAt?: string;   // YYYY-MM-DD
+  /**
+   * The branch that owns memories which cannot be attributed to any chat. 42.9%
+   * of this store's entries carry no sourceChatId (the legacy unprovenanced
+   * population), so their branch is underivable. They go to the primary — the
+   * conservative direction: the retired fork gets nothing it cannot prove, and
+   * the live character loses nothing.
+   */
+  forkPrimary?: boolean;
 }
 
 interface IdentityMapFile {
@@ -241,6 +266,26 @@ export async function resolveIdentity(
 
 // Link characterId to an existing identity key (card recreation scenario).
 // Merges any data from the new card's directory into the identity's directory.
+/**
+ * The fork config for a CARD id, or null when that card is not forked.
+ * Everything here is data in identity-map.yaml — a fork must never be a code
+ * branch per character.
+ */
+export async function forkConfigFor(characterId: string): Promise<{ splitAt: string; primary: boolean } | null> {
+  const map = await getIdentityMap();
+  const e = map.find((x) => x.characterId === characterId);
+  if (!e?.forkSplitAt) return null;
+  return { splitAt: e.forkSplitAt, primary: !!e.forkPrimary };
+}
+
+/** Every card id that shares an identity key with this one and is forked. */
+export async function forkSiblingsOf(characterId: string): Promise<IdentityEntry[]> {
+  const map = await getIdentityMap();
+  const me = map.find((x) => x.characterId === characterId);
+  if (!me?.forkSplitAt) return [];
+  return map.filter((x) => x.identityKey === me.identityKey && x.forkSplitAt && x.characterId !== me.characterId);
+}
+
 export async function relinkIdentity(characterId: string, identityKey: string): Promise<void> {
   const map = await readMapFile();
   const target = map.entries.find((e) => e.identityKey === identityKey);

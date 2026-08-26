@@ -115,12 +115,11 @@ describe("a user-spoken 'you' can never be a fact about the user", () => {
   it("is reassigned to the session character — the addressee", () => {
     const { facts, counts } = enforceAddressDirection(
       [fact({ text: said, fact: "The user was grown in a vat on Ceres", subject: "user" })],
-      [said],
-      "Mari",
+      { userAddressed: [said], characterName: "Mari" },
     );
     expect(facts[0].subject).toBe("Mari");
     expect(facts[0].lane).toBe("character_topics");
-    expect(counts).toEqual({ reassigned: 1, refused: 0 });
+    expect(counts).toEqual({ reassigned: 1, refused: 0, speakerClaims: 0 });
   });
 
   it("an UNSUBJECTED user_topics fact from the same sentence is caught too", () => {
@@ -128,8 +127,7 @@ describe("a user-spoken 'you' can never be a fact about the user", () => {
     // claim by another route, and it is how the Texas rows were shaped.
     const { facts, counts } = enforceAddressDirection(
       [fact({ text: said, fact: "The user was grown in a vat", subject: undefined })],
-      [said],
-      "Mari",
+      { userAddressed: [said], characterName: "Mari" },
     );
     expect(facts[0].subject).toBe("Mari");
     expect(counts.reassigned).toBe(1);
@@ -138,13 +136,12 @@ describe("a user-spoken 'you' can never be a fact about the user", () => {
   it("with NO addressee to name, the claim is dropped and the memory is kept", () => {
     const { facts, counts } = enforceAddressDirection(
       [fact({ text: said, fact: "The user was grown in a vat", subject: "user" })],
-      [said],
-      undefined,
+      { userAddressed: [said], characterName: undefined },
     );
     expect(facts).toHaveLength(1);            // route and mark, never drop
     expect(facts[0].subject).toBeUndefined(); // but the false claim does not survive
     expect(facts[0].scope).toBe("chat");      // and it stays out of a permanent ledger
-    expect(counts).toEqual({ reassigned: 0, refused: 1 });
+    expect(counts).toEqual({ reassigned: 0, refused: 1, speakerClaims: 0 });
   });
 
   it("REFUSALS ARE COUNTED — a guard nobody can audit is a guard that drifts", () => {
@@ -153,8 +150,7 @@ describe("a user-spoken 'you' can never be a fact about the user", () => {
         fact({ text: said, subject: "user" }),
         fact({ text: said, subject: "user" }),
       ],
-      [said],
-      "Mari",
+      { userAddressed: [said], characterName: "Mari" },
     );
     expect(counts.reassigned).toBe(2);
   });
@@ -166,22 +162,20 @@ describe("what the direction rule must NOT touch", () => {
   it("a fact about a THIRD PARTY from the same sentence is left alone", () => {
     const { facts, counts } = enforceAddressDirection(
       [fact({ text: said, fact: "Priya was grown in a vat", subject: "Priya", lane: "character_topics" })],
-      [said],
-      "Mari",
+      { userAddressed: [said], characterName: "Mari" },
     );
     expect(facts[0].subject).toBe("Priya");
-    expect(counts).toEqual({ reassigned: 0, refused: 0 });
+    expect(counts).toEqual({ reassigned: 0, refused: 0, speakerClaims: 0 });
   });
 
   it("a CHARACTER-spoken 'you' filed as a user fact is left alone — that is the correct reading", () => {
     // The 92.7% majority, and the whole recall win. Not in `userAddressed`.
     const { facts, counts } = enforceAddressDirection(
       [fact({ text: said, fact: "The user was grown in a vat", subject: "user" })],
-      [],
-      "Mari",
+      { userAddressed: [], characterName: "Mari" },
     );
     expect(facts[0].subject).toBe("user");
-    expect(counts).toEqual({ reassigned: 0, refused: 0 });
+    expect(counts).toEqual({ reassigned: 0, refused: 0, speakerClaims: 0 });
   });
 
   it("a user-spoken FIRST-person fact is left alone", () => {
@@ -190,8 +184,7 @@ describe("what the direction rule must NOT touch", () => {
     const mixed = "I told you I grew up in Texas";
     const { facts } = enforceAddressDirection(
       [fact({ text: mixed, fact: "The user grew up in Texas", subject: "user" })],
-      [],
-      "Mari",
+      { userAddressed: [], characterName: "Mari" },
     );
     expect(facts[0].subject).toBe("user");
   });
@@ -199,9 +192,83 @@ describe("what the direction rule must NOT touch", () => {
   it("matches on normalized text, so echoed punctuation and case do not leak facts past it", () => {
     const { counts } = enforceAddressDirection(
       [fact({ text: "You were grown in a vat on Ceres.", subject: "user" })],
-      [said],
-      "Mari",
+      { userAddressed: [said], characterName: "Mari" },
     );
     expect(counts.reassigned).toBe(1);
+  });
+});
+
+// ── qs67: the speaker cannot be the subject ──────────────────────────────────
+//
+// Measured on 496 hand-labelled facts, this rule catches 69 genuine
+// misattributions, fires wrongly on 12, and misses 16 — 85% precise. The 12 are
+// speech acts where the character legitimately IS the subject, and they are
+// surface-identical to the 69. So the claim is DROPPED, never reassigned:
+// reassigning would mint false facts about the human, which is the failure this
+// exists to stop.
+
+describe("a character's own 'you' cannot be a fact about that character", () => {
+  const said = "you were grown in a vat on Ceres";
+
+  it("drops the claim and counts it — never reassigns", () => {
+    const { facts, counts } = enforceAddressDirection(
+      [fact({ text: said, fact: "Mari was grown in a vat", subject: "Mari", lane: "character_topics" })],
+      { characterAddressed: [said], characterName: "Mari" },
+    );
+    expect(facts).toHaveLength(1);              // the memory survives
+    expect(facts[0].fact).toBe("Mari was grown in a vat");
+    expect(facts[0].subject).toBeUndefined();   // the claim does not
+    expect(counts.speakerClaims).toBe(1);
+    expect(counts.reassigned).toBe(0);          // NOT corrected to "user"
+  });
+
+  it("matches the speaker loosely — the model returns three spellings of one person", () => {
+    // "Mari", "Dr. Mari Zielińska" and "Mari Zielińska" are all live in the
+    // store for the same character; an exact compare would miss most of them.
+    for (const subject of ["Mari", "Dr. Mari Zielińska", "Mari Zielińska"]) {
+      const { counts } = enforceAddressDirection(
+        [fact({ text: said, subject, lane: "character_topics" })],
+        { characterAddressed: [said], characterName: "Dr. Mari Zielińska" },
+      );
+      expect(counts.speakerClaims).toBe(1);
+    }
+  });
+
+  it("leaves a THIRD PARTY subject alone — only the speaker is refused", () => {
+    const { facts, counts } = enforceAddressDirection(
+      [fact({ text: said, fact: "Priya was grown in a vat", subject: "Priya", lane: "character_topics" })],
+      { characterAddressed: [said], characterName: "Mari" },
+    );
+    expect(facts[0].subject).toBe("Priya");
+    expect(counts.speakerClaims).toBe(0);
+  });
+
+  it("leaves a USER subject alone — that is the correct reading, and the whole recall win", () => {
+    const { facts, counts } = enforceAddressDirection(
+      [fact({ text: said, fact: "The user was grown in a vat", subject: "user" })],
+      { characterAddressed: [said], characterName: "Mari" },
+    );
+    expect(facts[0].subject).toBe("user");
+    expect(counts.speakerClaims).toBe(0);
+  });
+
+  it("does not fire on a sentence with no second person at all", () => {
+    const plain = "Mari was grown in a vat on Ceres";
+    const { facts, counts } = enforceAddressDirection(
+      [fact({ text: plain, subject: "Mari", lane: "character_topics" })],
+      { characterAddressed: [], characterName: "Mari" },
+    );
+    expect(facts[0].subject).toBe("Mari");
+    expect(counts.speakerClaims).toBe(0);
+  });
+
+  it("records the refusal REASON, so the rate is auditable", async () => {
+    const { resetSubjectRejectionCounts, subjectRejectionCounts } = await import("../subject.js");
+    resetSubjectRejectionCounts();
+    enforceAddressDirection(
+      [fact({ text: said, subject: "Mari", lane: "character_topics" })],
+      { characterAddressed: [said], characterName: "Mari" },
+    );
+    expect(subjectRejectionCounts().speaker).toBe(1);
   });
 });

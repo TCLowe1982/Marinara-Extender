@@ -77,7 +77,11 @@ export type SubjectRejection =
   | "placeholder"
   | "pronoun"
   | "bracketed"
-  | "too-long";
+  | "too-long"
+  // qs67: the subject named the SPEAKER of a second-person sentence. "You" never
+  // refers to the person saying it, so this one is refused on grammar rather than
+  // on the shape of the name — the name is usually perfectly valid.
+  | "speaker";
 
 // A subject name is a NAME. Returns the reason it is not, or null if it is fine.
 // Checked against the normalized (lowercased, trimmed, punctuation-stripped)

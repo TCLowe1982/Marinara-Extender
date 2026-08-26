@@ -12,7 +12,7 @@
 import type { Lane } from "./storage.js";
 import { localUrl, localEnabled, localModel, externalUpstream, externalModel } from "./llm-config.js";
 import { keepUserClause, userSpokenLines } from "./user-clause.js";
-import { USER_SENTINEL } from "./subject.js";
+import { USER_SENTINEL, noteSubjectRejection } from "./subject.js";
 
 // ── Candidate extraction ──────────────────────────────────────────────────────
 
@@ -159,29 +159,91 @@ export interface DirectionCounts {
   reassigned: number;
   /** No addressee to name: kept, but stripped of the false user claim. */
   refused: number;
+  /** qs67: the subject named the SPEAKER of a second-person line. Claim dropped. */
+  speakerClaims: number;
 }
 
+export interface DirectionInput {
+  /** [user]-block sentences that survive the gate ONLY on second person. */
+  userAddressed?: Iterable<string>;
+  /** [character]-block sentences that survive the gate ONLY on second person. */
+  characterAddressed?: Iterable<string>;
+  /** The session character — the addressee of a user-spoken line, and the
+   *  presumed speaker of a character-spoken one. */
+  characterName?: string;
+}
+
+/**
+ * qs67 — THE SPEAKER CANNOT BE THE SUBJECT, and this is refused rather than
+ * corrected.
+ *
+ * Measured on 496 hand-labelled facts: a rule that fires on a [character]-block
+ * second-person-only line whose subject is the session character catches 69
+ * genuine misattributions, fires wrongly on 12, and misses 16 — 85% precise.
+ *
+ * The 12 are not noise, they are a real class: speech acts where the character
+ * legitimately IS the subject ("Mari asked Priya if she is accepting the
+ * information", "Priya suggests Thomas should go to sleep"). They are
+ * surface-identical to the 69 it should catch ("Mari points out the user lacks
+ * mathematical rigor"), and nothing cheap separates them.
+ *
+ * So the claim is DROPPED, never reassigned. Reassigning to the user would mint
+ * 12 false facts about the human per ~500 — which is the exact failure this
+ * ticket exists to stop, and the asymmetry rule says a wrong write costs far more
+ * than a missing one. What is lost when the rule misfires is a subject on a fact
+ * that had no durable payload anyway; what is prevented is 69 false claims that a
+ * character's own biography contains something the character said about someone
+ * else. Counted by reason, so the rate is a number rather than a feeling.
+ */
 export function enforceAddressDirection(
   facts: AmbientFact[],
-  userAddressed: Iterable<string>,
-  characterName?: string,
+  input: DirectionInput = {},
 ): { facts: AmbientFact[]; counts: DirectionCounts } {
-  const addressed = new Set([...userAddressed].map(normText));
-  if (addressed.size === 0) return { facts, counts: { reassigned: 0, refused: 0 } };
+  const userSaid = new Set([...(input.userAddressed ?? [])].map(normText));
+  const charSaid = new Set([...(input.characterAddressed ?? [])].map(normText));
+  const counts: DirectionCounts = { reassigned: 0, refused: 0, speakerClaims: 0 };
+  if (userSaid.size === 0 && charSaid.size === 0) return { facts, counts };
+  const characterName = input.characterName?.trim();
 
-  const counts: DirectionCounts = { reassigned: 0, refused: 0 };
   const out = facts.map((f) => {
-    if (!addressed.has(normText(f.text)) || !attributedToUser(f)) return f;
-    if (characterName?.trim()) {
-      counts.reassigned++;
-      return { ...f, subject: characterName.trim(), lane: "character_topics" as Lane };
+    const t = normText(f.text);
+
+    // USER BLOCK — grammatically certain: the user is not the person the user is
+    // addressing. One known speaker, so "not the speaker" names exactly who.
+    if (userSaid.has(t) && attributedToUser(f)) {
+      if (characterName) {
+        counts.reassigned++;
+        return { ...f, subject: characterName, lane: "character_topics" as Lane };
+      }
+      counts.refused++;
+      return { ...f, subject: undefined, lane: "character_topics" as Lane, scope: "chat" as const };
     }
-    // Nobody to name. Keep the memory, drop the claim, demote out of the
-    // permanent ledger — route and mark, never drop.
-    counts.refused++;
-    return { ...f, subject: undefined, lane: "character_topics" as Lane, scope: "chat" as const };
+
+    // CHARACTER BLOCK — the same grammar, one rung weaker, because the block can
+    // carry more than one character and the addressee is not knowable here. Only
+    // the SPEAKER is refused, and only the session character can be identified as
+    // one. Everything else the model said stands.
+    if (charSaid.has(t) && characterName && matchesName(f.subject, characterName)) {
+      counts.speakerClaims++;
+      noteSubjectRejection("speaker");
+      return { ...f, subject: undefined };
+    }
+
+    return f;
   });
   return { facts: out, counts };
+}
+
+// Loose name match: the model returns "Mari", "Dr. Mari Zielinska" and
+// "Mari Zielinska" for the same person, so an exact compare would miss most of
+// what the rule exists to catch. One shared token of 3+ characters is enough,
+// which is the same bar matchesSessionName uses.
+function matchesName(subject: string | undefined, name: string): boolean {
+  const a = normText(subject ?? ""), b = normText(name);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const bt = new Set(b.split(" ").filter((x) => x.length > 2));
+  return a.split(" ").some((x) => x.length > 2 && bt.has(x));
 }
 
 // ── LLM call ──────────────────────────────────────────────────────────────────
@@ -395,15 +457,28 @@ export async function classifyAmbient(input: AmbientInput): Promise<AmbientFact[
   // The direction rule runs LAST, after keepUserClause — which exists to put a
   // user claim BACK when the model dropped it, and would happily resurrect the
   // exact attribution the rule refuses.
-  const { facts, counts } = enforceAddressDirection(
-    restored,
-    admit ? userCandidates.filter(isSecondPersonOnly) : [],
-    input.characterName,
-  );
+  const { facts, counts } = enforceAddressDirection(restored, {
+    userAddressed: admit ? userCandidates.filter(isSecondPersonOnly) : [],
+    // SECOND-PERSON-ONLY, exactly as the user half. I first wired this on mere
+    // PRESENCE, reasoning that a mixed sentence still carries a claim about its
+    // own speaker. Measured, that is net-HARMFUL in the configuration that
+    // actually ships: restricted to the population the gate admits today, the
+    // presence form catches 2 misattributions and breaks 9 correct ones — 18%.
+    // A second-person mention INSIDE a first-person sentence ("and you're right
+    // — it was maxwell", "don't shortcut the gate you just built") is incidental,
+    // and there the speaker genuinely IS the subject. Only a sentence that
+    // survives on second person ALONE is about the person being addressed.
+    //
+    // Consequence, stated plainly: with MARINARA_EXTENDER_SECOND_PERSON off this
+    // set is EMPTY and the rule is inert by construction. It is coupled to cye6
+    // and the two ship together or not at all.
+    characterAddressed: admit ? charCandidates.filter(isSecondPersonOnly) : [],
+    characterName: input.characterName,
+  });
 
   if (facts.length > 0 || counts.reassigned || counts.refused) {
-    const dir = counts.reassigned || counts.refused
-      ? ` | direction: ${counts.reassigned} reassigned, ${counts.refused} refused`
+    const dir = counts.reassigned || counts.refused || counts.speakerClaims
+      ? ` | direction: ${counts.reassigned} reassigned, ${counts.refused} refused, ${counts.speakerClaims} speaker-claim(s) dropped`
       : "";
     console.info(`[ME:ambient] found ${facts.length} ambient fact(s) from ${lines.length} candidate(s)${dir}`);
   }

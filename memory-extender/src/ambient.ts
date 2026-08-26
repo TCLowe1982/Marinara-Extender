@@ -208,19 +208,6 @@ SUBJECT RULE:
 - subject = who the fact is ABOUT. Use "user" for the human player; use the character's name for a fact about that character.
 - A [character] sentence may describe ANY character in the scene, not just the one whose turn it is — attribute by content, not by block label. Pick names from the "Known characters" list when one is provided.
 
-DIRECTION OF ADDRESS — "you" is the LISTENER, never the speaker.
-The [user] / [character] prefix says who SPOKE the sentence, not who it is about.
-- A [user] sentence about "you" or "your" is NEVER about the user. Nobody is the
-  person they are addressing. It is about a character.
-- A [character] sentence about "you" or "your" is about whoever that character is
-  addressing: the user in a one-on-one scene, possibly another character when
-  several are present. Decide from the content.
-- Nothing else changes. A [user] sentence about "I" is still about the user, and a
-  sentence naming someone is still about the person it names.
-The same words flip subject depending on who said them:
-- [user] "you were grown in a vat on Ceres" → character scope, character_topics, subject = the character
-- [character] "you were grown in a vat on Ceres" → character scope, user_topics, subject "user"
-
 Examples:
 - "I grew up in Texas" (said by user) → character scope, user_topics, subject "user"
 - "I cried at the MGS3 ending" (said by user) → character scope, user_topics, subject "user"

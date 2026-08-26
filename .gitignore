@@ -31,3 +31,6 @@ memory-extender/logs/pre-push.log
 
 # Bench scratch (cye6) — regenerable from the seed; never committed.
 memory-extender/scratch/
+
+# Repair backups — live store content. Same reason data/ is ignored.
+memory-extender/backups/

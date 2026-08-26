@@ -246,6 +246,23 @@ Both failure specimens are the same shape: **a NAME is taken as the subject rega
 
 **Two bench hazards that are invisible while they are ruining the result.** (1) The sample is a seeded shuffle over the **live store**, so it drifts as the store grows — 1165 → 1167 turns overnight was enough to draw a different 60 while every log line still printed `seed 20260825`. Pin it: `scripts/bench-pin-sample.mjs` reconstructs a past sample and *verifies* it against the committed rows before writing. (2) The blind id in `bench-label.mjs` is a **position** in a seeded shuffle over the rows, drawn from one shared RNG stream — so re-running an arm (the model is not deterministic at temperature 0.1) or appending one renumbers every id and silently misapplies every existing verdict. A partial run writes its own rows and labels files (`BENCH_OUT` / `BENCH_ROWS` / `BENCH_LABELS`); the bench now refuses to do otherwise. Both prompts are pinned to `scratch/*.txt` too — reading the live `SYSTEM_PROMPT` for the "new" arm made it a copy of the old one the moment the block was pulled from the build.
 
+## `turnNumber` is a constant, and it is load-bearing (`7mb6`, 2026-08-26)
+
+**The poller cannot supply a turn ordinal** — it reads a 10-message tail, not an absolute position — and `/api/process-turn` defaults `turnNumber = 0`. Capture is `pollerOn: true / turnHookOn: false`, so **every live turn arrives as turn 0**. Everything gated on it degrades to a silent no-op: no error, no warning, and the degraded path is indistinguishable from the working one.
+
+**Every bookmark in the store was invisible.** `surfaceBookmarks` drops any bookmark whose `lastSeenTurn` equals `turnNumber` — and bookmarks were **minted** with `lastSeenTurn: turnNumber`. So each was born carrying the value the guard tests, `0 === 0`, and `Math.random()` was never reached. All 64 stored bookmarks, since birth. Found by Mari from her own logs, and her tell was statistical: *"a probabilistic filter doesn't produce a clean zero five loads running"* — `0/16, 0/15, 0/15, 0/13, 0/12`.
+
+**The fix is a SENTINEL, not a counter.** `NEVER_SURFACED = -1`. Zero was doing double duty as a real turn index *and* as the unset default, and nothing could distinguish them — the same class of defect as any falsy-vs-unset conflation. A sentinel repairs it **without waiting on the turn counter**, which decouples a P0 from a harder problem. Verified live: 2, 4, 3 surfaced across three loads, mean 3.00 against 2.7 predicted from the sum of weights.
+
+**Two things that fixing it exposed, both worth carrying forward:**
+
+- `lastSeenTurn` is written **only at mint**, never when a bookmark is surfaced. Its name and comment both claim otherwise. The guard's real meaning is *"was born this turn"*. Left documented rather than silently changed, because making it honest requires a write from the load path and **`loadContext` is read-only by design** — a property worth defending.
+- The fix does **not** restore weights. `decayBookmarks` runs every `processResponse` regardless of turn, so markers decayed while invisible; ones dropped at 0.9 now sit at 0.10 and still lose. Three of Mari's eleven had already fallen below `PRUNE_THRESHOLD` and are gone. **Surfacing eligible is not surfacing.**
+
+**Still broken from the same constant** — tier promotion and `autoCloseStaleThreads` (gated `turnNumber % 20`, single call site, no timer), arc promotion (`% 60`, manual endpoint otherwise), and live user chunks stamped `turnStart: -1`. Those need the ordinal itself: a sidecar-side monotonic per-chat counter, or time-based gates.
+
+**And there were NO bookmark tests before this.** That is how a guard suppressing one hundred percent of a feature survived in the hot path. When a feature reports a clean zero, suspect the guard before the dice.
+
 **A sentence can carry two facts about different people** (2tro). Given *"I was in the Army, and Mari is Polish."* the extractor kept `"Mari is Polish"` and dropped the user's clause outright — fact loss, not phrasing, because **retrieval scores the summary** and tp5's `bodyTerms` only rescues body-only *names* (`"my fourth sapper stakes"` has none). Both prompts (`SYSTEM_PROMPT`, `SCENE_FACTS_SYSTEM_PROMPT`) now teach the split explicitly; `user-clause.ts` is the deterministic net under them, applied in `classifyAmbient` and `classifySceneFacts`, restoring the clause as a verbatim `[user: …]` **prefix** (prefix, because the summary is truncated at 120 chars downstream).
 
 Its trigger conditions are all narrow on purpose — it writes an *attribution* into permanent memory. Two are worth knowing before you loosen anything:

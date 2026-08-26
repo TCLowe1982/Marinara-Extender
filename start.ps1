@@ -194,7 +194,16 @@ function Start-Sidecar {
     # So: capture $LASTEXITCODE the instant the pipeline ends (anything else run
     # first will overwrite it), log it in its own line, and exit WITH it. That makes
     # the existing post-mortem instrumentation report what it always claimed to.
-    $worker = "`$ErrorActionPreference='SilentlyContinue'; Set-Location '$sidecarDir'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; try{`$Host.UI.RawUI.WindowTitle='$wTitle'}catch{}; `$log='$logPath'; if(-not (Test-Path (Split-Path `$log))){New-Item -ItemType Directory (Split-Path `$log)|Out-Null}; Add-Content -Path `$log -Value ('===== session start '+(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')+' =====') -Encoding UTF8; cmd /c 'npm.cmd $script:RunCmd 2>&1' | ForEach-Object { if(-not `$titled){ try{`$Host.UI.RawUI.WindowTitle='$wTitle'}catch{}; `$titled=`$true }; `$_; Add-Content -Path `$log -Value `$_ -Encoding UTF8 }; `$npmExit=`$LASTEXITCODE; if(`$null -eq `$npmExit){`$npmExit=-1}; `$npmHex='0x{0:X8}' -f ([int64]`$npmExit -band 0xFFFFFFFFL); Add-Content -Path `$log -Value ('['+(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')+'] [worker] npm/node exited with code '+`$npmExit+' ('+`$npmHex+')') -Encoding UTF8; Write-Host ''; Write-Host ('Sidecar stopped (exit '+`$npmExit+'). You can close this window. Log: memory-extender\logs\sidecar.log'); exit `$npmExit"
+    # 2026-08-25: -1 WAS AMBIGUOUS AND THAT COST US THE FIRST THREE REAL DEATHS.
+    # The line above used to collapse "LASTEXITCODE was null" into -1. Three deaths
+    # on 2026-08-25 (16:16:26, 16:25:27, 16:27:41) all reported
+    # "exited with code -1 (0xFFFFFFFF)" and the value could not be read, because -1
+    # is BOTH that sentinel AND what TerminateProcess/Process.Kill actually sets --
+    # i.e. exactly the external-hard-kill candidate 073 is trying to confirm. The
+    # 2026-08-24 fix replaced an uninformative 0 with an uninformative -1 for the
+    # null case, and 073's "one more death will separate the candidates" did not pay
+    # off. The line now says which of the two it is, in words.
+    $worker = "`$ErrorActionPreference='SilentlyContinue'; Set-Location '$sidecarDir'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; try{`$Host.UI.RawUI.WindowTitle='$wTitle'}catch{}; `$log='$logPath'; if(-not (Test-Path (Split-Path `$log))){New-Item -ItemType Directory (Split-Path `$log)|Out-Null}; Add-Content -Path `$log -Value ('===== session start '+(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')+' =====') -Encoding UTF8; cmd /c 'npm.cmd $script:RunCmd 2>&1' | ForEach-Object { if(-not `$titled){ try{`$Host.UI.RawUI.WindowTitle='$wTitle'}catch{}; `$titled=`$true }; `$_; Add-Content -Path `$log -Value `$_ -Encoding UTF8 }; `$npmExit=`$LASTEXITCODE; `$npmNull=(`$null -eq `$npmExit); if(`$npmNull){`$npmExit=-1}; `$npmHex='0x{0:X8}' -f ([int64]`$npmExit -band 0xFFFFFFFFL); Add-Content -Path `$log -Value ('['+(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')+'] [worker] npm/node exited with code '+`$npmExit+' ('+`$npmHex+')'+(&{if(`$npmNull){' -- SENTINEL: LASTEXITCODE was NULL, no exit code was produced'}else{' -- REAL exit code from the pipeline'}})) -Encoding UTF8; Write-Host ''; Write-Host ('Sidecar stopped (exit '+`$npmExit+'). You can close this window. Log: memory-extender\logs\sidecar.log'); exit `$npmExit"
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($worker))
     $script:SidecarProc = Start-Process "powershell.exe" `
         -ArgumentList "-NoLogo","-ExecutionPolicy","Bypass","-EncodedCommand",$enc `

@@ -65,6 +65,23 @@ export interface IdentityEntry {
    * the live character loses nothing.
    */
   forkPrimary?: boolean;
+  /**
+   * Chats whose memories belong to BOTH sisters - the shared childhood, named
+   * by CHAT rather than inferred from a date (dqs1).
+   *
+   * The date rule cannot express this store's history. `created` is an INGEST
+   * stamp, not an event date: one chat here carries 950 beats spanning turns
+   * 1..2532 under three distinct created dates, another 263 beats all stamped a
+   * single day. So any conversation imported after the split reads as "my own
+   * life since" however old it actually is, and a date can never sort it out.
+   *
+   * Chat ownership does not have that problem - it is recorded when the chat is
+   * created and survives every later import. TC's ruling (2026-08-26): name the
+   * shared set explicitly, by chat.
+   *
+   * Set identically on every card of the fork.
+   */
+  forkSharedChats?: string[];
 }
 
 interface IdentityMapFile {
@@ -280,11 +297,33 @@ export async function anyForkConfigured(): Promise<boolean> {
   return map.some((e) => !!e.forkSplitAt);
 }
 
-export async function forkConfigFor(characterId: string): Promise<{ splitAt: string; primary: boolean } | null> {
+export async function forkConfigFor(characterId: string): Promise<{ splitAt: string; primary: boolean; sharedChats: string[]; branchCardIds: string[] } | null> {
   const map = await getIdentityMap();
   const e = map.find((x) => x.characterId === characterId);
   if (!e?.forkSplitAt) return null;
-  return { splitAt: e.forkSplitAt, primary: !!e.forkPrimary };
+
+  // EVERY CARD ID OF THIS SISTER, not just the one that owns the chat (dqs1).
+  //
+  // Professor Mari is TWO card ids - the original `__professor_mari__` her chats
+  // still name, and `Z4MZQbJLgLF`. The filter used to take `mine: [cardId]`, the
+  // single owning card, so what she remembered depended on which of her own
+  // chats she was in: 17 rows in one, 803 in another, out of 9,185. One person
+  // is one branch.
+  //
+  // Branch membership is keyed on forkPrimary because a fork is two-sided by
+  // construction: the cards that continued and the cards that were retired. A
+  // three-way split would need an explicit branch label, and there is no such
+  // case; this refuses to invent one.
+  const branchCardIds = map
+    .filter((x) => x.identityKey === e.identityKey && x.forkSplitAt && !!x.forkPrimary === !!e.forkPrimary)
+    .map((x) => x.characterId);
+
+  return {
+    splitAt: e.forkSplitAt,
+    primary: !!e.forkPrimary,
+    sharedChats: e.forkSharedChats ?? [],
+    branchCardIds,
+  };
 }
 
 /** Every card id that shares an identity key with this one and is forked. */

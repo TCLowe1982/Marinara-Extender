@@ -48,6 +48,24 @@ export interface IndexEntry {
   lane: Lane;
   status?: EntryStatus;
   lastAccessed: string;
+  /**
+   * When this memory was RECORDED, mirrored from the entry file (dqs1).
+   *
+   * It was missing here, and its absence was silent: the identity fork reads
+   * `row.created ?? row.lastAccessed`, so with no `created` on any row the
+   * shared-childhood test degraded into "has not been READ since the split".
+   * 175 rows genuinely predated the split and the filter admitted 17. gwny makes
+   * that worse - loading a memory refreshes lastAccessed, so the more a memory
+   * is used the more certainly it is dropped from the shared past.
+   *
+   * A RETRIEVAL TIMESTAMP MUST NEVER STAND IN FOR A CREATION DATE. They answer
+   * different questions and only one of them is stable.
+   *
+   * Optional because rows written before this field existed do not carry it;
+   * scripts/backfill-created.mjs fills them from the entry files. Consumers must
+   * treat absent as UNKNOWN and fall through to another rule - never substitute.
+   */
+  created?: string;
   // Memory tier system (mirrored from Entry for fast loader access)
   tier?: MemoryTier;
   retrievalCount?: number;

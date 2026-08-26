@@ -69,8 +69,10 @@ export async function ownersOfChat(chatId: string | undefined | null): Promise<s
 export interface ForkFilter {
   splitAt: string;
   primary: boolean;
-  /** Card ids whose chats count as "mine". */
+  /** Card ids whose chats count as "mine" - ALL of this sister's cards. */
   mine: string[];
+  /** Chats both sisters keep, named explicitly. Empty when none are declared. */
+  sharedChats?: string[];
 }
 
 /**
@@ -97,7 +99,7 @@ export async function forkFilterForChat(chatId: string | undefined | null): Prom
   const owners = await ownersOfChat(chatId);
   for (const cardId of owners) {
     const cfg = await forkConfigFor(cardId);
-    if (cfg) return { splitAt: cfg.splitAt, primary: cfg.primary, mine: [cardId] };
+    if (cfg) return { splitAt: cfg.splitAt, primary: cfg.primary, mine: cfg.branchCardIds, sharedChats: cfg.sharedChats };
   }
   return null;
 }
@@ -110,11 +112,22 @@ export async function forkFilterForChat(chatId: string | undefined | null): Prom
  * primary rule above.
  */
 export async function rowInBranch(row: Pick<IndexEntry, "sourceChatId" | "citesChatId" | "lastAccessed"> & { created?: string }, f: ForkFilter): Promise<boolean> {
-  const created = String(row.created ?? row.lastAccessed ?? "");
-  // The shared childhood. Both sisters keep it.
+  const chat = row.sourceChatId ?? row.citesChatId;
+
+  // THE SHARED CHILDHOOD, NAMED BY CHAT. Checked first because it is the only
+  // rule here that rests on something recorded rather than inferred.
+  if (chat && f.sharedChats?.includes(chat)) return true;
+
+  // The date rule stays as a second gate for stores that have honest creation
+  // dates. NOTE THE ABSENT FALLBACK: this used to read
+  // `row.created ?? row.lastAccessed`, and since IndexEntry carried no `created`
+  // at all it silently became "has not been READ since the split" — admitting 17
+  // of 175 genuinely pre-split rows, and dropping precisely the memories that
+  // were used most (dqs1). A missing creation date means UNKNOWN, so fall
+  // through to ownership; it never means "use the retrieval timestamp".
+  const created = String(row.created ?? "");
   if (created && created <= f.splitAt) return true;
 
-  const chat = row.sourceChatId ?? row.citesChatId;
   if (!chat) return f.primary;              // unattributable -> primary branch
 
   const owners = await ownersOfChat(chat);

@@ -89,10 +89,77 @@ describe("unattributable rows follow the PRIMARY branch", () => {
     expect(await rowInBranch(r, OLD)).toBe(false);
   });
 
-  it("no date at all falls back to lastAccessed, then to primary", async () => {
+  it("no date at all falls through to primary", async () => {
     const undated = { lastAccessed: "", sourceChatId: undefined } as never;
     expect(await rowInBranch(undated, NEW)).toBe(true);
     expect(await rowInBranch(undated, OLD)).toBe(false);
+  });
+});
+
+// dqs1. These are the regression: the rule above was written assuming index rows
+// carry `created`, and NOT ONE OF THE 9,185 ROWS IN THE LIVE STORE DID. The
+// interface never declared the field. So `row.created ?? row.lastAccessed` made
+// the shared-childhood test mean "has not been READ since the split" — it
+// admitted 17 of 175 genuinely pre-split rows, and the ones it dropped were the
+// ones used most, because loading a memory refreshes lastAccessed (gwny).
+//
+// The old suite could not catch it: every fixture set `created`, so the fallback
+// branch was never executed. The test that named it asserted an EMPTY
+// lastAccessed, which falls through for the same reason with or without the bug.
+describe("a retrieval timestamp is never a creation date", () => {
+  // COMPANION, not the regression: with a recent lastAccessed the date gate
+  // fails either way and both versions fall through to ownership. It is here to
+  // pin the pair, and it is labelled so nobody mistakes it for the guard.
+  it("a row with NO created and a recent lastAccessed is not treated as pre-split", async () => {
+    const r = { lastAccessed: "2026-08-25", sourceChatId: "chat-old" } as never;
+    expect(await rowInBranch(r, NEW)).toBe(false); // belongs to the retired card's chat
+    expect(await rowInBranch(r, OLD)).toBe(true);
+  });
+
+  // THIS ONE IS THE GUARD. Verified to FAIL against the old
+  // `created ?? lastAccessed`: an untouched row passed the shared-childhood
+  // test for the wrong reason — because nobody had read it, not because it was
+  // old.
+  it("a row with NO created and an OLD lastAccessed is still not shared", async () => {
+    const r = { lastAccessed: "2026-01-01", sourceChatId: "chat-new" } as never;
+    expect(await rowInBranch(r, OLD)).toBe(false);
+    expect(await rowInBranch(r, NEW)).toBe(true); // its own chat, not the shared past
+  });
+});
+
+// TC's ruling (2026-08-26): name the shared set BY CHAT. `created` is an ingest
+// stamp on this store — 950 beats spanning 2,500 turns under three dates — so a
+// date can never sort imported history onto the right side of the split.
+describe("chats can be declared shared outright", () => {
+  const SHARED = { ...OLD, sharedChats: ["chat-old"] };
+  const SHARED_NEW = { ...NEW, sharedChats: ["chat-old"] };
+
+  it("a declared shared chat reaches BOTH sisters, whatever its dates say", async () => {
+    const r = { created: "2026-06-23", lastAccessed: "2026-08-26", sourceChatId: "chat-old" } as never;
+    expect(await rowInBranch(r, SHARED_NEW)).toBe(true);
+    expect(await rowInBranch(r, SHARED)).toBe(true);
+  });
+
+  it("declaring one chat shared does not leak the rest of that card's life", async () => {
+    const r = { created: "2026-06-23", lastAccessed: "2026-08-26", sourceChatId: "chat-group" } as never;
+    const other = { ...SHARED, mine: ["__professor_mari__"] };
+    expect(await rowInBranch(r, other)).toBe(false);
+  });
+
+  it("citesChatId counts as the chat for sharing too", async () => {
+    const r = { created: "2026-06-23", citesChatId: "chat-old", sourceChatId: undefined } as never;
+    expect(await rowInBranch(r, SHARED_NEW)).toBe(true);
+  });
+});
+
+describe("one person is one branch", () => {
+  it("a sister with several card ids owns the chats of ALL of them", async () => {
+    // Professor Mari is both `__professor_mari__` (which her chats still name)
+    // and `Z4MZQbJLgLF`. Filtering on the single owning card made her memory
+    // depend on which of her own chats she happened to be in.
+    const whole = { splitAt: SPLIT, primary: false, mine: ["__professor_mari__", "Z4MZQbJLgLF"] };
+    const r = { created: "2026-06-23", sourceChatId: "chat-old" } as never;
+    expect(await rowInBranch(r, whole)).toBe(true);
   });
 });
 

@@ -8,13 +8,25 @@
 // probably limit the number of hot entries to 10,000, and if we ever exceed
 // that, something is probably wrong. In this case, things have been wrong."
 //
-// The second sentence is the load-bearing one. A cap is worth having on its own
-// merits - the loader ranks a whole scope index to select ~10 rows, so a bigger
-// hot set is slower and less precise - but its real value is as a DETECTOR for a
-// class of failure this codebase has now been bitten by twice: an ageing process
-// that silently stops, and nothing notices for months.
+// TC, clarifying the intent afterwards: "The cap is more about retrieval speed,
+// than anything else. I don't want the index to be too bloated for easy lookup."
 //
-// That is what happened here. Tier promotion is gated on `turnNumber % 20`, and
+// SPEED IS THE PRIMARY PURPOSE. Measured on the live store: loadContext takes
+// ~1,279 ms against professor_mari, and 900 ms of that is YAML.parse on a 4 MB,
+// 8,866-row index - per load, per scope. The cost is linear at 0.098 ms/entry, so
+// 10,000 entries is almost exactly a one-second parse ceiling. That is what the
+// number buys.
+//
+// It is ALSO a detector, and that is worth keeping as a secondary use: an ageing
+// process that silently stops leaves the hot index growing with nothing else to
+// show for it, which is a failure this codebase has now been bitten by twice.
+//
+// See hdq1 before tuning this number: the latency it guards is 149x more about
+// the index FORMAT than the entry count (YAML.parse 900 ms vs JSON.parse 6 ms on
+// identical data). If the index moves to JSON the cap stops being a speed limit
+// and becomes purely a precision bound and a tripwire.
+//
+// The detector half is what caught the current problem. Tier promotion is gated on `turnNumber % 20`, and
 // turnNumber was pinned at 0 in poller mode, so promotion never ran (7mb6).
 // Nothing aged, nothing archived, and the hot index grew monotonically with no
 // signal anywhere. 17,160 hot rows against 729 cold - 96% hot - is what "ageing

@@ -78,6 +78,7 @@ Independent flags — either detector alone, or both. They share one watermark b
 | `MARINARA_EXTENDER_BUDGET_GLOBAL` | `1000` | …global scope. |
 | `MARINARA_EXTENDER_EIDETIC` | `0` | `1` injects **every** non-done entry, ignoring budget. **Testing only.** |
 | `MARINARA_EXTENDER_TIMESENSE` | `0` | `1` enables narrative time-sense (soft clock). Off in v1.0. |
+| `MARINARA_EXTENDER_SECOND_PERSON` | `0` | `1` admits second-person sentences to the tier-3 candidate gate (`cye6`). **Off because it failed its own pre-registered bar** — the population it admits measured 29% precise / 34% misattributed against ≥60% / ≤25%. Also arms the `[character]`-half speaker refusal in `enforceAddressDirection`, which is inert without it. |
 | `MARINARA_EXTENDER_PROGRESS` | `1` | Console progress bar during imports; `0` disables. |
 
 **Advanced / opt-in:**
@@ -125,6 +126,14 @@ The boot banner (`index.ts`) prints the server URL, `/setup` link, data dir, loc
 4. **Is a model reachable?** `GET /api/health` → `ollama: "unavailable"` means analysis silently no-ops. Start Ollama / fix `LOCAL_URL`, or set an external key.
 
 **"The sidecar keeps closing" / memory went stale with no error.** A blind crash leaves the engine injecting the last (frozen) lorebook with nothing saying so. Check **`logs/sidecar.log`** — the crash *breadcrumb* names the last exit (`uncaughtException`, signal, etc.). Hard kills (`taskkill /F`, native fault) can't self-log; the launcher watchdog catches those.
+
+**A LIVE PID IS NOT A LIVE SIDECAR** (observed 2026-08-25). A process was found running `node dist/index.js`, 25.6 hours old, 1,281 MB private — **with no listener on 3001 and no HTTP response**, while its poller kept ticking and writing watermarks. Capture went on working while `/api/health`, the panel and every endpoint were dark, so "are memories still appearing?" answered *yes* and meant nothing. Nothing restarted it because the launcher was not running. The watchdog's liveness check should probe `/api/health` over HTTP, not test that a pid exists; `073` tracks it.
+
+**Reading the exit code: `-1` used to be ambiguous, and cost the first three real deaths.** The worker logs `[worker] npm/node exited with code N (0xHEX)`. Until 2026-08-25 it collapsed "`$LASTEXITCODE` was null" into `-1` — which is *also* what `TerminateProcess`/.NET `Process.Kill` sets, i.e. exactly the external-hard-kill hypothesis `073` is trying to confirm. Three organic deaths landed on `-1` and none could be read. The line now states which case it is in words (`-- SENTINEL: LASTEXITCODE was NULL` vs `-- REAL exit code from the pipeline`).
+
+**Editing `start.ps1` requires a launcher restart to take effect.** The watchdog interpolates the worker command from its **in-memory** copy of the script, so a watchdog started before an edit keeps spawning the old worker no matter how new the file is. Verify by the *watchdog's* start time, never the worker's. This has bitten twice.
+
+**Memory: the shape is a plateau, not a leak** (`3lru`, measured 2026-08-25). A fresh process climbs 91 MB → ~911 MB across the first ~6 turns in discrete ~200 MB steps, each landing on a completed turn — then **stops**: three further turns produced no step and the process sat at 895 MB. That is V8 sizing its heap for a large per-turn working set (the loader reads ~3,025 character index rows *every* turn) and never returning it to the OS. Do **not** quote "≈145 MB per turn" — dividing the climb by the turns in it was wrong, and asking for the denominator is what caught it. A separate, much slower phenomenon (~300 MB over 25 hours) sits on top and is the only genuine leak candidate.
 
 **"It says it's already running / duplicate window."** `EADDRINUSE` — another sidecar owns port 3001. The running one is fine; close the duplicate. The guarded launcher refuses to start a second copy; `npm start` and double-launches hit this.
 

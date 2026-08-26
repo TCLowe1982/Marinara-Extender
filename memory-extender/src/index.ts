@@ -22,6 +22,7 @@ import { updateStatus, builtAt, buildVersion } from "./update.js";
 import { embeddingsStatus, describeEmbeddingsStatus } from "./embeddings.js";
 import { isEideticMode } from "./loader.js";
 import { readCaptureStatus } from "./capture-status.js";
+import { indexHealth, logIndexHealth, hotEntryCap } from "./index-health.js";
 
 await loadDotEnv();
 
@@ -81,6 +82,9 @@ app.get("/api/health", { logLevel: "silent" }, async (_req, reply) => {
     }
   }
   const [update, embeddings, capture] = await Promise.all([updateStatus(), embeddingsStatus(), readCaptureStatus()]);
+  // Hot-index size as a tripwire (TC, 2026-08-26). Memoised; see index-health.ts
+  // for why this warns rather than enforces.
+  const idx = indexHealth();
   // "Is this process running current code?" used to need a PowerShell dance
   // comparing process start time against dist/index.js mtime, because the version
   // string answered a different question (what is git HEAD) and answered it at
@@ -96,6 +100,16 @@ app.get("/api/health", { logLevel: "silent" }, async (_req, reply) => {
     startedAt: STARTED_AT,
     builtAt: built,
     stale: built ? built > STARTED_AT : null,
+    index: {
+      hot: idx.hot,
+      cold: idx.cold,
+      scopes: idx.scopes,
+      coldShare: Number(idx.coldShare.toFixed(4)),
+      cap: hotEntryCap(),
+      largestCharacter: idx.largest ? { id: idx.largest.id, hot: idx.largest.hot } : null,
+      overCap: idx.overCap.map((s) => ({ id: s.id, hot: s.hot })),
+      warnings: idx.warnings,
+    },
     capture: {
       pollerOn: process.env.MARINARA_EXTENDER_POLLER === "1",
       turnHookOn: process.env.MARINARA_EXTENDER_TURN_HOOK === "1",
@@ -268,6 +282,10 @@ app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
   console.log(`Progress:     ${process.env.MARINARA_EXTENDER_PROGRESS !== "0" ? "on (story-import console bar)" : "off"}`);
   // First-boot embeddings check — semantic degradation must never be silent.
   void embeddingsStatus().then((s) => console.log(`Embeddings:   ${describeEmbeddingsStatus(s)}`));
+  // Hot-index tripwire at startup. Printed unconditionally, warnings and all:
+  // the lesson of 7mb6 and 771t is that a silently degraded path is
+  // indistinguishable from a working one.
+  try { logIndexHealth(); } catch { /* never block startup on a diagnostic */ }
 
   // ── Engine poller (opt-in) ──────────────────────────────────────────────────
   // The replacement for the removed client extension: watch the engine for

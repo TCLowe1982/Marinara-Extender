@@ -228,6 +228,24 @@ path records it.
 
 **No cheap surface rule fixes it.** A 14-feature sweep against those labels found nothing: best single lift 1.46, best conjunction 75%, and every rule above the useful line is confined to the second-person population. The *inverted* features say where the stage is reliable — subject `user` is wrong 11% of the time, first-person sentences 16%. Precision collapses specifically where the subject must be **inferred**, and the only context for inferring is the `[user]`/`[character]` block tag and a flat roster. The lever that moves it is better **input**, not a filter on the output.
 
+**And the input that moves it is IDENTITY, not direction of address** (`icke`, 2026-08-26). Five arms, one pinned sample of 60 turns, `dolphin3:8b`:
+
+| arm | configuration | supported | attributed | precision | misattributed |
+|---|---|---|---|---|---|
+| A | old gate + old prompt — **what ships** | 92% | 45% | 43% | 15% |
+| B | wide gate + new prompt | 85% | 67% | 62% | 7% |
+| C | wide gate + old prompt | 90% | 57% | 55% | 15% |
+| D | old gate + new prompt | 73% | 40% | **28%** | **22%** |
+| E | old gate + new prompt + identity header | 78% | 60% | **45%** | **12%** |
+
+The `cye6` DIRECTION OF ADDRESS prompt block **does not ship with the gate off.** Arm D is *worse than doing nothing* and raises the dangerous class, 15% → 22%. B's 62% belonged to the gate and the prompt **together** — neither half carries it alone (C is 55%, D is 28%), and the gate half already failed its own bar. Arm E is the only arm that beats the baseline in the configuration that actually ships: a header naming who spoke the block and stating that the persona **is** the user, drawn verbatim from the declared identity (`egj3`, including its `excludes` line). That is the same axis as `qhej` and `opyv` — the extractor cannot attribute because it is never told who the participants are. Follow-up with the exact measured prompt text: `avii`.
+
+Both failure specimens are the same shape: **a NAME is taken as the subject regardless of grammatical role.** *"Priya I love him so much"* → recorded as Priya loving (a vocative); *"I make a sound into Thomas's chest"* → recorded as Thomas making it (an object). Knowing the speaker resolves `"I"` and demotes a bare name from subject-by-default.
+
+**PRECISION CAN NEVER EXCEED ATTRIBUTED, and that bound is what makes cross-session labelling safe to reason about.** A/B/C were labelled a day before D/E and the second pass was measurably stricter — "not in the sentence" rejections ran 3 across 180 items against 21 across 120, dragging SUPPORTED from 89% to 76%. Since precision is `S && A`, that drift moves precision on its own and the absolute figures are **not comparable across passes**. The verdict survived anyway because D's *attributed* rate (40%) already sits below A's *precision* (43%), so D's precision ceiling is under the baseline under any support standard however lenient. Quote attribution and misattribution across passes; quote precision only within one.
+
+**Two bench hazards that are invisible while they are ruining the result.** (1) The sample is a seeded shuffle over the **live store**, so it drifts as the store grows — 1165 → 1167 turns overnight was enough to draw a different 60 while every log line still printed `seed 20260825`. Pin it: `scripts/bench-pin-sample.mjs` reconstructs a past sample and *verifies* it against the committed rows before writing. (2) The blind id in `bench-label.mjs` is a **position** in a seeded shuffle over the rows, drawn from one shared RNG stream — so re-running an arm (the model is not deterministic at temperature 0.1) or appending one renumbers every id and silently misapplies every existing verdict. A partial run writes its own rows and labels files (`BENCH_OUT` / `BENCH_ROWS` / `BENCH_LABELS`); the bench now refuses to do otherwise. Both prompts are pinned to `scratch/*.txt` too — reading the live `SYSTEM_PROMPT` for the "new" arm made it a copy of the old one the moment the block was pulled from the build.
+
 **A sentence can carry two facts about different people** (2tro). Given *"I was in the Army, and Mari is Polish."* the extractor kept `"Mari is Polish"` and dropped the user's clause outright — fact loss, not phrasing, because **retrieval scores the summary** and tp5's `bodyTerms` only rescues body-only *names* (`"my fourth sapper stakes"` has none). Both prompts (`SYSTEM_PROMPT`, `SCENE_FACTS_SYSTEM_PROMPT`) now teach the split explicitly; `user-clause.ts` is the deterministic net under them, applied in `classifyAmbient` and `classifySceneFacts`, restoring the clause as a verbatim `[user: …]` **prefix** (prefix, because the summary is truncated at 120 chars downstream).
 
 Its trigger conditions are all narrow on purpose — it writes an *attribution* into permanent memory. Two are worth knowing before you loosen anything:

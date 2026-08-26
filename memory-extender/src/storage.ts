@@ -219,6 +219,26 @@ export interface Bookmark {
   weight: number;     // 0.0–1.0; decays each turn by decayRate
   why: string;
   createdTurn: number;
+  /**
+   * The turn this bookmark was last SURFACED, or NEVER_SURFACED when it has not
+   * been (7mb6).
+   *
+   * THE SENTINEL IS THE POINT. This used to be minted as `lastSeenTurn:
+   * turnNumber`, and in poller mode turnNumber is permanently 0 - so a bookmark
+   * was born already stamped with the value the surfacing guard compares
+   * against, and `0 === 0` suppressed it forever. Every bookmark in the store
+   * was invisible; 84 of 134 carried lastSeenTurn: 0. Zero was doing double duty
+   * as "a real turn index" and as "unset", and nothing could tell them apart.
+   *
+   * A sentinel that cannot collide with a real turn fixes it WITHOUT depending
+   * on the turn counter ever being repaired.
+   *
+   * NOTE, because the name over-promises: nothing writes this field after
+   * creation. The loader is read-only by design, so a surfaced bookmark is never
+   * stamped. The guard therefore means "was born on this turn", not "was shown
+   * this turn". Making it mean what it says requires a write from the load path
+   * and is a separate decision.
+   */
   lastSeenTurn: number;
   decayRate: number;  // default 0.97
 }

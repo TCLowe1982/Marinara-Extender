@@ -43,7 +43,7 @@ import { nanoid } from "./nanoid.js";
 import { allowedCorsOrigin } from "./cors.js";
 import { backupDataDir, snapshotScope } from "./backup.js";
 import { digestMessages, snapshotSession, type DigestMessage } from "./digest.js";
-import { processResponse, extractRememberTags } from "./writer.js";
+import { processResponse, extractRememberTags, NEVER_SURFACED } from "./writer.js";
 import { loadContext } from "./loader.js";
 import { confirmInjection, listReceipts, readReceipt } from "./receipts.js";
 import { runPromotion, runPromotionAll, recordRecitation } from "./promotion.js";
@@ -1180,7 +1180,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
         weight: Math.max(0, Math.min(1, cmd.weight)),
         why: cmd.why,
         createdTurn: turnNumber,
-        lastSeenTurn: turnNumber,
+        lastSeenTurn: NEVER_SURFACED,
         decayRate: 0.97,
       });
       bookmarksAdded++;

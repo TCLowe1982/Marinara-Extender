@@ -189,6 +189,13 @@ export function stripRememberTags(text: string): string {
 
 export const PRUNE_THRESHOLD = 0.1;
 
+/**
+ * "This bookmark has never been surfaced." Deliberately not 0: turnNumber is 0
+ * whenever the engine cannot supply one (poller mode, always), so 0 cannot mean
+ * both "turn zero" and "never" (7mb6).
+ */
+export const NEVER_SURFACED = -1;
+
 export function decayBookmarks(bookmarks: Bookmark[]): Bookmark[] {
   return bookmarks
     .map((b) => ({ ...b, weight: b.weight * b.decayRate }))
@@ -222,7 +229,7 @@ export async function processResponse(
         weight: b.weight,
         why: b.why,
         createdTurn: turnNumber,
-        lastSeenTurn: turnNumber,
+        lastSeenTurn: NEVER_SURFACED,
         decayRate: 0.97,
       });
     }

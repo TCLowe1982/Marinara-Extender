@@ -389,9 +389,16 @@ async function loadSelectedEntries(
 // ── Bookmark surfacing ────────────────────────────────────────────────────────
 // Returns bookmarks whose weight passes a random roll — the "did she remember?" gate.
 
-function surfaceBookmarks(bookmarks: Bookmark[], turnNumber: number): Bookmark[] {
+// Exported for test. There were NO bookmark tests before 7mb6, which is exactly
+// how a guard that suppressed 100% of bookmarks survived in the hot path.
+export function surfaceBookmarks(bookmarks: Bookmark[], turnNumber: number): Bookmark[] {
   return bookmarks.filter((b) => {
-    if (b.lastSeenTurn === turnNumber) return false; // already surfaced this turn
+    // NEVER_SURFACED can never equal a real turn, so a fresh bookmark now
+    // reaches the roll. Guarding on >= 0 as well means that even if a stale
+    // store still holds a 0-stamped bookmark, only a genuine turn 0 suppresses
+    // it - and it is the birth turn that is being compared, not a surfacing (see
+    // the note on Bookmark.lastSeenTurn).
+    if (b.lastSeenTurn >= 0 && b.lastSeenTurn === turnNumber) return false;
     return Math.random() < b.weight;
   });
 }

@@ -160,6 +160,23 @@ admit  if  created <= splitAt            (the shared childhood)
 
 **The hook is the chat, not the card.** `loadContext` receives a resolved `identityKey` and cannot tell which card it is serving — but it receives `chatId`, and a chat belongs to exactly one card. `forkFilterForChat` resolves chat → owning card → fork config; `fork.ts` caches chat ownership from the Engine like `characterNameFor` does. The filter is applied in `loadIndexes` to the **character** index only: the chat index is per-chat and therefore already on the right branch, and global is global.
 
+**THE DATE HALF OF THAT UNION NEVER FIRED, AND THE SHARED SET IS NOW NAMED BY CHAT** (`dqs1`, 2026-08-26). Three defects, found when TC reported that Dr Mari had lost access to her pre-split memories the day after the separation shipped.
+
+**A retrieval timestamp is not a creation date.** `rowInBranch` read `row.created ?? row.lastAccessed`, and **`IndexEntry` never declared `created`** — not one of 9,185 live rows carried it. So the shared-childhood test silently meant *"has not been READ since the split"*: it admitted **17 of 175** genuinely pre-split rows, and the ones it dropped were the ones used most, because loading a memory refreshes `lastAccessed` (`gwny`). `IndexEntry` now declares `created`; `scripts/backfill-created.mjs` copies it from the entry files that always had it (12,816 rows, 12 scopes, none guessed); the fallback is deleted. **Absent means UNKNOWN and falls through to ownership — never substitute a different timestamp.**
+
+**One person is one branch.** `forkFilterForChat` took `mine: [cardId]` — the single card owning the chat. Professor Mari is *two* ids (`__professor_mari__`, which her chats still name, and `Z4MZQbJLgLF`), so what she remembered depended on which of her own chats she was in: **17 rows in one, 803 in another.** `forkConfigFor` now returns every card id on that side of the fork, keyed on `forkPrimary` — a fork is two-sided by construction, and a three-way split would need an explicit branch label rather than an inferred one.
+
+**And `created` is an INGEST stamp on this store, so no date can do this job.** One chat carries 950 beats spanning turns 1..2532 under *three* distinct `created` dates; another 263 beats all stamped a single day. Imported history lands post-split however old it really is. Chat ownership does not have that problem — it is recorded when the chat is created and survives every later import. TC's ruling: name the shared set explicitly. `forkSharedChats` on the identity entry lists chats **both** sisters keep, and it is checked *before* the date gate.
+
+| | before | after |
+|---|---|---|
+| Dr. Mari Zielińska | 8,402 | **9,197** of 9,201 |
+| Professor Mari | 17 *or* 803, by chat | **954, consistently** |
+
+The original bleed stays fixed: 954 is her own life plus the shared childhood, not Dr Mari's ongoing one.
+
+**Why the suite could not have caught it, which is the transferable part.** Every fixture in `fork.test.ts` set `created`, so the fallback branch never executed; and the test that *named* the fallback asserted an **empty** `lastAccessed`, which falls through identically with or without the bug. A test can name a behaviour and assert nothing about it. The new guard was verified by reintroducing the fallback and watching it fail — and its companion is labelled a companion, because it passes either way.
+
 **Measured live after configuring the split at 2026-05-23:**
 
 | | sees | hidden | composition |

@@ -965,6 +965,56 @@ export async function mutateBookmarks(
   });
 }
 
+// ── Turn ordinal (7mb6) ───────────────────────────────────────────────────────
+//
+// The engine cannot always tell us which turn this is. The poller reads a
+// 10-message tail, not an absolute position, so it sends no turnNumber at all -
+// and /api/process-turn used to default that to 0. Every live turn was therefore
+// turn 0, which silently disabled tier promotion, stale-thread closing and arc
+// promotion (all gated on turnNumber % N), stamped user chunks turnStart -1, and
+// made every bookmark be born already marked as surfaced.
+//
+// WHAT THIS IS, STATED PRECISELY, because the name invites a wrong assumption:
+// an INGEST ORDINAL. It counts turns this sidecar has ingested for a chat. It
+// does NOT align with the engine's own message numbering and makes no attempt
+// to - a re-roll or a re-read advances it. Every consumer needs only that it
+// MOVES and never goes backwards, which is exactly what this guarantees.
+//
+// Belt and braces with the NEVER_SURFACED sentinel, deliberately: the sentinel
+// makes bookmarks correct even if this counter is wrong or absent, and this
+// counter makes the % N gates fire even if a future mint forgets the sentinel.
+// Neither alone covers both failures.
+
+export function turnCounterPath(chatId: string): string {
+  return join(scopeDir("chat", chatId), "turn-counter.yaml");
+}
+
+function readCounter(v: { turn?: number } | null): number {
+  return typeof v?.turn === "number" && Number.isFinite(v.turn) && v.turn >= 0 ? v.turn : 0;
+}
+
+/** The current ordinal WITHOUT advancing it. 0 for a chat that has none yet. */
+export async function currentTurn(chatId: string): Promise<number> {
+  return readCounter(await readYaml<{ turn?: number }>(turnCounterPath(chatId)));
+}
+
+/**
+ * Advance and return the next ordinal.
+ *
+ * Serialized on the file: the poller fires every 5s and can overlap itself, and
+ * a read-modify-write race here would hand two turns the same number - which is
+ * the precise failure this whole ticket is about.
+ */
+export async function nextTurn(chatId: string): Promise<number> {
+  const p = turnCounterPath(chatId);
+  let out = 0;
+  await serializedWrite(p, async () => {
+    out = readCounter(await readYaml<{ turn?: number }>(p)) + 1;
+    await writeYaml(p, { turn: out });
+  });
+  return out;
+}
+
 // ── Token estimation ──────────────────────────────────────────────────────────
 
 export function estimateTokens(text: string): number {

@@ -32,6 +32,8 @@ import {
   mutateBookmarks,
   listScopeIds,
   estimateTokens,
+  nextTurn,
+  currentTurn,
   type Scope,
   type Lane,
   type EntryStatus,
@@ -573,9 +575,20 @@ export function registerApiRoutes(app: FastifyInstance): void {
     // only ever knew one of them. sourceMessageId is the ASSISTANT reply; the user
     // half needs its own or the two are indistinguishable. Optional — older
     // clients and the manual capture path send neither.
-    const { characterId, characterName, participantIds, personaName, sceneTitle, chatId, turnNumber = 0, messageText = "", userMessageText = "", sourceMessageId, sourceSwipeIndex, userSourceMessageId, regenerated = false } = req.body ?? {};
+    // turnNumber is NOT defaulted to 0 any more (7mb6). It used to be, and that
+    // made "the caller sent nothing" indistinguishable from "the caller said turn
+    // zero" - the same unset-vs-falsy conflation that made every bookmark
+    // invisible, one layer up. Absent now means absent, and the sidecar derives
+    // its own ordinal below.
+    const { characterId, characterName, participantIds, personaName, sceneTitle, chatId, turnNumber: suppliedTurn, messageText = "", userMessageText = "", sourceMessageId, sourceSwipeIndex, userSourceMessageId, regenerated = false } = req.body ?? {};
     if (!characterId || !chatId) {
       return reply.code(400).send({ error: "characterId and chatId are required" });
+    }
+
+    // Derive the ordinal when the caller has none to give. The poller never does.
+    const turnNumber = suppliedTurn ?? await nextTurn(chatId);
+    if (suppliedTurn === undefined) {
+      console.info(`[ME:turn] chat:${chatId} ingest ordinal ${turnNumber} (derived - caller supplied none)`);
     }
 
     const identityKey = await resolveIdentity(characterId, characterName);
@@ -1770,7 +1783,11 @@ export function registerApiRoutes(app: FastifyInstance): void {
     const { contextBlock, surfaced } = await loadContext({
       characterId: identityKey,
       chatId,
-      turnNumber: 0,
+      // READ, do not advance (7mb6). This endpoint rebuilds the block before a
+      // generation; the ingest that follows owns the increment. Advancing here
+      // would count one exchange twice and, worse, hand the bookmark guard a
+      // number that differs from the one the mint will use.
+      turnNumber: await currentTurn(chatId),
       recentText: userText,
       skipCredit: true,
     });

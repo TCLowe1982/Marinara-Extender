@@ -22,8 +22,20 @@ import { join as pjoin, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PKG = pjoin(dirname(fileURLToPath(import.meta.url)), "..");
-const BENCH = pjoin(PKG, "scratch", "precision-bench.jsonl");
-const LABELS = pjoin(PKG, "scratch", "labels.tsv");
+// A SECOND RUN GETS A SECOND PAIR OF FILES (icke). Arms D and E were measured
+// after A/B/C were already labelled, and the blind id is a position in a seeded
+// shuffle over the rows - so appending D/E rows to the original file would
+// renumber every existing id and silently misapply all 496 verdicts. The D/E
+// rows therefore live in their own file with their own labels, and each pair is
+// scored independently:
+//
+//   BENCH_ROWS=precision-bench-de.jsonl BENCH_LABELS=labels-de.tsv \
+//     node scripts/bench-label.mjs present 1 40
+//
+// The ids in the two files are separate namespaces and are not comparable; the
+// CELLS they produce are, which is all the decision needs.
+const BENCH = pjoin(PKG, "scratch", process.env.BENCH_ROWS ?? "precision-bench.jsonl");
+const LABELS = pjoin(PKG, "scratch", process.env.BENCH_LABELS ?? "labels.tsv");
 
 const rows = readFileSync(BENCH, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
 
@@ -55,7 +67,11 @@ const shuffle = (xs) => {
 const OLD_CAP = 60;
 const idx = rows.map((_, i) => i);
 const selected = idx.filter((i) => rows[i].cell === "NEW");
-for (const arm of ["A", "B", "C"]) {
+// Arms are derived from the rows, not hardcoded, so this works for either file.
+// Sorted, because the shuffle draws from one shared RNG stream and the order in
+// which the per-arm pools are drawn decides every id: for the original file this
+// yields exactly ["A","B","C"], leaving the existing ids bit-for-bit unchanged.
+for (const arm of [...new Set(rows.map((r) => r.arm))].sort()) {
   const pool = shuffle(idx.filter((i) => rows[i].cell === "OLD" && rows[i].arm === arm));
   selected.push(...pool.slice(0, OLD_CAP));
 }

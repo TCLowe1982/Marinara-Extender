@@ -280,12 +280,24 @@ app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
   console.log(`External API: ${apiKey ? `${externalModel()} @ ${externalUpstream()}` : "no key — local only"}`);
   console.log(`Eidetic mode: ${isEideticMode() ? "ON — all entries injected (no budget limit)" : "off"}`);
   console.log(`Progress:     ${process.env.MARINARA_EXTENDER_PROGRESS !== "0" ? "on (story-import console bar)" : "off"}`);
-  // First-boot embeddings check — semantic degradation must never be silent.
-  void embeddingsStatus().then((s) => console.log(`Embeddings:   ${describeEmbeddingsStatus(s)}`));
   // Hot-index tripwire at startup. Printed unconditionally, warnings and all:
   // the lesson of 7mb6 and 771t is that a silently degraded path is
   // indistinguishable from a working one.
+  //
+  // ORDER MATTERS, AND IT IS NOT COSMETIC. This runs BEFORE the embeddings probe
+  // below, because it is a synchronous YAML.parse over every index in the store —
+  // 1,769 ms measured on the live store (74 scopes / 17,180 rows). Fired the other
+  // way round, it blocked the event loop straight through the probe’s abort
+  // deadline, so the timer was already overdue when the loop came back and won the
+  // race against the socket callback. The banner then reported “Ollama is not
+  // running” while Ollama was answering /api/tags in 5 ms and every semantic
+  // feature was running normally. The tripwire added to catch silent degradation
+  // caused a FALSE report of silent degradation in the diagnostic beside it.
+  // Keep any new blocking startup work above this line, not between the probe and
+  // its result.
   try { logIndexHealth(); } catch { /* never block startup on a diagnostic */ }
+  // First-boot embeddings check — semantic degradation must never be silent.
+  void embeddingsStatus(5_000).then((s) => console.log(`Embeddings:   ${describeEmbeddingsStatus(s)}`));
 
   // ── Engine poller (opt-in) ──────────────────────────────────────────────────
   // The replacement for the removed client extension: watch the engine for

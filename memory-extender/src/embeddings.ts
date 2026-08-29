@@ -73,12 +73,27 @@ export async function fetchEmbeddings(texts: string[]): Promise<number[][] | nul
 // three states a user can actually act on.
 export type EmbeddingsStatus = "ok" | "model_missing" | "ollama_down" | "disabled";
 
-export async function embeddingsStatus(): Promise<EmbeddingsStatus> {
+/**
+ * @param timeoutMs How long to wait for /api/tags before declaring Ollama down.
+ *
+ * PARAMETERISED BECAUSE THE TWO CALLERS HAVE OPPOSITE CONSTRAINTS. The 1.5s
+ * default belongs to /api/health, which the watchdog polls on a 6s budget
+ * (start.ps1 Test-Sidecar) and then TASKKILLs the sidecar if it overruns — so a
+ * generous deadline there would buy a false negative at the price of a restart
+ * loop. Startup has no such budget and passes 5s: that cost is only paid when
+ * Ollama is genuinely down, and a boot banner is allowed to take its time to be
+ * right.
+ *
+ * Either way a short deadline is only safe while nothing blocks the event loop
+ * between this fetch and its response — see the ordering note at the startup
+ * call site in index.ts, which is where that assumption was broken once already.
+ */
+export async function embeddingsStatus(timeoutMs = 1_500): Promise<EmbeddingsStatus> {
   const model = embedModel();
   if (!model) return "disabled";
   const root = localUrl().replace(/\/v1\/?$/, "");
   try {
-    const res = await fetch(`${root}/api/tags`, { signal: AbortSignal.timeout(1_500) });
+    const res = await fetch(`${root}/api/tags`, { signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) return "ollama_down";
     const json = (await res.json()) as { models?: Array<{ name?: string }> };
     const have = (json.models ?? []).some((m) => (m.name ?? "").split(":")[0] === model.split(":")[0]);

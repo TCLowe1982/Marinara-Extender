@@ -205,6 +205,53 @@ export function listMessages(
   return engineFetch(`/chats/${chatId}/messages${suffix}`).then((r) => unwrapList(r, "messages"));
 }
 
+/**
+ * The most recent USER message in a chat, as the relevance signal for a
+ * pre-turn recall (771t).
+ *
+ * WHY THIS EXISTS. The shipped Engine's prompt-context contributor is handed
+ * { chatId, chatMeta, mode, targetCharacterIds, personaId } and NO messages, so
+ * a contributor cannot see the message it is being asked to recall against. The
+ * call site holds them and does not pass them. Until that changes upstream, the
+ * outgoing message has to be fetched by chatId — and it lives here rather than
+ * in the capability package so the package stays a thin broker and every piece
+ * of Engine-protocol knowledge (auth, CSRF, list shape) stays in one file.
+ *
+ * THE FAILURE MODE THIS IS BUILT AROUND (Mari, 2026-08-29): if the outgoing
+ * message is not yet readable, you do not get an error — you get turn N-1, and
+ * N-1 is topically adjacent to N almost always, so ranking on it produces
+ * plausible rows and looks exactly like it is working. Measured 2026-08-30 the
+ * row is REST-visible with no observable commit lag and ~2,100 lines of handler
+ * before the contributor runs, so this returns turn N. The id is returned with
+ * the text so the caller can SAY which message it scored against, which is what
+ * turns a silent near-miss into something a log can show.
+ *
+ * Returns null when the chat has no user message or the Engine is unreachable —
+ * callers must degrade to their non-pre-turn behaviour rather than guess.
+ */
+export async function latestUserMessage(
+  chatId: string,
+): Promise<{ id: string; text: string } | null> {
+  let messages: Record<string, unknown>[];
+  try {
+    // A tail, not the whole chat. The relevance signal is the last user turn;
+    // fetching thousands of messages on the generation path would put our
+    // latency inside someone's prompt assembly.
+    messages = await listMessages(chatId, { limit: 10 });
+  } catch {
+    return null;
+  }
+  // Ascending (oldest first), so the last user row is the outgoing one.
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m?.role !== "user") continue;
+    const text = typeof m.content === "string" ? m.content : "";
+    if (!text.trim()) continue;
+    return { id: String(m.id ?? ""), text };
+  }
+  return null;
+}
+
 // ── Lorebooks (read + write) ──────────────────────────────────────────────────
 
 export function listCharacters(): Promise<Record<string, unknown>[]> {

@@ -23,6 +23,7 @@ import {
   createLorebook,
   deleteLorebookEntry,
   engineReachable,
+  latestUserMessage,
   EngineError,
 } from "../engine-client.js";
 
@@ -250,5 +251,72 @@ describe("typed endpoint wrappers", () => {
       enabled: true,
       tokenBudget: 16384,
     });
+  });
+});
+
+// ── latestUserMessage (771t) ──────────────────────────────────────────────────
+//
+// This is the crux of the pre-turn path, and its failure mode is silent. The
+// shipped Engine hands a prompt-context contributor no messages, so the outgoing
+// user turn is fetched by chatId — and if the wrong row comes back there is no
+// error, just recall scored against turn N-1. Mari, 2026-08-29: "in a real
+// conversation N-1 is topically adjacent to N almost always, so ranking on stale
+// text produces plausible rows and looks exactly like it's working."
+//
+// So these assert WHICH row, never merely that a row came back.
+describe("latestUserMessage() — which turn we score against", () => {
+  it("returns the LAST user message, not the first and not the last message", async () => {
+    fetchMock.mockResolvedValue(
+      json({
+        messages: [
+          { id: "m1", role: "user", content: "the older question" },
+          { id: "m2", role: "assistant", content: "a reply" },
+          { id: "m3", role: "user", content: "the outgoing question" },
+          // A chat can carry a trailing assistant row (a swipe being rewritten);
+          // the relevance signal is still the last USER turn.
+          { id: "m4", role: "assistant", content: "streaming..." },
+        ],
+      }),
+    );
+
+    const got = await latestUserMessage("chat1");
+
+    expect(got).toEqual({ id: "m3", text: "the outgoing question" });
+  });
+
+  it("skips a blank user row rather than scoring against nothing", async () => {
+    // An empty relevance signal is not a harmless default — it ranks on nothing
+    // and returns the same generic rows every turn, which reads as "memory is on
+    // but useless" instead of as a fault.
+    fetchMock.mockResolvedValue(
+      json({
+        messages: [
+          { id: "m1", role: "user", content: "the real question" },
+          { id: "m2", role: "user", content: "   " },
+        ],
+      }),
+    );
+
+    expect(await latestUserMessage("chat1")).toEqual({ id: "m1", text: "the real question" });
+  });
+
+  it("returns null when the chat has no user message", async () => {
+    fetchMock.mockResolvedValue(json({ messages: [{ id: "m1", role: "assistant", content: "greeting" }] }));
+    expect(await latestUserMessage("chat1")).toBeNull();
+  });
+
+  it("returns null — never throws — when the engine is unreachable", async () => {
+    // The caller is on the generation path. A throw here would surface as an
+    // Engine warning on every turn for an outage the user cannot act on.
+    fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+    expect(await latestUserMessage("chat1")).toBeNull();
+  });
+
+  it("requests a bounded tail, not the whole chat", async () => {
+    // Fetching thousands of messages would put our latency inside someone's
+    // prompt assembly, against a 2s contributor deadline.
+    fetchMock.mockResolvedValue(json({ messages: [] }));
+    await latestUserMessage("chat1");
+    expect(calledUrl()).toContain("limit=10");
   });
 });

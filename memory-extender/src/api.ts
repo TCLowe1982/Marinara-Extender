@@ -103,6 +103,9 @@ import { computeJobKey, loadJob, saveJob, deleteJob, clearJobs } from "./story-j
 import type { Chunk } from "./sentiment/types.js";
 import mammoth from "mammoth";
 import { parseStoryToMessages } from "./story-parser.js";
+// 771t: /api/pre-turn resolves the outgoing user message itself when the caller
+// cannot supply one — the shipped Engine contributor is handed no messages.
+import { latestUserMessage } from "./engine-client.js";
 import { readBeatIndex, readAllBeats, clearBeats, companionEntryFromBeat } from "./sentiment/encoder.js";
 import {
   resolveIdentity,
@@ -1780,6 +1783,32 @@ export function registerApiRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: "characterId and chatId are required" });
     }
     const identityKey = await resolveIdentity(characterId, characterName);
+
+    // RESOLVE THE OUTGOING MESSAGE OURSELVES WHEN THE CALLER HAS NONE (771t).
+    //
+    // The client extension could pass userText because it wrapped the outgoing
+    // fetch. The shipped Engine's prompt-context contributor cannot: it is handed
+    // chatId and no messages at all, so the capability package calls this with no
+    // userText and we look the message up by chatId.
+    //
+    // An empty relevance signal is NOT a harmless default here — it would rank on
+    // nothing and return the same generic rows every turn, which reads as "memory
+    // is on but useless" rather than as a fault. So we say which message we scored
+    // against, by id and prefix. That log line IS the conclusive nonce check Mari
+    // asked for: paste a nonce into a message and it must appear here, or we are
+    // ranking on turn N-1 and everything downstream is plausible and wrong.
+    let relevanceText = userText;
+    let scoredAgainst = "caller-supplied";
+    if (!relevanceText.trim()) {
+      const latest = await latestUserMessage(chatId);
+      if (latest) {
+        relevanceText = latest.text;
+        scoredAgainst = `msg:${latest.id}`;
+      } else {
+        scoredAgainst = "NONE — no user message resolved";
+      }
+    }
+
     const { contextBlock, surfaced } = await loadContext({
       characterId: identityKey,
       chatId,
@@ -1788,10 +1817,13 @@ export function registerApiRoutes(app: FastifyInstance): void {
       // would count one exchange twice and, worse, hand the bookmark guard a
       // number that differs from the one the mint will use.
       turnNumber: await currentTurn(chatId),
-      recentText: userText,
+      recentText: relevanceText,
       skipCredit: true,
     });
-    console.info(`[ME:pre-turn] ${identityKey} chat:${chatId} — block rebuilt against outgoing message (${surfaced.length} entries)`);
+    console.info(
+      `[ME:pre-turn] ${identityKey} chat:${chatId} — ${surfaced.length} entries, scored against ${scoredAgainst}: ` +
+        `"${relevanceText.slice(0, 80).replace(/s+/g, " ")}"`,
+    );
     return reply.send({ memoryBlock: contextBlock, surfaced: surfaced.length });
   });
 

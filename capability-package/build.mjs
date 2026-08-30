@@ -17,14 +17,27 @@ const root = dirname(fileURLToPath(import.meta.url));
 const src = join(root, "src");
 const dist = join(root, "dist");
 
-const VERSION = "1.0.0";
+// 1.1.0 — ported from the branch convention to the SHIPPED contributor API.
+// 1.0.0 registered under api.registerService("marinara-extender:prompt-context"),
+// which released Marinara accepts and never consults for prompt context, so that
+// build reports active/ready and does nothing. This is not a compatible change:
+// 1.0.0 cannot work on a released Engine and 1.1.0 cannot work on the branch.
+const VERSION = "1.1.0";
 
-// The prompt-context contributor seam does not exist in released Marinara yet;
-// it ships with the Engine branch this package was developed against. Pin the
-// floor to the first Engine version that carries it so an install on an older
-// Engine fails with a compatibility message instead of registering a service
-// nothing will ever call.
-const ENGINE_MIN = "2.4.1";
+// CORRECTED 2026-08-30. The previous note here said "the prompt-context
+// contributor seam does not exist in released Marinara yet; it ships with the
+// Engine branch this package was developed against". That was true of the seam
+// the branch built (registerService keyed on "<agentId>:prompt-context"). It is
+// false of the SHIPPED Engine, which has its own first-class seam —
+// api.registerPromptContext(fn), gated on the "prompt-context" permission and
+// collected in generate.routes.ts during prompt assembly. Verified against the
+// installed 2.4.3 build, which is the artifact users actually run.
+//
+// Pinned to 2.4.3 because that is the version the API was VERIFIED on, not the
+// earliest that might carry it. Guessing a lower floor to widen compatibility
+// would trade a clean install-time failure for the silent one this whole port
+// exists to eliminate.
+const ENGINE_MIN = "2.4.3";
 
 const ENTRYPOINTS = [
   { from: "agents.json", to: "agents.json" },
@@ -45,8 +58,12 @@ const files = ENTRYPOINTS.map(({ from, to }) => {
 // bootstrap, so it is derived rather than typed by hand. Override via env when
 // building against a different Engine checkout.
 const BUILT_AGAINST = {
-  engineVersion: process.env.MARINARA_ENGINE_VERSION ?? "2.4.1",
-  engineCommit: process.env.MARINARA_ENGINE_COMMIT ?? "ac2c3c4dfb3d254895781a3e84c38146762ed4e2",
+  engineVersion: process.env.MARINARA_ENGINE_VERSION ?? "2.4.3",
+  // The RELEASED 2.4.3 build this was verified against, read from the installed
+  // Engine checkout. The old value named ac2c3c4df on feat/memory-injection-consumer,
+  // which is in no release and is now only the reference implementation for the
+  // upstream ask — recording it here claimed provenance we never had.
+  engineCommit: process.env.MARINARA_ENGINE_COMMIT ?? "34442e26da577ff0d95ee890a87024e35831bfa9",
 };
 
 if (!/^[a-f0-9]{40}$/.test(BUILT_AGAINST.engineCommit)) {

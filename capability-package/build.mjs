@@ -72,7 +72,16 @@ if (!/^[a-f0-9]{40}$/.test(BUILT_AGAINST.engineCommit)) {
 
 const manifest = {
   schemaVersion: 2,
-  capabilityApi: { major: 1, minor: 7 },
+  // 1.8, not 1.7 — the version that INTRODUCED this seam. The Engine docs put
+  // "per-turn prompt context" in Capability API 1.8; 1.7 is chat-branch metadata
+  // and has no registerPromptContext at all.
+  //
+  // The compatibility check is `required.minor > supported.minor`, so declaring
+  // 1.7 does not fail anywhere it matters — it fails in the one place it does:
+  // on an Engine at exactly 1.7 the package would INSTALL, then die at activate()
+  // with "api.registerPromptContext is not a function". Declaring the true floor
+  // converts that into the compatibility message the check exists to produce.
+  capabilityApi: { major: 1, minor: 8 },
   builtAgainst: BUILT_AGAINST,
   id: "marinara-extender",
   name: "Marinara Extender",

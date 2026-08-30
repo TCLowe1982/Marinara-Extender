@@ -26,7 +26,7 @@ type EntryProvenance = "played" | "unplayed";
 
 Each record exists in two forms, deliberately:
 
-- **`IndexEntry`** (`storage.ts`) — lightweight metadata row kept in the per-scope `index.yaml`. The loader scans **only these** every turn, so the hot path stays bounded. Holds: `id`, `path`, `summary` (≤120 chars), `tokens`, `lane`, `status`, `lastAccessed`, the tier fields, `sourceChatId`, `citesChatId`, `threadId`, `turnStart`, `provenance`, `bodyTerms`, `subjects`, and the supersede/delete markers.
+- **`IndexEntry`** (`storage.ts`) — lightweight metadata row kept in the per-scope `index.json`. The loader scans **only these** every turn, so the hot path stays bounded. Holds: `id`, `path`, `summary` (≤120 chars), `tokens`, `lane`, `status`, `lastAccessed`, the tier fields, `sourceChatId`, `citesChatId`, `threadId`, `turnStart`, `provenance`, `bodyTerms`, `subjects`, and the supersede/delete markers.
 
   **`sourceChatId` vs `citesChatId` (fqnl, 2026-08-19) — two meanings, two fields.** `sourceChatId` means *"this import OWNS me"*: `removeEntriesBySourceChat` purges by it on re-import, so it may only be stamped on entries a re-import will recreate (pipeline companions). `citesChatId` means *"this chat is my receipt"* and the purge **never reads it** — so paths whose entries a re-import would purge-and-not-recreate can finally record provenance: `[remember:]` tags, `/api/ingest-commands`, and the long-form story path (whose `sourceChatId` absence is a recorded deliberate decision at its pipeline call in `api.ts`). The provenance guard (`fact-support-scan.mjs`) reads `citesChatId ?? sourceChatId`. Inertness is pinned by `cites-chat-id.test.ts`; if the purge ever learns to read `citesChatId`, stamping remember-tags becomes a data-loss bug. Backfilling the 9,109 legacy unprovenanced entries is separate and mostly impossible (their receipts were never recorded); the fix is forward-looking.
 
@@ -100,7 +100,7 @@ The loader used to stamp `lastAccessed` on *every loaded entry*, including ones 
 
 A central design choice: **demotion is a tier move, not a delete.** Entry *files* are essentially never moved or removed on the automatic path — only the index **row** moves between hot and cold.
 
-- **Cold archive** (`index.cold.yaml`, `storage.ts`) — a second per-scope index for stale non-core rows. The loader does **not** read it each turn — only on a recall miss — so the per-turn scan stays bounded. `moveToCold` adds to cold *first* then removes from hot (a crash can't lose the row). `promoteFromCold` rehydrates one row on recall.
+- **Cold archive** (`index.cold.json`, `storage.ts`) — a second per-scope index for stale non-core rows. The loader does **not** read it each turn — only on a recall miss — so the per-turn scan stays bounded. `moveToCold` adds to cold *first* then removes from hot (a crash can't lose the row). `promoteFromCold` rehydrates one row on recall.
 - **Supersession (FR2)** (`supersedeEntry`, `storage.ts`) — a newer fact replaces an older one: the old row gets `supersededBy`/`supersededAt` (mirrored onto the entry file so the fact carries its own history) and is moved to cold. Still queryable ("you said Mei before — did you mean Lin?"), out of Current. `restoreSupersededEntry` reverses it.
 - **User delete** (`softDeleteEntry`, `storage.ts`) — also a tier move to cold, marked `deletedAt` (and, unlike supersede, **no** `supersededBy`). Shows in the "Recently deleted" view; cold recall skips `deletedAt` rows. `restoreDeletedEntry` brings it back; `purgeColdEntry` is the separate, dig-for-it permanent removal.
 
@@ -116,8 +116,9 @@ Root: `memory-extender/data/` (or `MARINARA_EXTENDER_DATA`). `scopeDir`:
 
 Inside a scope dir:
 
-- **`index.yaml`** — the hot `ScopeIndex` (array of `IndexEntry`).
-- **`index.cold.yaml`** — the cold archive index.
+- **`index.json`** — the hot `ScopeIndex` (array of `IndexEntry`). JSON since hdq1; entry files stay YAML. See *Index format* in architecture.md before touching the read/write path.
+- **`index.cold.json`** — the cold archive index.
+- **`index.yaml` / `index.cold.yaml`** — pre-hdq1 names. Read-only fallback, never written; renamed to `.superseded` once converted.
 - **Entry files in lane-named subdirs** (`writeEntry`, `storage.ts`): `open_threads → threads/`, `user_topics → user-topics/`, `character_topics → char-topics/`, each holding `{entryId}.yaml`. **Not** a flat `entries/` dir.
 - **`bookmarks.yaml`** — `Bookmark[]`.
 - Character scope also holds beats (`beats.yaml` + `beats/`) and arcs (`arcs.yaml`, `arc-memberships.yaml`).

@@ -30,9 +30,18 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 const ENGINE = (process.env.MARINARA_EXTENDER_ENGINE_URL ?? "http://127.0.0.1:7860").replace(/\/+$/, "");
 const POLL_MS = 200;
-const WINDOW_MS = 180_000;
 
-const NONCE = `canary-${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-4)}`;
+const arg = (flag) => {
+  const i = process.argv.indexOf(flag);
+  return i > -1 ? process.argv[i + 1] : undefined;
+};
+
+// REUSABLE NONCE. The watcher and the human are not synchronised: the window
+// lapses while someone is mid-sentence, and regenerating the nonce on restart
+// silently invalidates the one they already pasted. --nonce lets a restart keep
+// watching for the SAME string.
+const NONCE = arg("--nonce") ?? `canary-${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-4)}`;
+const WINDOW_MS = (Number.parseInt(arg("--window") ?? "", 10) || 1800) * 1000;
 
 async function api(path) {
   const res = await fetch(`${ENGINE}/api${path}`, { headers: { "x-marinara-csrf": "1" } });
@@ -73,6 +82,25 @@ try {
   console.log(`  could not reach the engine: ${String(err)}`);
   process.exit(2);
 }
+
+// ALREADY-SENT IS NOT THE SAME ANSWER AS NEVER-APPEARED. On a restart with a
+// reused nonce the message may already be in the store, and the arrival timing
+// we exist to measure is then unobservable. Saying "never appeared" there would
+// be a false negative about the Engine rather than a true one about the test.
+try {
+  const recent = list(await api("/chats"), "chats")
+    .sort((a, b) => String(b.lastMessageAt ?? "").localeCompare(String(a.lastMessageAt ?? "")))
+    .slice(0, 12);
+  for (const c of recent) {
+    const msgs = list(await api(`/chats/${String(c.id)}/messages`), "messages").slice(-12);
+    if (msgs.some((m) => typeof m?.content === "string" && m.content.includes(NONCE))) {
+      console.log(`  ALREADY SENT — the nonce is already in chat ${String(c.id)}.`);
+      console.log("  Arrival timing cannot be measured after the fact. Re-run with a FRESH nonce");
+      console.log("  (omit --nonce) and send a new message.");
+      process.exit(2);
+    }
+  }
+} catch { /* fall through and watch; an unreachable engine is reported below */ }
 
 const start = Date.now();
 let chatId = null;

@@ -94,3 +94,47 @@ This is the Engine's answer, as of 2.4.3, to *how a package is marked as trusted
 - **Settle the `network` question first.** It decides the whole architecture: direct sidecar calls from the client, versus brokering through the `server` entrypoint.
 - `7zro` (prototype the package, dev-install) is the natural first half and is unblocked.
 - The `engine.min`/`engine.maxExclusive` gate means our manifest must state the Engine range it supports — and the install is pinned at **2.4.3**, so that is the range to test against.
+
+## Prompt-context injection — the 771t seam (verified against shipped 2.4.3)
+
+This is the mechanism that kills the one-turn recall lag. **It ships today; no Engine change is required to reach it.**
+
+```ts
+// activate({ api })
+api.registerPromptContext(contributor): Cleanup
+// "Contribute text to each turn's system prompt. Requires the `prompt-context` permission."
+```
+
+Called from `generate.routes.ts:3159` **during prompt assembly**, before dispatch; returned blocks are appended to the system message. That pre-generation timing is the whole point — on the lorebook path retrieval is scored against the turn that already happened.
+
+What the contributor receives (`capability-prompt-context.service.ts`):
+
+```ts
+{ chatId, chatMeta, mode, targetCharacterIds?, personaId? }
+// returns: string | { text?, provides? } | null
+```
+
+### Three things that will cost you an evening
+
+1. **`registerService` fails SILENTLY.** `registerService(key, service)` accepts *any* string, so registering `"<id>:prompt-context"` — the convention on the unmerged `feat/memory-injection-consumer` branch — is accepted, **never consulted**, and the package still reports `active/ready`. No error, no warning. The symptom is "she misses cold", indistinguishable from a retrieval bug. Only `registerPromptContext(fn)` is consulted. **Assert on first invocation**, and treat "registered but never invoked after N turns" as a fault. (A missing `prompt-context` permission *does* throw loudly — that half is safe.)
+
+2. **There are no `messages`.** The request carries no prompt content, so there is no outgoing user message to score against — `latestUserText(messages)` is impossible here. The call site *has* them (`injectCapabilityContexts` takes `messages: typeof finalMessages`) and does not pass them. Workaround: fetch the latest user message by `chatId` over the Engine REST API. **Its precondition is unproven** — if the message is not committed when the contributor fires you get turn N-1, silently, and N-1 is topically adjacent to N so it produces plausible rows and looks like it works. Verify with `scripts/preturn-canary.mjs`, which grades on an exact nonce, never on "a message came back".
+
+3. **The deadline is `CONTRIBUTOR_TIMEOUT_MS = 2_000`**, not the branch's 300 s. `loadContext` is ~390 ms post-hdq1 and fits with room; at the pre-hdq1 ~1,279 ms it would have fit thinly and a larger store would have blown it. hdq1 is a prerequisite for this path.
+
+### Scoring arrival without a receipt
+
+The shipped API has no acceptance callback, so "assembled but never shipped" and "shipped and she answered over it" have identical symptoms — and every recall test is unscoreable until they can be told apart. **The Engine already persists the evidence:** the assistant message's `extra.cachedPrompt` is the array of dispatched messages (system message measured at 58 KB). Search it for the block verbatim:
+
+- **present** → it shipped; a wrong answer is *precedence*
+- **absent** → it never shipped; that is *arrival*
+
+**Retention is a rolling window of the last two assistant messages per chat** (measured across six chats of 22–233 messages; older ones are pruned). So read it within two turns — which is when `/api/prompt-accepted` would fire anyway. Post-hoc and pruned, so it cannot bound a live turn the way a real receipt would, but it makes the tests scoreable.
+
+### The upstream ask, if we want the real thing
+
+Pass the assembled `messages` (or just the outgoing user text) to `CapabilityPromptContextRequest` — a one-line change at a call site that already holds them. A receipt/acceptance callback is the larger change and may be unnecessary given `cachedPrompt`. Both are implemented on `feat/memory-injection-consumer`, which is best read as **the reference implementation for that ask, not something to merge locally** — the Engine we ship against is the released build, not our branch.
+
+### State of play
+
+`marinara-extender` v1.0.0 already exists (manifest, `agents.json`, `server.mjs`) in the *dev checkout's* `dev-data`, where it fired exactly once on install day. It registers via `registerService` and so **would never be invoked** on the shipped Engine. Porting it to `registerPromptContext` is Extender-side work. No shipped package uses `registerPromptContext` at all — we would be its first consumer on this install.

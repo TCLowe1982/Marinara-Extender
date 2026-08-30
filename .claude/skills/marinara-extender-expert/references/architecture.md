@@ -113,9 +113,28 @@ Marinara Extender is a **sidecar + a thin extension**:
 
 ## Storage (`storage.ts`, `paths.ts`)
 
-YAML files under `memory-extender/data/` (or `MARINARA_EXTENDER_DATA`). Per scope: an `index.yaml` (fast-scan metadata) plus the full entry files in **lane-named subdirs**. Key files:
+Under `memory-extender/data/` (or `MARINARA_EXTENDER_DATA`). Per scope: an **`index.json`** (fast-scan metadata) plus the full entry files, which stay **YAML**, in **lane-named subdirs**. The split is deliberate — see *Index format* below. Key files:
 
-- `global/`, `characters/{identityKey}/`, `chats/{chatId}/` — the three scopes. Each holds `index.yaml` (hot), `index.cold.yaml` (cold archive), `bookmarks.yaml`, and entry files under lane subdirs **`threads/` / `user-topics/` / `char-topics/`** (one per lane; *not* a flat `entries/`).
+- `global/`, `characters/{identityKey}/`, `chats/{chatId}/` — the three scopes. Each holds `index.json` (hot), `index.cold.json` (cold archive), `bookmarks.yaml`, and entry files under lane subdirs **`threads/` / `user-topics/` / `char-topics/`** (one per lane; *not* a flat `entries/`).
+
+#### Index format — JSON, and only the index (hdq1)
+
+The index is JSON; **entry files are still YAML and are not affected**. Measured on the live store, one 3.86 MB / 8,906-row character index:
+
+| | YAML | JSON |
+|---|---|---|
+| parse | 890 ms | **10 ms** |
+| stringify | 348 ms | 12 ms |
+
+Parse was 890 ms of `loadContext`'s ~1,279 ms — the format cost more than every piece of work the loader exists to do, combined, per load per scope. Stringify is paid inside a serialized write lock on every retrieval count and tier change. Nobody hand-edits a 9,000-row index, so its readability bought nothing; entry files hold the memory prose, are read and edited by hand, and stay YAML.
+
+When touching this:
+- `indexPath()` / `coldIndexPath()` always return the **JSON** name so they stay stable `serializedWrite` lock keys. `legacyIndexPath()` / `legacyColdIndexPath()` are read-only fallbacks.
+- `readIndexFile()` tries JSON, falls back to legacy YAML. On **corrupt** JSON it returns null and does **not** fall through — a corrupt index and an absent one must stay distinguishable, or `upsertIndexEntry`'s guard rebuilds the whole index from one entry.
+- Use `indexFileExists()` (both names), never `exists(indexPath())`, in any guard.
+- `writeIndexFile()` writes JSON then renames a superseded YAML to `.superseded`.
+- Scripts must read indexes via `scripts/read-index.mjs`. Opening `index.yaml` by name now returns **zero rows silently** — an audit that answers "no problems" because it cannot find the data.
+- Migration: `scripts/migrate-index-json.mjs` (dry run by default, `--write` to convert).
 - Character scope also holds `beats.yaml` (+ `beats/`), `arcs.yaml`, `arc-memberships.yaml`.
 - Cross-cutting: `threads/registry.yaml`, `identity-map.yaml` (ephemeral card IDs → stable identity keys), `holding-pool.yaml` (orphan beats awaiting speaker resolution), `supersession-candidates.yaml`, `reconcile-queue.yaml`.
 
@@ -180,6 +199,7 @@ All three run off the hot path so the turn response is fast.
 - **No coreference between an entity's names** (`MarinaraExtender-76aw`, open). `Erica` and `Cathmore` are unrelated tokens, so a surname cue reaches roughly half the material a forename cue does. `aliases.ts` already implements the needed matching (`normalizeLabel`, `jaroWinkler`, `tokenContainment`) but it is a **speaker-routing** table — `loader.ts` imports it **zero** times, and `data/aliases.yaml` holds only characters who *speak*, so a mentioned-but-silent person never gets a record. Also needs **which-world tags**: one name can span two entities (TC-the-user b.1982 vs character Thomas b.~2000), and resolving a date against the wrong one is what produced the chimera below.
 - **The all-caps wart** in the name heuristic: `summaryTerms` treats any capitalised mid-summary token as a name, so ALL-CAPS emphasis collects 2.5× weight. Harmless today and loosely correlates with importance, but it should die when a real entity field lands.
 - **Chimera fusion** (`MarinaraExtender-hhdr`, open) — the digest welds individually **true** fragments into one **false** composite; only the joins are invented. It is invisible to atom-level fact-checking (every part verifies) and to human review (it reads fluent — one lived six weeks while the character *joked* about its impossible date and filed it as flavour). Detection must test **relations** — who did what, to whom, starting when. Repair rule: **reattach before delete** — a wrong-looking detail in a chimera is usually a true detail wired to the wrong node. A first repair attempt struck a date as fabricated when the date was true, destroying canon.
+- **A blocking startup diagnostic can starve the async one beside it.** `logIndexHealth()` is a synchronous `YAML.parse`/`JSON.parse` over every index in the store; the embeddings probe next to it is a `fetch` with an `AbortSignal` deadline. Fired in the wrong order, the sync scan blocks the event loop past that deadline and the timer wins the race against the socket callback — the banner reported `Ollama is not running` while Ollama answered in 5 ms and every semantic feature ran normally. Fixed by ordering (`d795f46`), and `index.ts` carries a comment saying to keep new blocking startup work **above** the probe. The general lesson is broader than the one bug: **any short `AbortSignal.timeout` is only as good as the promise that nothing blocks the loop between the request and its response.** `embeddingsStatus(timeoutMs)` is parameterised because its two callers differ — `/api/health` keeps 1.5 s because the watchdog polls it on a 6 s budget and taskkills on overrun, while startup passes 5 s.
 - If `supersession-candidates.yaml` is lost, recorded corrections are forgotten (entries/beats persist).
 - `fsync` failure is logged once but non-fatal — NTFS may not durably sync on all systems.
 

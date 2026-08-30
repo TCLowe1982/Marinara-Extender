@@ -84,3 +84,31 @@ export function decideInjection(mode: ChatMode | undefined, agentActive: boolean
   // somewhere nobody has reasoned about.
   return { allow: false, reason: `unknown chat mode "${mode}" - refusing rather than guessing` };
 }
+
+/**
+ * Should a captured turn still be written to the character's LOREBOOK?
+ *
+ * THE TWO PATHS COLLIDE (measured 2026-08-30). The poller writes "Memory System
+ * — Instructions" (4,105 chars) and "Memory System — Active Context" (32,402
+ * chars) as enabled+constant lorebook entries. The capability package now ALSO
+ * contributes a ~29,000-char block during prompt assembly. Both carry the same
+ * memory, and they compete for one prompt budget: on the boat probe the
+ * dispatched system message came back at 20,854 chars — smaller than either
+ * contribution alone — with the instructions kept and every memory row trimmed
+ * away. The character answered "no color, no boat, nothing" while the loader had
+ * selected the canon rows two seconds earlier.
+ *
+ * The lorebook path is also the ONE-TURN-LATE one (771t): its entries are
+ * written after the turn completes, so its content answers the previous
+ * question. Keeping it alongside a working contributor buys nothing and costs
+ * the budget that would have carried the right answer.
+ *
+ * DEFAULT ON, because it is the only path when the capability package is not
+ * installed, and silently dropping capture-to-lorebook would strand every user
+ * who has not adopted the package. Turn it OFF once the contributor is
+ * confirmed firing — the startup banner says which mode you are in.
+ */
+export function lorebookSyncEnabled(): boolean {
+  const v = process.env.MARINARA_EXTENDER_LOREBOOK_SYNC?.trim().toLowerCase();
+  return !(v === "0" || v === "off" || v === "false");
+}

@@ -21,6 +21,7 @@
 
 import { listCharacters, listPersonas, parseData } from "./engine-client.js";
 import { syncMemoryToLorebook } from "./lorebook-writer.js";
+import { lorebookSyncEnabled } from "./injection-policy.js";
 import { recordCapture } from "./capture-status.js";
 import { swipeIndexOf, type DetectedTurn } from "./poller.js";
 
@@ -208,6 +209,13 @@ export async function handleDetectedTurn(turn: DetectedTurn, opts: BridgeOptions
 
   if (opts.skipLorebookSync) {
     return { ingested: true, lorebookId: null, skippedReason: "lorebook sync deferred by caller" };
+  }
+
+  // The capability package injects during prompt assembly, which is both earlier
+  // and correct. Writing the lorebook as well double-injects the same memory and
+  // costs the prompt budget that would have carried it - see lorebookSyncEnabled.
+  if (!lorebookSyncEnabled()) {
+    return { ingested: true, lorebookId: null, skippedReason: "lorebook sync disabled (pre-turn injection is the path)" };
   }
 
   const lorebookId = await syncMemoryToLorebook({

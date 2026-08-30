@@ -20,7 +20,7 @@ import { registerSetupRoutes } from "./setup.js";
 import { registerUiRoutes } from "./ui.js";
 import { updateStatus, builtAt, distBuiltAt, buildVersion } from "./update.js";
 import { embeddingsStatus, describeEmbeddingsStatus } from "./embeddings.js";
-import { conversationMemoryEnabled } from "./injection-policy.js";
+import { conversationMemoryEnabled, lorebookSyncEnabled } from "./injection-policy.js";
 import { isEideticMode } from "./loader.js";
 import { readCaptureStatus } from "./capture-status.js";
 import { indexHealth, logIndexHealth, hotEntryCap } from "./index-health.js";
@@ -297,6 +297,13 @@ app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
     `Conv. memory:  ${conversationMemoryEnabled()
       ? "ON — pre-turn recall in Conversation chats (MARINARA_EXTENDER_CONVERSATION_MEMORY=0 to disable)"
       : "off — disabled via MARINARA_EXTENDER_CONVERSATION_MEMORY"}`,
+  );
+  // Which memory path is live. Two paths writing the same memory compete for one
+  // prompt budget and the loser is silently trimmed, so this must be readable.
+  console.log(
+    `Lorebook sync: ${lorebookSyncEnabled()
+      ? "ON — post-turn lorebook write (turn it OFF if the capability package is installed: MARINARA_EXTENDER_LOREBOOK_SYNC=0)"
+      : "off — pre-turn injection via the capability package is the path"}`,
   );
   // Hot-index tripwire at startup. Printed unconditionally, warnings and all:
   // the lesson of 7mb6 and 771t is that a silently degraded path is

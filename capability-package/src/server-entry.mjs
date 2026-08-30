@@ -89,19 +89,23 @@ export async function activate({ api, runtime } = {}) {
       log.info?.(`[${AGENT_ID}] prompt-context contributor INVOKED — the seam is live (chat:${chatId}).`);
     }
 
-    // PER-CHAT GATE, AND IT IS LOAD-BEARING.
+    // THE GATE LIVES IN THE SIDECAR, NOT HERE.
     //
-    // The shipped registry is keyed by package and collectCapabilityPromptContext
-    // iterates every registered contributor with NO agent-activation check — so
-    // without this, memory would be injected into every chat on the install, for
-    // every character, whether or not the user asked for it. agents.json declares
-    // enabledByDefault:false and tells the user to add the agent per chat; this is
-    // what makes that promise true instead of decorative.
+    // The rule differs per mode for a reason this file cannot see: the Engine
+    // renders a different agent surface per chat mode, and the CONVERSATION
+    // surface has no agent picker at all, so activeAgentIds can never contain us
+    // there. Deciding here would either lock conversation out permanently or
+    // inject everywhere. So we report the facts and let injection-policy.ts rule
+    // — one place to reason about it, reachable from /setup, and not invalidated
+    // by an Engine update.
+    //
+    // enableAgents IS still honoured here: that is the user switching agents off
+    // wholesale for a chat, which needs no policy to interpret.
     if (chatMeta.enableAgents === false) return null;
-    const active = Array.isArray(chatMeta.activeAgentIds) ? chatMeta.activeAgentIds.map(String) : [];
-    if (!active.includes(AGENT_ID)) return null;
-
     if (!MODES.has(String(mode))) return null;
+
+    const active = Array.isArray(chatMeta.activeAgentIds) ? chatMeta.activeAgentIds.map(String) : [];
+    const agentActive = active.includes(AGENT_ID);
 
     const characterId = primaryCharacterId(targetCharacterIds);
     if (!chatId || !characterId) return null;
@@ -112,7 +116,11 @@ export async function activate({ api, runtime } = {}) {
     // that lookup there rather than here is what stops this file from growing
     // Engine-protocol knowledge, and it is where the log lives that proves we
     // ranked on turn N rather than N-1.
-    const result = await postJson("/api/pre-turn", { chatId, characterId }, request?.signal);
+    const result = await postJson(
+      "/api/pre-turn",
+      { chatId, characterId, mode: String(mode), agentActive },
+      request?.signal,
+    );
     const memoryBlock = typeof result?.memoryBlock === "string" ? result.memoryBlock : "";
     if (!memoryBlock.trim()) return null;
 

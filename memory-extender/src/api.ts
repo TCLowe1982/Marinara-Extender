@@ -106,6 +106,7 @@ import { parseStoryToMessages } from "./story-parser.js";
 // 771t: /api/pre-turn resolves the outgoing user message itself when the caller
 // cannot supply one — the shipped Engine contributor is handed no messages.
 import { latestUserMessage } from "./engine-client.js";
+import { decideInjection } from "./injection-policy.js";
 import { readBeatIndex, readAllBeats, clearBeats, companionEntryFromBeat } from "./sentiment/encoder.js";
 import {
   resolveIdentity,
@@ -1776,12 +1777,41 @@ export function registerApiRoutes(app: FastifyInstance): void {
   // the block; the extension writes it to the lorebook and then lets the
   // generation proceed. No capture, no credit stamping (post-turn owns both).
   app.post<{
-    Body: { characterId: string; characterName?: string; chatId: string; userText?: string };
+    Body: {
+      characterId: string;
+      characterName?: string;
+      chatId: string;
+      userText?: string;
+      /** Chat mode as the Engine reports it. Drives the injection gate. */
+      mode?: string;
+      /** Whether our agent is in this chat's activeAgentIds. */
+      agentActive?: boolean;
+    };
   }>("/api/pre-turn", async (req, reply) => {
-    const { characterId, characterName, chatId, userText = "" } = req.body ?? {};
+    const { characterId, characterName, chatId, userText = "", mode, agentActive = false } = req.body ?? {};
     if (!characterId || !chatId) {
       return reply.code(400).send({ error: "characterId and chatId are required" });
     }
+    // WHERE WE ARE ALLOWED TO INJECT, decided HERE rather than in the package.
+    //
+    // The Engine calls the contributor for every generation in every chat, so
+    // something has to say no. It lives in the sidecar because the rule differs
+    // per mode for a reason the package cannot see (the Engine's Chat Settings
+    // drawer has no agent picker in conversation mode), and because a setting
+    // the sidecar owns is reachable from /setup and cannot be invalidated by an
+    // Engine update. See injection-policy.ts.
+    //
+    // Callers that send no mode (the pre-hdq1 extension shape, and tests) are
+    // treated as explicitly permitted: they predate this gate and were already
+    // an intentional call.
+    if (mode !== undefined) {
+      const decision = decideInjection(mode, agentActive);
+      if (!decision.allow) {
+        console.info(`[ME:pre-turn] chat:${chatId} — no injection (${decision.reason})`);
+        return reply.send({ memoryBlock: "", surfaced: 0, skipped: decision.reason });
+      }
+    }
+
     const identityKey = await resolveIdentity(characterId, characterName);
 
     // RESOLVE THE OUTGOING MESSAGE OURSELVES WHEN THE CALLER HAS NONE (771t).

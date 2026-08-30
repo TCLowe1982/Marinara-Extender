@@ -20,6 +20,7 @@ import { registerSetupRoutes } from "./setup.js";
 import { registerUiRoutes } from "./ui.js";
 import { updateStatus, builtAt, buildVersion } from "./update.js";
 import { embeddingsStatus, describeEmbeddingsStatus } from "./embeddings.js";
+import { conversationMemoryEnabled } from "./injection-policy.js";
 import { isEideticMode } from "./loader.js";
 import { readCaptureStatus } from "./capture-status.js";
 import { indexHealth, logIndexHealth, hotEntryCap } from "./index-health.js";
@@ -280,6 +281,14 @@ app.listen({ port: PORT, host: "127.0.0.1" }, (err) => {
   console.log(`External API: ${apiKey ? `${externalModel()} @ ${externalUpstream()}` : "no key — local only"}`);
   console.log(`Eidetic mode: ${isEideticMode() ? "ON — all entries injected (no budget limit)" : "off"}`);
   console.log(`Progress:     ${process.env.MARINARA_EXTENDER_PROGRESS !== "0" ? "on (story-import console bar)" : "off"}`);
+  // Conversation-mode injection state (771t). Printed because it is DEFAULT-ON
+  // and the user has no UI to see it: the Engine conversation surface has no
+  // agent picker, so this line is the only place the setting is visible.
+  console.log(
+    `Conv. memory:  ${conversationMemoryEnabled()
+      ? "ON — pre-turn recall in Conversation chats (MARINARA_EXTENDER_CONVERSATION_MEMORY=0 to disable)"
+      : "off — disabled via MARINARA_EXTENDER_CONVERSATION_MEMORY"}`,
+  );
   // Hot-index tripwire at startup. Printed unconditionally, warnings and all:
   // the lesson of 7mb6 and 771t is that a silently degraded path is
   // indistinguishable from a working one.

@@ -18,7 +18,7 @@ import { handleDetectedTurn } from "./turn-bridge.js";
 import { engineUrl } from "./engine-client.js";
 import { registerSetupRoutes } from "./setup.js";
 import { registerUiRoutes } from "./ui.js";
-import { updateStatus, builtAt, buildVersion } from "./update.js";
+import { updateStatus, builtAt, distBuiltAt, buildVersion } from "./update.js";
 import { embeddingsStatus, describeEmbeddingsStatus } from "./embeddings.js";
 import { conversationMemoryEnabled } from "./injection-policy.js";
 import { isEideticMode } from "./loader.js";
@@ -92,7 +92,15 @@ app.get("/api/health", { logLevel: "silent" }, async (_req, reply) => {
   // whatever moment it was first asked. startedAt + builtAt answer it directly
   // and honestly: if builtAt is NEWER than startedAt, the process predates its
   // own dist and is stale. One curl, no self-report to trust.
+  // TWO STAMPS, BECAUSE THEY ANSWER DIFFERENT QUESTIONS.
+  //   builtAt()     — what the RUNNING code was built from (memoized; correct).
+  //   distBuiltAt() — what is on disk RIGHT NOW (fresh read; the only one that
+  //                   can change when dist changes).
+  // Staleness is disk-vs-process-start. Comparing the memoized value against
+  // startedAt can never become true after the first read, which is how this
+  // endpoint reported stale:false while running four-hours-old code (2026-08-30).
   const built = builtAt();
+  const onDisk = distBuiltAt();
   // Capture liveness (the 08-04 outage lesson): state AND event, together.
   // pollerOn says whether a capture path exists; lastCaptureAt says when one
   // last did real work. Either alone let six days of silence look healthy.
@@ -100,7 +108,8 @@ app.get("/api/health", { logLevel: "silent" }, async (_req, reply) => {
     ok: true, ollama, embeddings, ...update,
     startedAt: STARTED_AT,
     builtAt: built,
-    stale: built ? built > STARTED_AT : null,
+    distBuiltAt: onDisk,
+    stale: onDisk ? onDisk > STARTED_AT : null,
     index: {
       hot: idx.hot,
       cold: idx.cold,

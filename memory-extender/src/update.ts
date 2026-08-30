@@ -44,6 +44,37 @@ export function builtAt(): string | null {
   return _builtAt;
 }
 
+/**
+ * When the build stamp ON DISK says dist was last built. Read FRESH every call.
+ *
+ * THIS IS NOT builtAt(), AND THE DIFFERENCE IS THE WHOLE POINT. builtAt() rides
+ * on the memoized buildVersion(), so it answers "what did the stamp say the
+ * first time anybody asked" — which is correct for reporting the running
+ * version and USELESS for detecting staleness, because a rebuild after that
+ * first read can never move it.
+ *
+ * That reintroduced the exact observer-dependence the comment in buildVersion()
+ * describes retiring: "query early and a stale process looked honest". Measured
+ * 2026-08-30 — a health check at 02:03 froze the value, dist was rebuilt at
+ * 02:45, and /api/health kept reporting stale:false while the process was
+ * running four-hours-old code. The detector built to catch a stale process
+ * certified one as current.
+ *
+ * So staleness compares PROCESS START against the stamp as it is NOW. One tiny
+ * JSON read per health check, and it is the only way the answer can change when
+ * the thing it describes changes.
+ */
+export function distBuiltAt(): string | null {
+  try {
+    const stamp = JSON.parse(readFileSync(join(PKG_ROOT, "dist", "build-info.json"), "utf8")) as {
+      builtAt?: string;
+    };
+    return typeof stamp.builtAt === "string" ? stamp.builtAt : null;
+  } catch {
+    return null; // unstamped or unreadable — the caller reports unknown, not fresh
+  }
+}
+
 export function buildVersion(): string {
   if (_build) return _build;
   let code = "";

@@ -37,6 +37,7 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
+import { readIndexRows } from "./read-index.mjs";
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT = join(PKG, "data", "characters");
@@ -124,13 +125,9 @@ function loadBeats() {
 function loadEntrySummaries() {
   const sums = [];
   for (const scope of readdirSync(ROOT)) {
-    for (const file of ["index.yaml", "index.cold.yaml"]) {
-      const p = join(ROOT, scope, file);
-      if (!existsSync(p)) continue;
-      let y;
-      try { y = YAML.parse(readFileSync(p, "utf8")); } catch { continue; }
-      for (const e of y?.entries ?? []) {
-        if (e?.summary) sums.push({ scope, cold: file !== "index.yaml", summary: String(e.summary), lane: String(e.lane ?? "") });
+    for (const base of ["index", "index.cold"]) {
+      for (const e of readIndexRows(join(ROOT, scope), base)) {
+        if (e?.summary) sums.push({ scope, cold: base !== "index", summary: String(e.summary), lane: String(e.lane ?? "") });
       }
     }
   }

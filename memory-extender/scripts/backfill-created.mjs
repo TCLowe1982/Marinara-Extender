@@ -27,6 +27,25 @@ const PKG = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT = join(PKG, "data", "characters");
 const WRITE = process.argv.includes("--write");
 
+// hdq1 GUARD. This script writes index.yaml, and the store's indexes are JSON as
+// of the hdq1 migration. It has already served its purpose and is kept for the
+// record, so rather than teach it a second format it refuses to run against a
+// migrated store — a rewrite here would put a stale YAML back alongside the live
+// JSON, and the reader prefers whichever it finds first.
+{
+  const { existsSync: _ex, readdirSync: _rd } = await import("node:fs");
+  const { join: _j } = await import("node:path");
+  const _migrated = _rd(ROOT).some((s) => {
+    try { return _ex(_j(ROOT, s, "index.json")); } catch { return false; }
+  });
+  if (_migrated) {
+    console.error("REFUSING TO RUN: this store's indexes are JSON (hdq1). This script writes index.yaml and would create a stale second copy.");
+    console.error("If you genuinely need it, port it to scripts/read-index.mjs first.");
+    process.exit(1);
+  }
+}
+
+
 let scopes = 0, rows = 0, filled = 0, already = 0, noFile = 0, noDate = 0;
 
 for (const scope of readdirSync(ROOT)) {

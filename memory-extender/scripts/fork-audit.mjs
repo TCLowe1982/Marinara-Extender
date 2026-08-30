@@ -26,6 +26,7 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
+import { readIndexRows } from "./read-index.mjs";
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), "..");
 const KEY = process.argv[2] ?? "professor_mari";
@@ -57,11 +58,8 @@ try {
 
 function rows() {
   const out = [];
-  for (const file of ["index.yaml", "index.cold.yaml"]) {
-    const p = join(SCOPE, file);
-    if (!existsSync(p)) continue;
-    const y = YAML.parse(readFileSync(p, "utf8"));
-    for (const e of y?.entries ?? []) out.push({ ...e, cold: file !== "index.yaml" });
+  for (const base of ["index", "index.cold"]) {
+    for (const e of readIndexRows(SCOPE, base)) out.push({ ...e, cold: base !== "index" });
   }
   return out;
 }

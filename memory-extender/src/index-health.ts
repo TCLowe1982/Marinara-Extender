@@ -93,14 +93,26 @@ export interface IndexHealth {
   warnings: string[];
 }
 
-function countEntries(p: string): number {
-  if (!existsSync(p)) return 0;
-  try {
-    const y = YAML.parse(readFileSync(p, "utf8"));
-    return Array.isArray(y?.entries) ? y.entries.length : 0;
-  } catch {
-    return 0; // unreadable is not "huge"; a parse failure is its own problem
+// Counts rows in one index, in whichever format it is on disk. JSON first
+// (hdq1 moved the index there); YAML is the pre-migration fallback, and this
+// deliberately reads BOTH names rather than assuming a converted store — a
+// tripwire that silently reported 0 because it was looking for the old filename
+// would be worse than no tripwire.
+function countEntries(dir: string, base: string): number {
+  const readers: Array<[string, (t: string) => unknown]> = [
+    [join(dir, `${base}.json`), (t) => JSON.parse(t)],
+    [join(dir, `${base}.yaml`), (t) => YAML.parse(t)],
+  ];
+  for (const [p, parse] of readers) {
+    if (!existsSync(p)) continue;
+    try {
+      const y = parse(readFileSync(p, "utf8")) as { entries?: unknown };
+      return Array.isArray(y?.entries) ? y.entries.length : 0;
+    } catch {
+      return 0; // unreadable is not "huge"; a parse failure is its own problem
+    }
   }
+  return 0;
 }
 
 function scan(): IndexHealth {
@@ -112,9 +124,10 @@ function scan(): IndexHealth {
     let ids: string[] = [];
     try { ids = readdirSync(root); } catch { continue; }
     for (const id of ids) {
-      const hot = countEntries(join(root, id, "index.yaml"));
+      const scopePath = join(root, id);
+      const hot = countEntries(scopePath, "index");
       if (hot === 0) continue;
-      sizes.push({ kind, id, hot, cold: countEntries(join(root, id, "index.cold.yaml")) });
+      sizes.push({ kind, id, hot, cold: countEntries(scopePath, "index.cold") });
     }
   }
   sizes.sort((a, b) => b.hot - a.hot);

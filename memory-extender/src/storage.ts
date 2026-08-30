@@ -273,7 +273,33 @@ export function scopeDir(scope: Scope, scopeId: string): string {
   return join(base, "chats", scopeId);
 }
 
+// ── Index file format (hdq1) ─────────────────────────────────────────────────
+// THE INDEX IS JSON. THE ENTRY FILES STAY YAML. That split is the whole change,
+// and the reasoning is that the two files are read by different audiences.
+//
+// Measured on the live store, professor_mari's index at 3.86 MB / 8,906 rows:
+//     YAML.parse    890 ms        JSON.parse     6 ms      148x
+//     YAML.stringify 348 ms       JSON.stringify 12 ms      29x
+// Parse was 890 of loadContext's ~1,279 ms — the format cost more than every
+// piece of work the loader actually exists to do, combined, and it is paid per
+// load per scope. The stringify number matters just as much: the index is
+// rewritten on every retrieval count, tier change and new entry, inside a
+// serialized write lock.
+//
+// Nobody hand-edits an 8,906-row index, so its readability bought nothing. The
+// ENTRY files hold the memory prose, are read and edited by hand, and are
+// deliberately untouched by this.
+//
+// indexPath() always returns the JSON name so it stays a STABLE LOCK KEY —
+// serializedWrite() keys on this path, and a path that changed shape mid-
+// migration would hand two concurrent writers two different locks. Reads fall
+// back to the legacy YAML through readIndexFile(); writes converge on JSON.
 export function indexPath(scope: Scope, scopeId: string): string {
+  return join(scopeDir(scope, scopeId), "index.json");
+}
+
+/** Pre-hdq1 index name. Read-only fallback; never written. */
+export function legacyIndexPath(scope: Scope, scopeId: string): string {
   return join(scopeDir(scope, scopeId), "index.yaml");
 }
 
@@ -398,6 +424,67 @@ async function writeYaml(filePath: string, data: unknown): Promise<void> {
   await atomicWriteFile_UNLOCKED_takeSerializedWriteYourself(filePath, stringify(data));
 }
 
+// ── Index I/O (hdq1) ─────────────────────────────────────────────────────────
+// JSON on the way out; JSON-then-YAML on the way in. The read fallback is what
+// makes this safe to land AHEAD of the conversion script: an unconverted store
+// keeps working untouched, and the first write of any index converts it.
+//
+// The file is written compact, not pretty. It is machine-only by design (see
+// indexPath), and `jq .` is the way to read one.
+
+/** index.json -> index.yaml, index.cold.json -> index.cold.yaml. */
+function legacyNameFor(jsonPath: string): string {
+  return jsonPath.replace(/.json$/, ".yaml");
+}
+
+async function readIndexFile<T>(jsonPath: string): Promise<T | null> {
+  if (await exists(jsonPath)) {
+    const raw = await readFile(jsonPath, "utf8");
+    try {
+      return JSON.parse(raw) as T;
+    } catch (err) {
+      // DELIBERATELY NOT falling through to the legacy YAML. A corrupt index and
+      // an absent one must stay distinguishable, because upsertIndexEntry's guard
+      // keys on exactly that difference to avoid rebuilding 9,000 rows from one
+      // entry. Reading a stale YAML out from under a corrupt JSON would resurrect
+      // a frozen index and present it as a clean load — the silent-degradation
+      // shape this codebase keeps getting bitten by.
+      console.error(`[ME:storage] corrupt JSON index at ${jsonPath} — treating as empty:`, err instanceof Error ? err.message : err);
+      return null;
+    }
+  }
+  return readYaml<T>(legacyNameFor(jsonPath));
+}
+
+/**
+ * True when an index exists in EITHER format.
+ *
+ * upsertIndexEntry refuses to overwrite an index it could not read. Checking
+ * only the JSON name would report "absent" for an unconverted store whose YAML
+ * is corrupt, and the guard would fall open at precisely the moment it exists
+ * to hold.
+ */
+async function indexFileExists(jsonPath: string): Promise<boolean> {
+  return (await exists(jsonPath)) || (await exists(legacyNameFor(jsonPath)));
+}
+
+async function writeIndexFile(jsonPath: string, data: unknown): Promise<void> {
+  await atomicWriteFile_UNLOCKED_takeSerializedWriteYourself(jsonPath, JSON.stringify(data));
+  // Converge. Once the JSON is durably down, retire the YAML it replaced so no
+  // reader can pick up a frozen copy — index-health and the audit scripts read
+  // index files by name, and two live copies of one index is a worse failure
+  // than either format. Renamed rather than deleted: the conversion script takes
+  // a real backup, but this path also runs on stores that script never saw.
+  const legacy = legacyNameFor(jsonPath);
+  if (await exists(legacy)) {
+    try {
+      await rename(legacy, `${legacy}.superseded`);
+    } catch {
+      /* a failed rename must never fail the write that already landed */
+    }
+  }
+}
+
 // ── Write serialization ───────────────────────────────────────────────────────
 // Concurrent upsertIndexEntry calls for the same file cause read-modify-write
 // races that corrupt YAML. Serialize all writes per file path.
@@ -425,14 +512,14 @@ export function serializedWrite(filePath: string, fn: () => Promise<void>): Prom
 // ── Index operations ─────────────────────────────────────────────────────────
 
 export async function readIndex(scope: Scope, scopeId: string): Promise<ScopeIndex | null> {
-  return readYaml<ScopeIndex>(indexPath(scope, scopeId));
+  return readIndexFile<ScopeIndex>(indexPath(scope, scopeId));
 }
 
 // writeIndex is intentionally NOT serialized — callers that need serialization
 // (upsertIndexEntry, removeIndexEntry) use serializedWrite themselves and call
 // writeYaml directly inside the lock to avoid deadlock.
 export async function writeIndex(index: ScopeIndex): Promise<void> {
-  await writeYaml(indexPath(index.scope, index.scopeId), index);
+  await writeIndexFile(indexPath(index.scope, index.scopeId), index);
 }
 
 export function emptyIndex(scope: Scope, scopeId: string): ScopeIndex {
@@ -450,7 +537,7 @@ export async function upsertIndexEntry(
     // Guard: if the index file is present but unreadable, do NOT treat it as
     // empty — that would rebuild it from this one entry and orphan all the
     // others. Bail loudly; the file stays intact for the repair script.
-    if (!existing && (await exists(p))) {
+    if (!existing && (await indexFileExists(p))) {
       throw new Error(`[storage] refusing to overwrite unreadable index ${p} — run scripts/repair-indexes.mjs`);
     }
     const index = existing ?? emptyIndex(scope, scopeId);
@@ -459,7 +546,7 @@ export async function upsertIndexEntry(
     if (i >= 0) index.entries[i] = clean;
     else index.entries.push(clean);
     index.lastUpdated = new Date().toISOString();
-    await writeYaml(p, index);
+    await writeIndexFile(p, index);
   });
 }
 
@@ -478,7 +565,7 @@ export async function mutateIndex(
     if (!index) return;
     if (mutate(index) === false) return;
     index.lastUpdated = new Date().toISOString();
-    await writeYaml(p, index);
+    await writeIndexFile(p, index);
   });
 }
 
@@ -489,11 +576,16 @@ export async function mutateIndex(
 // moved or deleted; only the index ROW moves between hot and cold.
 
 export function coldIndexPath(scope: Scope, scopeId: string): string {
+  return join(scopeDir(scope, scopeId), "index.cold.json");
+}
+
+/** Pre-hdq1 cold index name. Read-only fallback; never written. */
+export function legacyColdIndexPath(scope: Scope, scopeId: string): string {
   return join(scopeDir(scope, scopeId), "index.cold.yaml");
 }
 
 export async function readColdIndex(scope: Scope, scopeId: string): Promise<ScopeIndex | null> {
-  return readYaml<ScopeIndex>(coldIndexPath(scope, scopeId));
+  return readIndexFile<ScopeIndex>(coldIndexPath(scope, scopeId));
 }
 
 // Move entries hot → cold. Adds to cold FIRST (a crash can never lose the row —
@@ -509,18 +601,18 @@ export async function moveToCold(scope: Scope, scopeId: string, ids: string[]): 
 
   const coldPath = coldIndexPath(scope, scopeId);
   await serializedWrite(coldPath, async () => {
-    const cold = (await readYaml<ScopeIndex>(coldPath)) ?? emptyIndex(scope, scopeId);
+    const cold = (await readIndexFile<ScopeIndex>(coldPath)) ?? emptyIndex(scope, scopeId);
     const have = new Set(cold.entries.map((e) => e.id));
     for (const e of moving) if (!have.has(e.id)) cold.entries.push(e);
     cold.lastUpdated = new Date().toISOString();
-    await writeYaml(coldPath, cold);
+    await writeIndexFile(coldPath, cold);
   });
   await serializedWrite(indexPath(scope, scopeId), async () => {
     const h = await readIndex(scope, scopeId);
     if (!h) return;
     h.entries = h.entries.filter((e) => !idset.has(e.id));
     h.lastUpdated = new Date().toISOString();
-    await writeYaml(indexPath(scope, scopeId), h);
+    await writeIndexFile(indexPath(scope, scopeId), h);
   });
   return moving.length;
 }
@@ -545,7 +637,7 @@ export async function supersedeEntry(
     row.supersededBy = newId;
     row.supersededAt = now;
     index.lastUpdated = now;
-    await writeYaml(indexPath(scope, scopeId), index);
+    await writeIndexFile(indexPath(scope, scopeId), index);
   });
   if (!row) return false;
   // Mirror onto the entry file so the fact carries its own history.
@@ -563,13 +655,13 @@ export async function promoteFromCold(scope: Scope, scopeId: string, id: string)
   const coldPath = coldIndexPath(scope, scopeId);
   let row: IndexEntry | null = null;
   await serializedWrite(coldPath, async () => {
-    const cold = await readYaml<ScopeIndex>(coldPath);
+    const cold = await readIndexFile<ScopeIndex>(coldPath);
     if (!cold) return;
     row = cold.entries.find((e) => e.id === id) ?? null;
     if (!row) return;
     cold.entries = cold.entries.filter((e) => e.id !== id);
     cold.lastUpdated = new Date().toISOString();
-    await writeYaml(coldPath, cold);
+    await writeIndexFile(coldPath, cold);
   });
   if (row) await upsertIndexEntry(scope, scopeId, row);
   return row;
@@ -798,16 +890,16 @@ export async function restoreDeletedEntry(scope: Scope, scopeId: string, id: str
 // entries already in cold — the UI exposes it solely from inside the deleted view.
 export async function purgeColdEntry(scope: Scope, scopeId: string, id: string): Promise<boolean> {
   const coldPath = coldIndexPath(scope, scopeId);
-  const cold = await readYaml<ScopeIndex>(coldPath);
+  const cold = await readIndexFile<ScopeIndex>(coldPath);
   const row = cold?.entries.find((e) => e.id === id);
   if (!row) return false;
   await deleteEntryFile(scope, scopeId, row.path);
   await serializedWrite(coldPath, async () => {
-    const c = await readYaml<ScopeIndex>(coldPath);
+    const c = await readIndexFile<ScopeIndex>(coldPath);
     if (!c) return;
     c.entries = c.entries.filter((e) => e.id !== id);
     c.lastUpdated = new Date().toISOString();
-    await writeYaml(coldPath, c);
+    await writeIndexFile(coldPath, c);
   });
   console.info(`[ME:purge] ${scope}:${scopeId} — ${id} permanently removed`);
   return true;
@@ -851,7 +943,7 @@ export async function removeIndexEntry(
     if (!index) return;
     index.entries = index.entries.filter((e) => e.id !== entryId);
     index.lastUpdated = new Date().toISOString();
-    await writeYaml(p, index);
+    await writeIndexFile(p, index);
   });
 }
 
@@ -879,7 +971,7 @@ export async function removeEntriesBySourceChat(
     if (removed.length === 0) return;
     index.entries = keep;
     index.lastUpdated = new Date().toISOString();
-    await writeYaml(p, index);
+    await writeIndexFile(p, index);
   });
   for (const e of removed) {
     await deleteEntryFile(scope, scopeId, e.path).catch(() => {});

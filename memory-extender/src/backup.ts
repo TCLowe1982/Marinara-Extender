@@ -77,7 +77,16 @@ export async function snapshotScope(scope: Scope, scopeId: string): Promise<void
     const root = join(getDataDir(), ".snapshots", `${scope}__${safeId}`);
     const dest = join(root, timestamp());
 
-    const mapFiles = ["index.yaml", "index.cold.yaml", "bookmarks.yaml", join("beats", "index.yaml")];
+    // BOTH index formats are listed on purpose (hdq1). Absent files are skipped,
+    // so a converted store snapshots the .json and an unconverted one the .yaml,
+    // and a store caught mid-migration snapshots whichever it actually has. The
+    // beats index is a different file with a different owner (encoder.ts) and is
+    // untouched by hdq1.
+    const mapFiles = [
+      "index.json", "index.cold.json",
+      "index.yaml", "index.cold.yaml",
+      "bookmarks.yaml", join("beats", "index.yaml"),
+    ];
     let copied = 0;
     for (const f of mapFiles) {
       try {

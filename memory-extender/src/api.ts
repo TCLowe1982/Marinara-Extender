@@ -1852,7 +1852,7 @@ export function registerApiRoutes(app: FastifyInstance): void {
     });
     console.info(
       `[ME:pre-turn] ${identityKey} chat:${chatId} — ${surfaced.length} entries, scored against ${scoredAgainst}: ` +
-        `"${relevanceText.slice(0, 80).replace(/s+/g, " ")}"`,
+        `"${relevanceText.slice(0, 80).replace(/\s+/g, " ")}"`,
     );
     return reply.send({ memoryBlock: contextBlock, surfaced: surfaced.length });
   });

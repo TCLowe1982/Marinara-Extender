@@ -138,3 +138,46 @@ Pass the assembled `messages` (or just the outgoing user text) to `CapabilityPro
 ### State of play
 
 `marinara-extender` v1.0.0 already exists (manifest, `agents.json`, `server.mjs`) in the *dev checkout's* `dev-data`, where it fired exactly once on install day. It registers via `registerService` and so **would never be invoked** on the shipped Engine. Porting it to `registerPromptContext` is Extender-side work. No shipped package uses `registerPromptContext` at all — we would be its first consumer on this install.
+
+## Landed: how pre-turn injection actually works (2026-08-30)
+
+771t is **fixed and user-confirmed** — cold recall on the first ask, in Conversation. The path:
+
+```
+Engine assembles prompt
+  -> calls our contributor (api.registerPromptContext; every chat, no agent check)
+  -> package reports { chatId, characterId, mode, agentActive }   [thin broker only]
+  -> sidecar POST /api/pre-turn
+       decideInjection(mode, agentActive)          injection-policy.ts
+       latestUserMessage(chatId)                   engine-client.ts (request carries no messages)
+       loadContext(recentText = that message)      ~390ms post-hdq1
+  -> block returned, appended to the system message before dispatch
+```
+
+**Four things had to be true at once, and each looked like the bug on its own:**
+
+1. Register via `registerPromptContext`, never `registerService` — the latter is accepted, never consulted, and still reports `active/ready`.
+2. Resolve the outgoing message ourselves; the request carries no prompt content. The sidecar logs which message id it scored against — that line is the proof it ranked turn N and not N-1.
+3. Gate per mode, not on `activeAgentIds` alone — Conversation has no agent picker, so that gate makes the feature unreachable there.
+4. **Only one path may publish.** See below; this is the one that will bite again.
+
+### Never run both memory paths at once
+
+The lorebook entries and the contributor carry the SAME memory. Both are large (36KB vs 29KB when measured) and they compete for one prompt budget: the dispatched system message came back at 20,854 chars — smaller than either contribution alone — with the instructions kept and every memory row trimmed away. The character then answers honestly that she has nothing, two seconds after the loader selected the exact canon rows.
+
+`MARINARA_EXTENDER_LOREBOOK_SYNC=0` stops the lorebook WRITE while capture keeps running. Default on, because it is the only path without the package installed. **Disabling the writer is not enough** — existing entries stay `enabled+constant` and keep consuming budget until they are disabled too.
+
+The lorebook copy is also the one-turn-late one by construction (written after the turn completes), so leaving it alongside a working contributor spends the budget to carry a stale answer.
+
+### Diagnosing a miss
+
+The stages are individually observable, so do not guess which one failed:
+
+| symptom | where to look |
+|---|---|
+| contributor never runs | no `[ME:pre-turn]` in sidecar log; Engine log for `contributor INVOKED`; the 10-minute silence warning |
+| ranked on the wrong turn | `[ME:pre-turn] … scored against msg:<id>: "<text>"` — it names the message |
+| built but never shipped | `extra.cachedPrompt` on the assistant message — the dispatched prompt, kept for the last 2 per chat |
+| shipped and ignored | present in `cachedPrompt` but answered over — that is precedence, not arrival |
+
+`cachedPrompt` is what separates arrival from precedence without an acceptance receipt. It is post-hoc and pruned after two turns, so read it within two turns of the generation.

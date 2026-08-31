@@ -24,15 +24,39 @@ function long(unit: string, times = 12): string {
   return Array.from({ length: times }, () => unit).join("\n\n");
 }
 
-// A war story told to a character: first person throughout, full of people who are
-// NOT in the roster, addressed to the listener. Every corroborating signal a naive
-// gate would convict on is present here on purpose.
+// A war story told to a character.
+//
+// CALIBRATED AGAINST THE CENSUS, NOT INVENTED. The first version of this fixture was
+// worthless and a control experiment proved it: inflating every weight 1.7x left it
+// at rawScore 0.200 with narrativeDistance 0.00 and thirdPersonRatio 0.00, so it
+// passed no matter what the scorer did. It was written by the same hand as the
+// scorer and shared its blind spot — a memoir that talks only about ITSELF.
+//
+// Real memoirs are full of other people in the third person. The worst real memoir
+// in a 464-message census scores raw 0.437 and carries 1p 0.66, 3p 0.47, 26
+// attributed-dialogue hits and 9 stranger names. This fixture reproduces that
+// PROFILE — measured at raw 0.445, 1p 0.64, 3p 0.57 — so it sits where real
+// testimony sits, close enough to the line that weight drift moves it across.
+//
+// NOTHING OF THE CENSUS TEXT IS REPRODUCED HERE, not even in illustration: it is
+// the user's own life and this repository is public. The numbers are the whole
+// point and they carry over without the words. Regenerate them any time with
+// scripts/wosh-audit.mjs, which reads a gitignored local cache.
 const MEMOIR = long(
-  "I have never told you this part. We had been out on the range since before dawn, " +
-    "and by the time we got back I could not feel my hands. Sergeant Alvarez did not " +
-    "say anything about it, and neither did Ruiz. I kept thinking about my mother's " +
-    "kitchen and how far away it seemed. I did not talk about any of it for years, " +
-    "and I am telling you now because you asked me what that winter was like.",
+  [
+    "I have never told you this part, and I am telling it now because you asked.",
+    "Alvarez was the one who noticed first, and he did not say anything to me about it for weeks.",
+    '"You look like hell," he said, and I told him I was fine, which was a lie and he knew it.',
+    "Ruiz kept his head down through all of it. He had a wife back home and he wrote to her every night.",
+    "I remember the cold more than anything else, and I remember that my hands stopped working around two in the morning.",
+    "Alvarez took my rifle from me and carried both of them the rest of the way back.",
+    '"Don\'t make it a thing," he said. He never made anything a thing.',
+    "My mother sent a package that month and I did not open it until March.",
+    "Ruiz asked me once if I was going to stay in. I said I did not know.",
+    "He said his wife wanted him out, and then he laughed, and then he did not say anything else about it.",
+    "I have thought about that walk back more times than I have told anyone, and I never told my mother any of it.",
+  ].join(" "),
+  8,
 );
 
 // Third-person narration about invented people. No dialogue attribution at all —
@@ -72,11 +96,31 @@ describe("the memoir guard — the failure this must never commit", () => {
   });
 
   it("the memoir separates on the primary signals, WITHOUT relying on the guard", () => {
-    // The load-bearing claim. If this ever fails, the guard has become the only
-    // thing standing between a real memory and the manuscript lane — which is a
-    // far weaker position than the measurement currently supports.
+    // THE FUSE. If this fails, the guard has become the only thing standing between
+    // a real memory and the manuscript lane.
+    //
+    // VERIFIED TO ACTUALLY BLOW: with every weight inflated 1.7x this goes red, and
+    // the real census memoir goes to rawScore 0.801 while the guard caps it at 0.35.
+    // The previous fixture stayed green through that same experiment, which is how
+    // we learned it was decorative. A fuse nobody has watched blow is not a fuse.
     const ev = manuscriptEvidence(MEMOIR, ROSTER);
     expect(ev.rawScore).toBeLessThan(MANUSCRIPT_THRESHOLD);
+  });
+
+  it("sits where real testimony sits — the profile, not just the verdict", () => {
+    // Pins the fixture to the census profile it was calibrated against. Asserting
+    // only "not flagged" would pass for a fixture nowhere near the boundary, which
+    // is exactly the failure this replaced.
+    const ev = manuscriptEvidence(MEMOIR, ROSTER);
+    expect(ev.firstPersonRatio).toBeGreaterThan(0.55);
+    expect(ev.firstPersonRatio).toBeLessThan(0.80);
+    expect(ev.thirdPersonRatio).toBeGreaterThan(0.35);   // it talks about OTHER PEOPLE
+    expect(ev.dialogueRatio).toBeGreaterThan(0);          // real accounts quote people
+    expect(ev.strangerNames.length).toBeGreaterThanOrEqual(2);
+    expect(ev.rosterMentions).toBe(0);                    // roster-silent, unaided
+    // Close enough to the line that drift moves it. If this drops far below, the
+    // fuse has gone slack again.
+    expect(ev.rawScore).toBeGreaterThan(0.35);
   });
 
   it("still spares it when the roster is empty — no chat cast to lean on", () => {

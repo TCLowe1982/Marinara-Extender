@@ -34,3 +34,8 @@ memory-extender/scratch/
 
 # Repair backups — live store content. Same reason data/ is ignored.
 memory-extender/backups/
+
+# wosh audit — LOCAL ONLY. Holds real user messages verbatim; this repo is public.
+corpus-cache.json
+memory-extender/corpus-cache.json
+memory-extender/src/__tests__/fixtures.local.json

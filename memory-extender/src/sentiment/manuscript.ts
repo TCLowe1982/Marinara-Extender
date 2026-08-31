@@ -52,8 +52,18 @@ export interface ManuscriptEvidence {
   sceneMarkers: number;
   /** 0-1 narrative distance: how far this reads from first-person testimony. */
   narrativeDistance: number;
-  /** 0-1 posterior. */
+  /** 0-1 posterior, AFTER the memoir guard has had its say. */
   score: number;
+  /**
+   * The posterior BEFORE the memoir guard capped anything.
+   *
+   * Carried permanently, not computed for a one-off scan, because "the guard
+   * engaged N times and nothing was flagged" is not evidence that it did anything:
+   * it reads identically whether the guard moved N outcomes or none. rawScore makes
+   * the counterfactual free — a guard that never pulls a score across the threshold
+   * is decorative, and this is the field that proves which.
+   */
+  rawScore: number;
   isManuscript: boolean;
   signals: string[];
 }
@@ -174,7 +184,7 @@ export function manuscriptEvidence(text: string, roster: string[] = []): Manuscr
     return {
       chars, sentences: 0, firstPersonRatio: 0, addressRatio: 0, thirdPersonRatio: 0,
       dialogueRatio: 0, strangerNames: [], rosterMentions: 0, sceneMarkers: 0,
-      narrativeDistance: 0, score: 0, isManuscript: false, signals: ["empty"],
+      narrativeDistance: 0, score: 0, rawScore: 0, isManuscript: false, signals: ["empty"],
     };
   }
 
@@ -273,6 +283,9 @@ export function manuscriptEvidence(text: string, roster: string[] = []): Manuscr
     signals.push("scene-boost");
   }
 
+  // Snapshot before the guard, so its effect is measurable rather than asserted.
+  const rawScore = score;
+
   // ── THE MEMOIR GUARD ────────────────────────────────────────────────────────
   // The motivating false positive, blocked structurally rather than by tuning.
   // Sustained first-person testimony is not a manuscript no matter who else it
@@ -302,7 +315,7 @@ export function manuscriptEvidence(text: string, roster: string[] = []): Manuscr
     return {
       chars, sentences: n, firstPersonRatio, addressRatio, thirdPersonRatio,
       dialogueRatio, strangerNames, rosterMentions, sceneMarkers, narrativeDistance,
-      score: 0, isManuscript: false,
+      score: 0, rawScore, isManuscript: false,
       signals: [...signals, "deferred:ops-lane"],
     };
   }
@@ -323,6 +336,7 @@ export function manuscriptEvidence(text: string, roster: string[] = []): Manuscr
     sceneMarkers,
     narrativeDistance,
     score,
+    rawScore,
     isManuscript,
     signals,
   };

@@ -89,10 +89,32 @@ console.log(`threshold                ${THRESHOLD}`);
 console.log(`called MANUSCRIPT        ${String(flagged.length).padStart(4)}  ${pct(flagged.length, n)}`);
 console.log(`spared                   ${String(spared.length).padStart(4)}  ${pct(spared.length, n)}`);
 
+// ── THE GUARD COUNTERFACTUAL ─────────────────────────────────────────────────
+// "engaged N times, flagged 0" proves NOTHING on its own — it reads identically
+// whether the guard moved N outcomes or none. The only honest question is: which
+// messages would have been flagged WITHOUT it? That is the diff below.
+const wouldFlag = scored.filter((s) => s.ev.rawScore >= THRESHOLD);
+const rescued = wouldFlag.filter((s) => s.ev.score < THRESHOLD);
+console.log("");
+console.log(`flagged WITH guard       ${String(flagged.length).padStart(4)}`);
+console.log(`flagged WITHOUT guard    ${String(wouldFlag.length).padStart(4)}`);
+console.log(`RESCUED BY THE GUARD     ${String(rescued.length).padStart(4)}   <- its entire measured effect`);
+if (rescued.length === 0) {
+  console.log("  ^ ZERO. The guard is DECORATIVE at this threshold: every message it");
+  console.log("    engaged on scored below the line anyway. Do not read it as protection.");
+}
+for (const r of rescued.slice(0, SHOW)) {
+  console.log(`    raw ${r.ev.rawScore.toFixed(2)} -> ${r.ev.score.toFixed(2)}  1p ${r.ev.firstPersonRatio.toFixed(2)}  ${r.ev.chars}c  "${clip(r.text, 90)}..."`);
+}
+// ENGAGEMENT IS NOT EFFECT. This pair of lines used to read "engaged 82 / still
+// flagged 0" and was reported as though the guard were protecting something. It is
+// not evidence: it reads exactly the same whether the guard moved 82 outcomes or
+// none. RESCUED above is the only line that answers the question, so these two are
+// labelled as diagnostics and never as a pass.
 const guarded = scored.filter((s) => s.ev.signals.some((x) => x.startsWith("memoir-guard")));
-console.log(`memoir guard engaged     ${String(guarded.length).padStart(4)}  ${pct(guarded.length, n)}`);
+console.log(`memoir guard engaged     ${String(guarded.length).padStart(4)}  ${pct(guarded.length, n)}   (diagnostic only — NOT evidence of effect)`);
 const guardedAndFlagged = guarded.filter((s) => s.ev.score >= THRESHOLD).length;
-console.log(`  ...and STILL flagged   ${String(guardedAndFlagged).padStart(4)}   <- must be 0 or explained`);
+console.log(`  ...and STILL flagged   ${String(guardedAndFlagged).padStart(4)}   (a 0 here is implied by the caps, so it proves nothing)`);
 
 // ── THE FALSE-POSITIVE SURFACE — read these by hand ───────────────────────────
 console.log(`\n${"=".repeat(78)}`);

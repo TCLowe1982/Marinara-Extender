@@ -57,6 +57,28 @@ describe("the memoir guard — the failure this must never commit", () => {
     expect(ev.signals.some((s) => s.startsWith("memoir-guard"))).toBe(true);
   });
 
+  // ENGAGEMENT IS NOT EFFECT — measured, and the reason rawScore exists.
+  //
+  // Across 461 real messages the guard rescued NOTHING at 0.50 or above: 13 flagged
+  // with it, 13 without. It only moves outcomes below 0.50, and the highest-scoring
+  // memoir-shaped message in the whole corpus reaches raw 0.45-0.50 on the primary
+  // signals alone. So the guard is presently INERT at any threshold we would run,
+  // and its value is as a ceiling that bounds future weight-tuning error, NOT as
+  // something protecting memories today. These assertions pin that distinction so
+  // nobody reads "the guard engaged" as "the memoir was saved".
+  it("exposes rawScore so the guard's effect is measurable, not asserted", () => {
+    const ev = manuscriptEvidence(MEMOIR, ROSTER);
+    expect(ev.rawScore).toBeGreaterThanOrEqual(ev.score);
+  });
+
+  it("the memoir separates on the primary signals, WITHOUT relying on the guard", () => {
+    // The load-bearing claim. If this ever fails, the guard has become the only
+    // thing standing between a real memory and the manuscript lane — which is a
+    // far weaker position than the measurement currently supports.
+    const ev = manuscriptEvidence(MEMOIR, ROSTER);
+    expect(ev.rawScore).toBeLessThan(MANUSCRIPT_THRESHOLD);
+  });
+
   it("still spares it when the roster is empty — no chat cast to lean on", () => {
     // Corroboration is unavailable; first-person testimony alone must carry it.
     expect(manuscriptEvidence(MEMOIR, []).isManuscript).toBe(false);
@@ -137,8 +159,8 @@ describe("boundaries", () => {
     const ev = manuscriptEvidence(MANUSCRIPT, ROSTER);
     expect(Object.keys(ev).sort()).toEqual([
       "addressRatio", "chars", "dialogueRatio", "firstPersonRatio", "isManuscript",
-      "narrativeDistance", "rosterMentions", "sceneMarkers", "score", "sentences",
-      "signals", "strangerNames", "thirdPersonRatio",
+      "narrativeDistance", "rawScore", "rosterMentions", "sceneMarkers", "score",
+      "sentences", "signals", "strangerNames", "thirdPersonRatio",
     ]);
   });
 });

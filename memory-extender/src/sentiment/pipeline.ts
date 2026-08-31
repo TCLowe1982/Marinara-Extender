@@ -43,6 +43,13 @@ export interface PipelineOptions {
   progress?: boolean;
   // Aborts the analysis loop (cancelled import); no beats are encoded.
   signal?: AbortSignal;
+  // dq9: explicit salience floor for this run, overriding the sourceType default.
+  // Scoring is match-COUNT based and compound_boost amplifies at >=2 and >=3 matches,
+  // so windowing one long telling spreads its matches thin and every window can score
+  // BELOW what the whole message would have. A substantial-but-flat told story then
+  // captures NOTHING. Callers set a floor rather than passing sourceType "story",
+  // which would mis-tag the provenance of beats that really did come from a chat.
+  salienceThreshold?: number;
   // Tag companion ledger entries with the chat they came from, so a re-import
   // of that chat can cleanly replace them.
   sourceChatId?: string;
@@ -107,7 +114,7 @@ export async function runSentimentPipeline(
   characterName: string,
   options: PipelineOptions = {},
 ): Promise<PipelineResult> {
-  const { sourceType = "chat", characters, povCharacter, progressLabel, personaName } = options;
+  const { sourceType = "chat", characters, povCharacter, progressLabel, personaName, salienceThreshold } = options;
   const report = new Progress(progressLabel ?? characterName, options.progress ?? progressEnabled());
 
   // Stage -1a: THIRD-PARTY RELEASE NOTES (mln9), before ops routing and for the same
@@ -254,7 +261,7 @@ export async function runSentimentPipeline(
   }
 
   // Stage 1: classify
-  const classifications = classifyChunks(chunks, sourceType);
+  const classifications = classifyChunks(chunks, sourceType, salienceThreshold);
 
   // CHUNK-LEVEL SINK — defence in depth. The primary routing happened at Stage -1,
   // above, where newlines still exist. This catches anything that reaches classify

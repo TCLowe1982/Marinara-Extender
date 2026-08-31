@@ -323,3 +323,60 @@ describe("classifyChunks", () => {
     expect(results[2]?.primaryEmotion).toBe("anger");
   });
 });
+
+// ── Threshold override (dq9) ──────────────────────────────────────────────────
+//
+// The long-form told-story path windows one message and classifies each window.
+// Salience is match-COUNT based and compound_boost only amplifies at >=2 matches,
+// so a window holding a single diffuse match scores below the 0.40 chat floor and
+// the story captures nothing. Measured over the live log: 13% of told stories
+// produced zero beats, two of them over 15,000 characters.
+//
+// These fixtures pin the arithmetic the rescue depends on: ONE joy match is
+// 0.55 * 0.50 = 0.275 — under the chat floor (0.40), over the narrative one (0.25).
+
+describe("salience threshold override", () => {
+  // >10 words, so the short-message multiplier does not apply and the score is
+  // exactly one hit: 0.55 * 0.50 (joy weight) = 0.275.
+  const diffuse = chunk(
+    "We sat on the porch that evening and I told him it had been a happy sort of week overall.",
+  );
+
+  it("a single diffuse match fails the default chat floor", () => {
+    const r = classifyChunk(diffuse);
+    expect(r.primaryEmotion).toBe("joy");
+    expect(r.salience).toBeCloseTo(0.275, 3);
+    expect(r.passesThreshold).toBe(false);
+  });
+
+  it("the same chunk passes when given the narrative floor", () => {
+    const r = classifyChunk(diffuse, "chat", 0.25);
+    expect(r.salience).toBeCloseTo(0.275, 3);
+    expect(r.passesThreshold).toBe(true);
+  });
+
+  it("the override wins over the sourceType default in BOTH directions", () => {
+    // story default is 0.25 and would pass; an explicit stricter floor must not.
+    expect(classifyChunk(diffuse, "story").passesThreshold).toBe(true);
+    expect(classifyChunk(diffuse, "story", 0.9).passesThreshold).toBe(false);
+  });
+
+  it("an undefined override leaves the sourceType default untouched", () => {
+    expect(classifyChunk(diffuse, "chat", undefined).passesThreshold).toBe(false);
+    expect(classifyChunk(diffuse, "story", undefined).passesThreshold).toBe(true);
+  });
+
+  it("classifyChunks threads the override to every chunk", () => {
+    const rs = classifyChunks([diffuse, diffuse], "chat", 0.25);
+    expect(rs).toHaveLength(2);
+    expect(rs.every((r) => r.passesThreshold)).toBe(true);
+    expect(classifyChunks([diffuse, diffuse], "chat").every((r) => r.passesThreshold)).toBe(false);
+  });
+
+  it("the override does NOT resurrect a chunk suppressed for a non-salience reason", () => {
+    // content-floor short-circuits before scoring; a floor of 0 must not rescue it.
+    const r = classifyChunk(chunk("ok"), "chat", 0);
+    expect(r.passesThreshold).toBe(false);
+    expect(r.suppressedReason).toBe("content-floor");
+  });
+});

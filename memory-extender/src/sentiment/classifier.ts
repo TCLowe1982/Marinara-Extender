@@ -81,12 +81,20 @@ export function meetsContentFloor(text: string, minTokens: number): boolean {
 export function classifyChunk(
   chunk: Chunk,
   sourceType: "chat" | "story" = "chat",
+  // dq9: an explicit floor for callers whose input is NARRATIVE arriving through a
+  // chat-shaped route. Scoring is match-COUNT based and compound_boost amplifies at
+  // >=2 and >=3 matches, so splitting one long telling into windows spreads its
+  // matches thin and each window scores BELOW what the whole would have. The chat
+  // floor (0.40) assumes an un-windowed chat turn; a windowed told story is not that
+  // shape. Callers pass a floor rather than lying about sourceType, which would
+  // mis-tag provenance on the stored beat.
+  thresholdOverride?: number,
 ): ClassificationResult {
   const cfg = loadSentimentConfig();
   const kw = loadEmotionalKeywords();
-  const threshold = sourceType === "story"
+  const threshold = thresholdOverride ?? (sourceType === "story"
     ? (cfg.story_salience_threshold ?? 0.25)
-    : cfg.salience_threshold;
+    : cfg.salience_threshold);
 
   // Content floor first — cheaper than scoring, and a chunk with nothing in it
   // is not a low-salience beat, it is not a beat. Returning zeroed scores rather
@@ -320,6 +328,7 @@ export function classifyChunk(
 export function classifyChunks(
   chunks: Chunk[],
   sourceType: "chat" | "story" = "chat",
+  thresholdOverride?: number,
 ): ClassificationResult[] {
-  return chunks.map((c) => classifyChunk(c, sourceType));
+  return chunks.map((c) => classifyChunk(c, sourceType, thresholdOverride));
 }

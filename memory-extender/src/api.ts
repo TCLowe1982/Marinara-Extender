@@ -91,6 +91,7 @@ import { ingestSceneRecap, readArcs, readArcMemberships } from "./arcs.js";
 import { runArcPromotion } from "./arc-promotion.js";
 import { spawnUpdater } from "./update.js";
 import { classifyChunks } from "./sentiment/classifier.js";
+import { loadSentimentConfig } from "./sentiment/config.js";
 import { analyzeChunks } from "./sentiment/analyzer.js";
 import { encodeBeat } from "./sentiment/encoder.js";
 import { classifyAmbient } from "./ambient.js";
@@ -955,34 +956,59 @@ export function registerApiRoutes(app: FastifyInstance): void {
     if (longUserStory) {
       void (async () => {
         try {
-          const r = await runSentimentPipeline(
-            // 2pbi: this path passed neither a chat nor a message, so every beat
-            // it has ever written is unidentifiable by provenance — one synthetic
-            // message means turnStart 0 for all of them, forever. The message id
-            // is in scope here and was simply never forwarded.
-            //
-            // sourceChatId is DELIBERATELY still absent. Tagging these would be
-            // more truthful but it is not inert: removeEntriesBySourceChat purges
-            // by that field on re-import, and the import path chunks one long
-            // message differently, so tagging them makes a re-import delete
-            // memories it will not reproduce.
-            //
-            // citesChatId is the resolution of that dilemma (fqnl): it records
-            // which chat these entries came from — making them convictable by
-            // the provenance guard — while the purge never reads it.
-            [{ role: "user", content: userMessageText, ...(userSourceMessageId ? { messageId: userSourceMessageId } : {}) }],
-            identityKey,
-            characterName ?? identityKey,
-            // personaName (qhej): this route already received it and used it for
-            // tier-3 routing, but never forwarded it to the pipeline — so the
-            // fact pass could not tell the player's persona from a stranger.
-            {
-              sourceType: "chat",
-              ...(chatId ? { citesChatId: chatId } : {}),
-              ...(personaName?.trim() ? { personaName: personaName.trim() } : {}),
-            },
-          );
+          // 2pbi: this path passed neither a chat nor a message, so every beat
+          // it has ever written is unidentifiable by provenance — one synthetic
+          // message means turnStart 0 for all of them, forever. The message id
+          // is in scope here and was simply never forwarded.
+          //
+          // sourceChatId is DELIBERATELY still absent. Tagging these would be
+          // more truthful but it is not inert: removeEntriesBySourceChat purges
+          // by that field on re-import, and the import path chunks one long
+          // message differently, so tagging them makes a re-import delete
+          // memories it will not reproduce.
+          //
+          // citesChatId is the resolution of that dilemma (fqnl): it records
+          // which chat these entries came from — making them convictable by
+          // the provenance guard — while the purge never reads it.
+          const storyMessages = [{ role: "user", content: userMessageText, ...(userSourceMessageId ? { messageId: userSourceMessageId } : {}) }];
+          // personaName (qhej): this route already received it and used it for
+          // tier-3 routing, but never forwarded it to the pipeline — so the
+          // fact pass could not tell the player's persona from a stranger.
+          const storyOpts = {
+            sourceType: "chat" as const,
+            ...(chatId ? { citesChatId: chatId } : {}),
+            ...(personaName?.trim() ? { personaName: personaName.trim() } : {}),
+          };
+          const charLabel = characterName ?? identityKey;
+          let r = await runSentimentPipeline(storyMessages, identityKey, charLabel, storyOpts);
           console.info(`[ME:longform] user story (${userMessageText.length} chars) → ${r.beats.length} beat(s)`);
+
+          // THE ZERO-BEAT RESCUE (dq9, measured 2026-08-31 over 154 unique told
+          // stories in the live log). This branch was skipping Tier 2's user chunk
+          // and then, 13% of the time, capturing nothing itself — so the message
+          // this feature exists to preserve was landing NOWHERE. Two of those were
+          // over 15,000 characters.
+          //
+          // WHY WINDOWING CAN CAPTURE LESS THAN THE WHOLE, which is the part that
+          // is not obvious: salience is match-COUNT based and compound_boost
+          // multiplies once a chunk holds >=2 and again at >=3 matches. Splitting a
+          // long telling spreads those matches across windows, so a story whose
+          // emotional evidence is DIFFUSE rather than spiky can have every window
+          // land under the 0.40 chat floor while the un-windowed message would have
+          // cleared it. Size is not the variable — 99,400 chars yielded 56 beats
+          // while 18,065 yielded none.
+          //
+          // So retry at the NARRATIVE floor, which exists for exactly this shape of
+          // input. Strictly additive: it runs only when the first pass produced
+          // nothing, so it can rescue a lost story but can never dilute a captured
+          // one. sourceType stays "chat" — these beats DID come from a chat, and
+          // lying about that to borrow a threshold would corrupt their provenance.
+          if (r.beats.length === 0) {
+            const cfg = loadSentimentConfig();
+            const floor = cfg.story_salience_threshold ?? 0.25;
+            r = await runSentimentPipeline(storyMessages, identityKey, charLabel, { ...storyOpts, salienceThreshold: floor });
+            console.info(`[ME:longform] zero beats at the chat floor — retried at the narrative floor (${floor}) → ${r.beats.length} beat(s)`);
+          }
         } catch (err) {
           console.warn("[ME:longform] windowed ingestion failed:", err);
         }

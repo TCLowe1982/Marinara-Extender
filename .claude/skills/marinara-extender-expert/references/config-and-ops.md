@@ -38,18 +38,13 @@ Config can also be saved from the **`/setup` page** form or `POST /api/config`, 
 | `MARINARA_EXTENDER_DIGEST_UPSTREAM` | `https://api.openai.com` | OpenAI-compatible base URL for the fallback. |
 | `MARINARA_EXTENDER_DIGEST_MODEL` | `gpt-4o-mini` | Fallback model (a local model name wouldn't exist upstream). |
 
-**Engine-facing inference proxy (`hq7` — the client-extension replacement):**
+**🪦 Engine-facing inference proxy — RETIRED 2026-08-30 (epic `hq7`, code removed in `6ecv`).**
 
-| Var | Default | Notes |
-|---|---|---|
-| `MARINARA_EXTENDER_PROXY_UPSTREAM` | `https://api.openai.com` | Where `proxy.ts` forwards chat generations from an **OpenAI-compatible** (Custom) connection. Accepts `https://host` or `https://host/v1` (the `/v1` is stripped). **Distinct from the analysis config above** — that's the sidecar's own small model, this is the user's real chat provider. The proxy never stores an API key: the caller's `Authorization` is forwarded upstream, so keys stay in Marinara's connection config. |
-| `MARINARA_EXTENDER_ANTHROPIC_UPSTREAM` | `https://api.anthropic.com` | Where `proxy.ts` forwards chat generations from the **native Anthropic** connection. Same accepted forms. Anthropic isn't OpenAI-compatible, so it gets its own route (`/anthropic/v1/messages`) rather than a translation layer — the engine's Anthropic connection has an editable `baseUrl`, so the format passes through untouched. Credentials (`x-api-key`) are forwarded, never stored. |
+`MARINARA_EXTENDER_PROXY_UPSTREAM` and `MARINARA_EXTENDER_ANTHROPIC_UPSTREAM` **no longer exist** — `proxy.ts`, its routes (`/proxy/v1/*`, `/anthropic/v1/*`) and the `proxyUpstream()`/`anthropicUpstream()` helpers were deleted. Setting either variable now does nothing. If you find one in a user's `.env`, it is an inert leftover and can be removed.
 
-**The proxy is the OPT-IN path, not the default** — the default is the poller (see `references/architecture.md`). To use it, set the connection's base URL to `http://127.0.0.1:3001/proxy/v1` (Custom / OpenAI-compatible) or `http://127.0.0.1:3001/anthropic/v1` (native Anthropic), and keep the **Agents / Images / Videos** default connections pointed **directly** at the provider (`kxk`).
+**What to tell a user who asks how memory reaches the prompt:** the **capability package** (`registerPromptContext`, capability API 1.8, Engine 2.4.3) contributes it while the prompt is assembled, and the **poller** captures turns. Neither needs an upstream URL, and neither sits in the chat path — a dead sidecar degrades memory but never breaks chat. That property is exactly why the proxy was retired; see `references/architecture.md`.
 
-**⛔ The proxy is impossible on the three CLI-login providers** — **Claude (Subscription)**, **OpenAI (ChatGPT)**, **Grok CLI (Subscription)**. They have no base URL or API key field because the engine drives a vendor SDK in-process off a local CLI login. A user on any of these must use the poller. Check which provider they're on *before* walking anyone through proxy setup — this is the first support question to ask.
-
-**Anthropic support gotcha (not a proxy bug):** on Opus 4.7/4.8 and Fable 5 the Anthropic API rejects `temperature`/`top_p`/`top_k` with a 400, and rejects last-assistant-turn prefill with a 400. Roleplay frontends commonly send both. The proxy passes upstream 400s through verbatim precisely so the real message is visible — read the error text before suspecting the sidecar.
+**Still true, and still worth knowing** — on **Opus 4.7/4.8 and Fable 5** the Anthropic API rejects `temperature`/`top_p`/`top_k` and last-assistant-turn prefill with a **400**, and roleplay frontends commonly send both. That is an upstream model constraint surfacing through Marinara, not an Extender bug — check the Engine's sampling settings for the chosen model.
 
 **Server & data:**
 

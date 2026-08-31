@@ -12,7 +12,6 @@ import { getDataDir } from "./storage.js";
 import { localUrl, localEnabled, localModel, externalUpstream, externalModel } from "./llm-config.js";
 import { getCachedAuth } from "./auth-cache.js";
 import { registerApiRoutes } from "./api.js";
-import { registerProxyRoutes } from "./proxy.js";
 import { startPoller } from "./poller.js";
 import { handleDetectedTurn } from "./turn-bridge.js";
 import { engineUrl } from "./engine-client.js";
@@ -130,6 +129,12 @@ app.get("/api/health", { logLevel: "silent" }, async (_req, reply) => {
 });
 
 // ── OpenAI-compatible inference proxy ─────────────────────────────────────────
+// THIS IS THE REWRITE ASSISTANT RELAY, AND IT STAYS. Not to be confused with
+// the Engine-facing inference proxy (proxy.ts), which was retired with the hq7
+// epic on 2026-08-30 — superseded by the capability package for injection and
+// the poller for capture. That one routed the user's OWN chat generations and
+// carried their provider credentials; this one deliberately picks the model and
+// key for its caller and never sat in the chat path.
 // POST /v1/chat/completions — lets any OpenAI-compatible client (e.g. the
 // Rewrite Assistant) route generation through this one sidecar instead of
 // running a second local model. Local model first (honouring a per-request
@@ -210,12 +215,6 @@ registerUiRoutes(app);
 // ── Management API ────────────────────────────────────────────────────────────
 
 registerApiRoutes(app);
-
-// ── Engine-facing inference proxy ─────────────────────────────────────────────
-// Marinara's Main connection points here; see proxy.ts. Distinct from the
-// Rewrite Assistant relay above, which picks the model and key for its caller.
-
-registerProxyRoutes(app);
 
 // ── Crash breadcrumb ────────────────────────────────────────────────────────
 // A blind crash — the node process vanishing with nothing in the log — once

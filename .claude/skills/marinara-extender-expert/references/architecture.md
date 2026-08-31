@@ -2,11 +2,11 @@
 
 *Condensed from the live source in `memory-extender/src/`. When a detail matters, open the cited file — the code is authoritative; this is a map.*
 
-> ## ⚠️ MIGRATION IN FLIGHT — extension → inference proxy (epic `hq7`)
+> ## ⚠️ POST-EXTENSION ARCHITECTURE — poller + capability package (epic `hq7` RETIRED)
 >
 > **Marinara Engine v2.3.4 removed client extensions entirely** (no compat mode; retained extension records and `extension-storage:*` are permanently erased on first 2.3.4 startup). The loader + `marinara-extender.js` bridge described below **no longer works on current Engine** — `references/extension.md` documents a dead surface, kept only until slice 8 replaces it.
 >
-> **The replacement is TWO paths, and the default is not the proxy.**
+> **The replacement is TWO paths, and the inference proxy is NOT one of them any more.** The proxy line (epic `hq7`, slices 1–8) was **retired 2026-08-30**; see the retirement note below before proposing anything that routes chat through the sidecar.
 >
 > 1. **Poller (provider-agnostic).** The sidecar talks to the engine's REST API server-to-server from localhost: it detects finished turns, ingests them, and writes the memory block back through the **lorebook API** — exactly what the extension did, minus the browser. **Built and live-verified end-to-end on the `poller-fallback` branch — NOT merged, and running as an explicit TEMP FIX** (2026-07-23) while the maintainer waits to see where Marinara's official direction lands (the dev signalled an extension re-enable *and* a first-party memory agent). Do not merge to master or extend it without a fresh decision; it exists to stop the bleed, not to be the permanent architecture.
 >
@@ -29,9 +29,9 @@
 >
 > **Engine version pin — v2.4.3 (`34442e26d`), updated 2026-08-20 from v2.4.0.** The maintainer's Engine is deliberately **pinned to a tag on a detached HEAD**, not tracking `main`, and the AI_Startup stack launches it `start.bat --skip-update` so a boot can never fast-forward it. To move it, `git checkout --detach vX.Y.Z` and let `start.bat` notice the version/commit mismatch and rebuild — **never** lift the freeze by passing `-EngineUpdate`, which fast-forwards to whatever `main` is (that was 1,395 commits at the time of the 2.4.3 bump). **The poller contract survived 2.4.0→2.4.3 unchanged**, verified both by source diff and by live HTTP: `lastMessageAt`, per-message `characterId`, `activeSwipeIndex`, `swipeCount`, unbounded-vs-`?limit=N` semantics and the lorebook entry vocabulary are all intact; the lorebook schema gained only two nullable columns. The one rewrite is in our favour — `listMessagesPaginated` now does a DB-level `ORDER BY DESC` + `LIMIT` + `.reverse()` instead of reading the whole chat and slicing the tail, and the poller passes a limit on every tick. It also now throws `InvalidMessageCursorError` on a bad `before` cursor, which cannot reach us because production never sends one. **Before any Engine bump, back up `packages/server/data/storage/`** (~692 MB; that store already carries a `corrupted-2026-06-10/` folder) — the migrations run forward and rolling back after them is not clean.
 >
-> 2. **Inference proxy (opt-in, higher fidelity).** Marinara points a connection at the sidecar and memory rides the generation path itself. Built and tested (`53f`) but **cannot be the only path** — see the hard constraint below. Slices `w8g`/`rid`/`mca`/`pyx`, all P3.
+> 2. **Capability package (`registerPromptContext`, capability API 1.8 / Engine 2.4.3).** The sidecar contributes memory *while the Engine assembles the prompt* — no proxy, no lorebook artifact, no one-turn lag. This is the injection path that shipped, and it is what `771t` closed on. ~~Inference proxy~~ — **retired 2026-08-30**, see the retirement note below.
 >
-> **⛔ The proxy structurally cannot serve the three CLI-login providers** — `claude_subscription`, `openai_chatgpt`, `grok_subscription` (`LOCAL_AUTH_PROVIDERS`). For those the engine drives a vendor SDK **in-process** off a local CLI login: `claude_subscription` uses `@anthropic-ai/claude-agent-sdk` with credentials the Claude Code CLI stored. There is no base URL and no API key field to redirect, and `ANTHROPIC_BASE_URL` appears nowhere in the engine repo. This is inherent, not a gap to patch. **If a user is on Claude/ChatGPT/Grok Subscription, the poller is the only option.**
+> **⛔ Historical, and the reason a proxy could never have been the only path: it structurally cannot serve the three CLI-login providers** — `claude_subscription`, `openai_chatgpt`, `grok_subscription` (`LOCAL_AUTH_PROVIDERS`). For those the engine drives a vendor SDK **in-process** off a local CLI login: `claude_subscription` uses `@anthropic-ai/claude-agent-sdk` with credentials the Claude Code CLI stored. There is no base URL and no API key field to redirect, and `ANTHROPIC_BASE_URL` appears nowhere in the engine repo. This is inherent, not a gap to patch. **If a user is on Claude/ChatGPT/Grok Subscription, the poller is the only option.**
 >
 > **What makes the poller possible:** engine CSRF is a **static header**, not a per-session token — `CSRF_HEADER = "x-marinara-csrf"`, `CSRF_HEADER_VALUE = "1"` (`packages/shared/src/constants/security.ts`) — and loopback origins are auto-trusted. So a non-browser client on 127.0.0.1 can both read and mutate the engine API.
 >
@@ -64,21 +64,33 @@
 > - A never-seen chat must be **baselined, not ingested**, or a fresh install replays every chat's history at once.
 > - The bridge calls the sidecar's own `/api/process-turn` over loopback rather than importing it: that handler is a large inline route with fire-and-forget tiers, and going through it reuses the exact path the extension used instead of a parallel implementation that can drift.
 >
-> **Landed so far — slice 1 (`53f`, commits `ca5a037` + `e20fb47`):** `proxy.ts`, faithful passthrough only, in **two wire formats**. Whole-object body forwarding so unknown/future params survive; caller credentials forwarded upstream (the sidecar never stores chat keys); SSE piped via `reply.hijack()`; client disconnect aborts upstream; `content-encoding`/`content-length` stripped; upstream errors passed through verbatim. **No memory logic yet** — seams are marked in the file for slices 2–4 (scope resolution → injection → response tee).
+> ### 🪦 The inference proxy is RETIRED (epic `hq7`, closed 2026-08-30)
 >
-> | Marinara connection | Set its base URL to | Proxy route | Upstream env var |
-> |---|---|---|---|
-> | **Custom** (OpenAI-compatible) | `http://127.0.0.1:3001/proxy/v1` | `POST /proxy/v1/chat/completions` | `MARINARA_EXTENDER_PROXY_UPSTREAM` |
-> | **Anthropic** (native) | `http://127.0.0.1:3001/anthropic/v1` | `POST /anthropic/v1/messages` | `MARINARA_EXTENDER_ANTHROPIC_UPSTREAM` |
+> **Do not revive this without re-reading why it died.** The plan was to point Marinara at a sidecar-hosted proxy so every chat generation flowed through us, restoring both capabilities lost when v2.3.4 removed client extensions. Slice 1 was built and green (`proxy.ts`, 26 tests, two wire formats); slices 2–8 were never built. All are closed.
 >
-> **Why there is no OpenAI→Anthropic translation layer.** Anthropic isn't OpenAI-compatible (`POST /v1/messages`, `x-api-key` auth, its own SSE event shape). But Marinara's **native Anthropic connection has a user-editable `baseUrl`** — verified in `packages/shared/src/constants/providers.ts`: only `LOCAL_AUTH_PROVIDERS` (`openai_chatgpt` / `claude_subscription` / `grok_subscription`) hide it, and `baseUrl` is a generic per-connection field in `connection.schema.ts`. So the proxy speaks Anthropic on both sides and forwards it untouched, instead of permanently owning message-shape conversion, SSE translation, and tool-call/stop-reason mapping. Engine-side provider knowledge stays in the engine.
+> **What replaced each half — both already ship:**
 >
-> **Anthropic specifics that matter downstream:** the engine sends `x-api-key` (not `Authorization`) because `anthropic.apiKeyHeader = "x-api-key"`, `usesAuthHeader: false`; its `defaultBaseUrl` is `https://api.anthropic.com/v1` and it appends `/messages`. Critically for slice 3, **Anthropic takes `system` as a top-level request parameter**, not a `role: "system"` message — so memory injection there appends to `body.system` (a bare string or an array of text blocks) rather than splicing the messages array. Injection must be implemented per format.
+> - **Injection → the capability package's `registerPromptContext`** (capability API 1.8, Engine 2.4.3). Contributes memory *while the prompt is assembled*, so recall is scored against the message being answered rather than the previous turn. This is what `olea` said to ask the Engine for; it arrived, and `771t` closed on it. Strictly better than splicing a system message in transit.
+> - **Capture → the poller.** Watermark-based rather than a live response tee, which is the one real capability given up.
 >
-> **Two operational facts that change with the proxy:**
+> **Why it was retired rather than finished — the costs are structural:**
 >
-> 1. The sidecar is now in the **critical path of every generation**. A dead sidecar means *no chat at all*, not degraded memory — which is why `073` (silent sidecar deaths) was promoted to **P0** and `dkn` to P1.
-> 2. Marinara's **Agents / Images / Videos** connections must stay **direct**, not pointed at the proxy. Otherwise tracker agents, chat summaries and Noodle refreshes hit the memory path — injecting memory into a tracker prompt and ingesting a summary call as a "turn" poisons the store (`kxk`).
+> 1. It puts the memory sidecar in the **critical path of all inference**. Today a dead sidecar degrades memory and the turn proceeds; that graceful degradation is deliberate in the capability broker. With the proxy, **dead sidecar = dead chat**.
+> 2. **`073`: the sidecar dies repeatedly and silently** (~30 deaths in one log). Every one would have been a broken conversation. This doc already said so, in the section this note replaces: *"A dead sidecar means no chat at all, not degraded memory — which is why `073` was promoted to P0."* That was written as a caution; it reads better as a verdict.
+> 3. It carries the user's **provider credentials**.
+> 4. It sat **outside `/api/`, exempt from the CSRF guard** — necessary, since Marinara's provider client cannot send `x-me-csrf`, but real surface.
+> 5. It owned **two wire formats forever** and had to track provider drift in both.
+>
+> **Findings worth keeping, still true and dearly bought:**
+>
+> - **Marinara's native Anthropic connection has a user-editable `baseUrl`** — verified in `packages/shared/src/constants/providers.ts`: only `LOCAL_AUTH_PROVIDERS` (`openai_chatgpt` / `claude_subscription` / `grok_subscription`) hide it; `baseUrl` is a generic per-connection field in `connection.schema.ts`. This is why no OpenAI→Anthropic translation layer was ever needed. **If anything ever needs to sit between Marinara and a provider again, start here.**
+> - **Anthropic takes `system` as a top-level request parameter**, not a `role: "system"` message. Relevant to any future injection work on that format.
+> - On **Opus 4.7/4.8 and Fable 5** the Anthropic API rejects `temperature`/`top_p`/`top_k` and last-assistant-turn prefill with a **400**. Roleplay frontends commonly send both. Upstream constraint, not a proxy bug.
+> - Marinara's **Agents / Images / Videos** connections must stay **direct**. Moot now, but it is why `kxk` exists: injecting memory into a tracker prompt and ingesting a summary call as a "turn" poisons the store.
+>
+> **Code removed** (`6ecv`): `proxy.ts`, `proxy.integration.test.ts`, the `registerProxyRoutes` wiring, and `proxyUpstream()`/`anthropicUpstream()` in `llm-config.ts`. Git history preserves them.
+>
+> **⚠️ SURVIVOR, DO NOT DELETE BY ASSOCIATION:** `POST /v1/chat/completions` in `index.ts` is the **Rewrite Assistant relay** — a different route from the retired `/proxy/v1/chat/completions`. It deliberately picks the model and key for its caller and never sat in the chat path. `GET/POST /api/config` in `setup.ts` likewise stays. Neither has automated coverage; that is `n4n`, still open.
 
 ## The two components
 
@@ -86,7 +98,7 @@ Marinara Extender is a **sidecar + a thin extension**:
 
 1. **Memory Extender sidecar** — a local **Fastify** HTTP server (`index.ts`) bound to **`127.0.0.1:3001`** (`MARINARA_EXTENDER_PORT`). It owns all logic and stores memory as **plain YAML files on disk**. It exposes a REST API the extension calls, plus **two distinct OpenAI-compatible endpoints that must not be confused**:
    - **`/v1/chat/completions`** — the **Rewrite Assistant relay** (`nqy`, `handleChatCompletions` in `index.ts`). Deliberately *picks* the model and key for its caller: local model first, external API as fallback. Rebuilds the request body, so it drops unknown parameters and forces `stream: false`. For the sidecar's own analysis-grade model, not for chat.
-   - **`/proxy/v1/chat/completions`** — the **engine-facing proxy** (`proxy.ts`, slice 1 of `hq7`). The opposite contract: changes nothing, carries the caller's own key and model, streams. This is what Marinara's Main connection points at.
+   - ~~**`/proxy/v1/chat/completions`** — the engine-facing proxy~~ **REMOVED 2026-08-30** (`6ecv`, epic `hq7` retired). `proxy.ts` and its routes are gone from the tree. Only the Rewrite Assistant relay above remains, and it is a *different route with the opposite contract* — do not conflate them.
 2. **Client extension** — a lightweight **loader** pasted once into Marinara → Settings → Extensions. On every Marinara load it fetches the live extension (`GET /marinara-extender.js`) from the sidecar, so updates need only a Marinara reload. The extension sends each turn to the sidecar and writes the returned memory block into the character's lorebook as **two constant (always-on) system entries**.
 
 ```text
@@ -188,7 +200,7 @@ All three run off the hot path so the turn response is fast.
 - **Threads/arcs/identity/aliases/holding-pool** — `GET /api/threads|arcs|identity|aliases|pending-speakers`, plus mutators.
 - **Config/info** — `GET/POST /api/config`, `GET /api/scopes`, `GET /api/health`, `GET /api/csrf-token`.
 - **Setup/extension** — `GET /setup`, `GET /loader.js`, `GET /marinara-extender.js`.
-- **Inference proxy (CSRF-exempt)** — `POST /v1/chat/completions`, `POST /chat/completions`.
+- **Rewrite Assistant relay (CSRF-exempt)** — `POST /v1/chat/completions`, `POST /chat/completions`. (The engine-facing proxy routes `/proxy/v1/*` and `/anthropic/v1/*` were **removed** with epic `hq7`.)
 
 ## Known sharp edges (from the source — candidates for beads issues)
 

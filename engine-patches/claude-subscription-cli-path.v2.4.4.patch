@@ -1,0 +1,29 @@
+diff --git a/packages/server/src/services/llm/providers/claude-subscription.provider.ts b/packages/server/src/services/llm/providers/claude-subscription.provider.ts
+index 7d2673a73..c2edb3c54 100644
+--- a/packages/server/src/services/llm/providers/claude-subscription.provider.ts
++++ b/packages/server/src/services/llm/providers/claude-subscription.provider.ts
+@@ -458,6 +458,24 @@ export class ClaudeSubscriptionProvider extends BaseLLMProvider {
+       ...(this.apiKey ? { ANTHROPIC_API_KEY: this.apiKey } : {}),
+     };
+ 
++    // Pin the Claude Code CLI when CLAUDE_CODE_EXECUTABLE_PATH is set. Left unset,
++    // the SDK auto-detects its binary by resolving the optional per-platform package
++    // (@anthropic-ai/claude-agent-sdk-PLATFORM-ARCH) relative to its own module URL,
++    // and throws "Native CLI binary for win32-x64 not found" when that lookup comes
++    // up empty. Under pnpm that optional package is NOT reliably installed: verified
++    // 2026-09-01 at sdk 0.3.235 — the lockfile carries
++    // claude-agent-sdk-win32-x64@0.3.235, yet neither a normal install nor
++    // "--frozen-lockfile --force" fetched it, leaving only an orphaned 0.2.141.
++    // Pointing at a known-good CLI (a global install of @anthropic-ai/claude-code)
++    // bypasses resolution entirely.
++    //
++    // NOT A CUSTOM PARAMETER, deliberately. This is operator configuration read from
++    // the server environment and applied BEFORE the CUSTOMIZABLE_SDK_OPTION_KEYS
++    // filter below, so a connection cannot reach any process, tool, filesystem or
++    // session option. The text-only isolation policy is intact.
++    const pinnedCliPath = process.env.CLAUDE_CODE_EXECUTABLE_PATH?.trim();
++    if (pinnedCliPath) sdkOptions.pathToClaudeCodeExecutable = pinnedCliPath;
++
+     const sdkOptionRecord = sdkOptions as Record<string, unknown>;
+     const customGenerationOptions: Record<string, unknown> = {};
+     for (const key of CUSTOMIZABLE_SDK_OPTION_KEYS) {

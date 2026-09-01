@@ -1,0 +1,24 @@
+diff --git a/packages/server/src/services/llm/providers/claude-subscription.provider.ts b/packages/server/src/services/llm/providers/claude-subscription.provider.ts
+index 0f185d29f..0aa0094d7 100644
+--- a/packages/server/src/services/llm/providers/claude-subscription.provider.ts
++++ b/packages/server/src/services/llm/providers/claude-subscription.provider.ts
+@@ -453,6 +453,19 @@ export class ClaudeSubscriptionProvider extends BaseLLMProvider {
+       ...(this.apiKey ? { ANTHROPIC_API_KEY: this.apiKey } : {}),
+     };
+ 
++    // Pin the Claude Code CLI when CLAUDE_CODE_EXECUTABLE_PATH is set. Left
++    // unset, the SDK auto-detects the binary by resolving its optional
++    // per-platform package (@anthropic-ai/claude-agent-sdk-<platform>-<arch>)
++    // relative to its own module URL, and throws "Native CLI binary for
++    // <platform>-<arch> not found" when that lookup comes up empty. Under
++    // pnpm's isolated node_modules that lookup only succeeds via the hoisted
++    // fallback: it fails outright under --preserve-symlinks and while an
++    // install is still linking optional deps. Pointing at a known-good CLI
++    // (e.g. a global `npm i -g @anthropic-ai/claude-code`) bypasses resolution
++    // entirely. Set before applyCustomParameters so a caller can still override.
++    const pinnedCliPath = process.env.CLAUDE_CODE_EXECUTABLE_PATH?.trim();
++    if (pinnedCliPath) sdkOptions.pathToClaudeCodeExecutable = pinnedCliPath;
++
+     const reserved = sdkOptions as Record<string, unknown>;
+     this.applyCustomParameters(reserved, options);
+ 

@@ -39,3 +39,7 @@ memory-extender/backups/
 corpus-cache.json
 memory-extender/corpus-cache.json
 memory-extender/src/__tests__/fixtures.local.json
+
+# Engine patches: keep the .patch files, never an .env (even an empty one).
+engine-patches/.env*
+engine-patches/*.env

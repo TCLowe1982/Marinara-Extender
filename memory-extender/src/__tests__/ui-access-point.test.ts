@@ -66,3 +66,39 @@ describe("the memory browser has a way in", () => {
     expect(await body("/memory")).toContain('href="/prompts"');
   });
 });
+
+// THE HELD-REVIEW LANE MUST NOT HIDE ITSELF (385b).
+//
+// It used to disappear from the sidebar whenever it was empty, which cost two
+// things. Its empty state — "Nothing held, re-rolls are retiring cleanly" — could
+// only be seen by someone who already knew the lane existed, so nobody could learn
+// what it was for. And settling the LAST held item dropped the count to zero, which
+// reset state.mode and navigated the reader out of the lane at the exact moment
+// they had finished clearing it.
+//
+// Marie hit this and reported her review queue as "invisible by construction".
+//
+// These assertions pin the two behaviours, not the styling. The count is still
+// suppressed at zero — the original no-naked-"0" reasoning was never in dispute —
+// so the ENTRY, not the number, is what must survive.
+describe("the held-review lane does not vanish when it is empty (385b)", () => {
+  it("never empties its own nav slot", async () => {
+    // The old hide path. Its absence is silent: every route still returns 200 and
+    // the lane simply stops existing for anyone who has nothing held.
+    expect(await body("/memory")).not.toContain('nav.innerHTML = "";');
+  });
+
+  it("never navigates the reader out of the lane", async () => {
+    // The force-navigate that ejected you on settling the last item.
+    expect(await body("/memory")).not.toContain('if (state.mode === "held")');
+  });
+
+  it("still renders the entry, dimmed, when the count is zero", async () => {
+    // The replacement: a "quiet" modifier instead of removal. If this class is gone
+    // the lane is either always loud (a naked 0) or hidden again.
+    const page = await body("/memory");
+    expect(page).toContain("Held for review");
+    expect(page).toContain(" quiet");
+    expect(page).toContain(".item.quiet .lbl");
+  });
+});

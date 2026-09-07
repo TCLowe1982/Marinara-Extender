@@ -78,6 +78,10 @@ const PAGE = String.raw`<!DOCTYPE html>
   .item:hover { background: var(--panel); }
   .item.sel { background: var(--panel); box-shadow: inset 2px 0 0 var(--accent); }
   .item .k { color: var(--muted); font-size: 11px; }
+  /* 385b: an empty lane still reads as a lane, just a quiet one. Dimmed, not
+     disabled — opening it is how you learn what it holds. */
+  .item.quiet .lbl { color: var(--muted); }
+  .item.quiet:hover .lbl { color: var(--text); }
   .card { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px;
     padding: 13px 15px; margin-bottom: 10px; }
   .card .sum { font-weight: 600; margin-bottom: 5px; }
@@ -487,23 +491,35 @@ async function resolveHeldRecord(btn) {
   }
 }
 
-// The sidebar entry only appears when there is something in it. An always-visible
-// "0" trains the eye to skip the row, which is the opposite of what a lane is for.
+// The entry is ALWAYS present; only the count disappears at zero (385b).
+//
+// It used to hide itself entirely, on the reasoning that an always-visible "0"
+// trains the eye to skip the row. That reasoning is sound and is why there is
+// still no zero here — but hiding the whole lane cost more than it saved, and it
+// made this the only view in the browser that vanishes. "Recently deleted" and
+// "Discarded by the system" are always-visible peers with reassuring empty states.
+//
+// Two things went wrong when this one hid:
+//   - Its empty state was UNREACHABLE. "Nothing held — re-rolls are retiring
+//     cleanly" is where a reader learns what the lane is for, and it could only be
+//     seen by someone who already knew. You meet a lane for the first time at the
+//     moment it has work in it, with no idea what it is.
+//   - Settling the LAST item ejected you. The count hit zero, this function reset
+//     state.mode, and the render that followed drew the entries list — so clearing
+//     your queue took away the confirmation you had just earned.
+//
+// So: dim at zero, no number, and never navigate on the reader's behalf.
 async function loadHeldCount() {
   const nav = $("held-nav");
   if (!nav) return;
   let n = 0;
   try { n = (await get("/api/held")).held.length; } catch { return; }
   const heading = nav.previousElementSibling;
-  if (!n) {
-    nav.innerHTML = "";
-    if (heading) heading.style.display = "none";
-    if (state.mode === "held") { state.mode = "entries"; }
-    return;
-  }
   if (heading) heading.style.display = "";
-  nav.innerHTML = '<button class="item' + (state.mode === "held" ? " sel" : "") + '" id="go-held">' +
-    '<span class="lbl">Held for review</span><span class="n" style="margin-left:auto;color:var(--warn)">' + n + "</span></button>";
+  nav.innerHTML = '<button class="item' + (state.mode === "held" ? " sel" : "") + (n ? "" : " quiet") +
+    '" id="go-held">' + '<span class="lbl">Held for review</span>' +
+    (n ? '<span class="n" style="margin-left:auto;color:var(--warn)">' + n + "</span>" : "") +
+    "</button>";
   $("go-held").addEventListener("click", () => { state.mode = "held"; render(); loadHeldCount(); });
 }
 

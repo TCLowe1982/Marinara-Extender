@@ -1,6 +1,14 @@
 # Marinara Extender: The Capability Package Contract
 
-*The in-Engine surface. Grounded in the Engine's own `capabilityPackageManifestSchema` (`packages/shared/src/schemas/capability-package.schema.ts`) and read against **Engine v2.4.3 (`34442e26d`)**, which is the version the maintainer's install is pinned to. **Contracts, not coordinates** (`umz1`): everything below names a field, an enum member, an endpoint or a validation rule, because those survive refactors and line numbers do not.*
+*The in-Engine surface. Grounded in the Engine's own `capabilityPackageManifestSchema` (`packages/shared/src/schemas/capability-package.schema.ts`) and read against **Engine v2.4.4 (`1a299369a`), capability API 1.14** — the version the maintainer's install is pinned to. **Contracts, not coordinates** (`umz1`): everything below names a field, an enum member, an endpoint or a validation rule, because those survive refactors and line numbers do not.*
+
+> ## ⛔ Read the Engine from the RIGHT COPY
+>
+> **The live install is `C:\Users\holyk\AppData\Local\MarinaraEngine`** (v2.4.4, tag `v2.4.4` at `1a299369a`, detached HEAD, built 2026-09-01). It serves `127.0.0.1:7860` by running `node packages/server/dist/index.js`, so a process listing shows only the relative path `dist/index.js` - **that is not enough to tell you which copy is running.**
+>
+> `d:\Entertainment\Wip\Projects\Marinara-Engine` is a **stale 2.4.1 clone**, marked with `_STALE_READ_ME_FIRST.md` and kept only for four unpushed commits (preserved at `engine-patches/legacy-2.4.1-branches/`). Its schema shows **six** slots ending at `game-world-map`, and it carries an older anchor of the `8pwc` CLI-path patch.
+>
+> On 2026-09-07 a session read the D: clone and told the maintainer `home-browser-tab` was "one Engine bump away". It was already live. **Verify every Engine claim against the AppData path.**
 
 > **Why this file exists.** The browser-extension path is dead (`references/extension.md`) and the sidecar-served memory browser (`hwlj` Option B) shipped. What remains is Option A — a package that mounts our UI *inside* the Engine. That has been blocked less by effort than by not knowing the contract. This is the contract.
 
@@ -43,6 +51,7 @@ The complete enum — there are exactly nine, and `ui` is among them:
 ```
 conversation-surface · conversation-toolbar · chat-settings · spatial-workspace
 chat-runtime · game-world-map · home-browser-tab · game-surface
+roleplay-tracker · tracker-panel
 ```
 
 **`home-browser-tab`** — "Adds a top-level destination to Home's browser shell." **New in the 2.4.x line and the best fit for the memory browser.** `chat-settings` (the slot Option A was originally written against) puts memory management inside a per-chat pane; what Option B actually built is a whole management application — browse, edit, merge, identity/alias repair, receipts. That is a top-level destination.
@@ -65,6 +74,8 @@ Validated **at install**, not at render — a package that gets this wrong fails
 - declaring `home-browser-tab` **without** `entrypoints.client` → rejected
 - declaring `home-browser-tab` **without** `contributions.homeBrowserTab` → rejected
 - any `iconPaths` entry **not present in `files[]`** → rejected, *whether or not* the slot is declared (an unpinned or traversal-shaped icon path would otherwise reach the resolver unvalidated)
+
+**`roleplay-tracker`** (“compact package-owned tracker controls in Roleplay chat chrome”) and **`tracker-panel`** (“package-owned content inside the detached or docked Tracker Panel”) are **new at capability API 1.14** and neither requires a descriptor object the way `home-browser-tab` does. They are the natural home for the *in-context* half of the C split — the “why did it recall that” receipt view — and are a better fit for it than `chat-settings`, which is a settings pane rather than chat chrome. Unexplored: nobody has checked what a tracker slot is actually handed at render time.
 
 Other slots' options: `gameSurface{surfaceClass}` (declared, not pushed at runtime, so theming applies on first paint), `conversationGame{command: /^\/[a-z0-9-]+$/, aliases[], playerLabel}`, `agentDetail{agentIds: 1–32}`.
 

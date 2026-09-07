@@ -1,0 +1,171 @@
+From ac2c3c4dfb3d254895781a3e84c38146762ed4e2 Mon Sep 17 00:00:00 2001
+From: TC Lowe <111537227+TCLowe1982@users.noreply.github.com>
+Date: Mon, 3 Aug 2026 13:38:28 -0500
+Subject: [PATCH 2/2] feat(generation): wire prompt-context contributions into
+ the generation route
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Collects contributions from active agents that registered a contributor and
+places them through the existing agent-injection machinery: preset section
+replacement when the active preset declares a slot, otherwise a separate
+injection message, skipping placement entirely when the preset owns it.
+Contributions also join contextInjections so downstream agents that opt into
+pre-generation injections see them like any other.
+
+Only agents with a registered contributor are made eligible for a preset
+placement slot, so no slot is reserved for an agent that supplies nothing.
+long-term-memory is excluded from the generic pass because it already has a
+dedicated call above; this adds no second path for it.
+
+Acceptance is reported after dispatch, at the same two points the long-term
+memory path uses, and only for contributions that actually reached the
+prompt — one dropped by preset placement is never reported as shipped.
+
+Gated on !regenerateMessageId to match long-term memory: a re-roll reuses the
+context cached on the original generation rather than recomputing, so the
+generic pass is skipped and nothing is reported for it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ packages/server/src/routes/generate.routes.ts | 60 +++++++++++++++++++
+ .../generation/prompt-context-contributors.ts |  9 +++
+ 2 files changed, 69 insertions(+)
+
+diff --git a/packages/server/src/routes/generate.routes.ts b/packages/server/src/routes/generate.routes.ts
+index 04785bdf2..8c94f71bb 100644
+--- a/packages/server/src/routes/generate.routes.ts
++++ b/packages/server/src/routes/generate.routes.ts
+@@ -200,6 +200,12 @@ import {
+   recordLongTermMemoryPromptAccepted,
+   type LongTermMemoryRecallReceipt,
+ } from "../services/generation/long-term-memory-runtime.js";
++import {
++  collectPromptContextContributions,
++  hasPromptContextContributor,
++  recordPromptContextAccepted,
++  type CollectedPromptContext,
++} from "../services/generation/prompt-context-contributors.js";
+ import { newId } from "../utils/id-generator.js";
+ import {
+   appendGenerationTailMessages,
+@@ -1510,6 +1516,8 @@ export async function generateRoutes(app: FastifyInstance) {
+         let finalMessages: GenerationPromptMessage[] = [...runningMessagesForFollowUp];
+         let longTermMemoryRecallReceipt: LongTermMemoryRecallReceipt | undefined;
+         let longTermMemoryPromptRecorded = false;
++        let promptContextContributions: CollectedPromptContext[] = [];
++        let promptContextRecorded = false;
+         const ownerSpatialProjection = await ownerSpatialProjectionPromise;
+         let conversationCommandsReminder: string | null = null;
+         let conversationContextMacroSlots: ConversationContextMacroSlots = {
+@@ -1642,6 +1650,14 @@ export async function generateRoutes(app: FastifyInstance) {
+         if (chatEnableAgents && chatActiveAgentIds.includes("long-term-memory")) {
+           runtimeSectionEligibleAgentTypes.add("long-term-memory");
+         }
++        // A package that contributes prompt context may own a preset placement
++        // slot too. Only agents that actually registered a contributor are made
++        // eligible, so a slot is never reserved for an agent that supplies none.
++        if (chatEnableAgents) {
++          for (const agentId of chatActiveAgentIds) {
++            if (hasPromptContextContributor(agentId)) runtimeSectionEligibleAgentTypes.add(agentId);
++          }
++        }
+         const chatActiveLorebookIds: string[] = Array.isArray(chatMeta.activeLorebookIds)
+           ? (chatMeta.activeLorebookIds as string[])
+           : [];
+@@ -4676,6 +4692,35 @@ export async function generateRoutes(app: FastifyInstance) {
+             }
+           }
+         }
++        // Capability packages that registered a prompt-context contributor for an
++        // active agent. Placed and budgeted exactly like the long-term-memory block
++        // above; the difference is that the contract is generic, so no Engine change
++        // is needed per package. Gated on !regenerateMessageId to match that block —
++        // a re-roll reuses the context assembled for the original generation.
++        if (chatEnableAgents && chatActiveAgentIds.length > 0 && !input.regenerateMessageId) {
++          const contributed = await collectPromptContextContributions(
++            chatActiveAgentIds.filter((agentId) => agentId !== "long-term-memory"),
++            {
++              chatId: input.chatId,
++              chatMode,
++              characterIds: promptCharacterIds,
++              messages: finalMessages.map(({ role, content }) => ({ role, content })),
++              signal: abortController.signal,
++              debugMode: requestDebug || isDebug,
++            },
++          );
++          for (const contribution of contributed) {
++            const tokens = runtimeAgentSectionTokens.get(contribution.agentId);
++            const handledByPresetSection =
++              tokens !== undefined && replaceRuntimeAgentSection(finalMessages, tokens, contribution.text);
++            if (!handledByPresetSection && presetOwnsAgentPlacement) continue;
++            if (!handledByPresetSection) appendSeparateAgentInjection(contribution.agentId, contribution.text);
++            contextInjections.push({ agentType: contribution.agentId, text: contribution.text });
++            // Only contributions that actually reached the prompt are eligible for
++            // acceptance accounting; one dropped by preset placement is not.
++            promptContextContributions.push(contribution);
++          }
++        }
+         clearUnusedRuntimeAgentSections(finalMessages, runtimeAgentSectionTokens);
+ 
+         if (directorSecretPlotAgent) {
+@@ -5432,6 +5477,19 @@ export async function generateRoutes(app: FastifyInstance) {
+             });
+           };
+ 
++          const recordAcceptedPromptContext = async (messages: ChatMessage[]) => {
++            if (promptContextRecorded || promptContextContributions.length === 0) return;
++            promptContextRecorded = true;
++            const dispatched = messages.map(({ role, content }) => ({ role, content }));
++            for (const contribution of promptContextContributions) {
++              await recordPromptContextAccepted(contribution.agentId, {
++                chatId: input.chatId,
++                receipt: contribution.receipt ?? null,
++                messages: dispatched,
++              });
++            }
++          };
++
+           if (enableChatTools && provider.chatComplete) {
+             const maxToolRounds = getMaxToolRounds();
+             let loopMessages: ChatMessage[] = initialProviderMessages;
+@@ -5530,6 +5588,7 @@ export async function generateRoutes(app: FastifyInstance) {
+                   }),
+                 );
+                 await recordAcceptedLongTermMemoryPrompt(loopMessages);
++                await recordAcceptedPromptContext(loopMessages);
+               } catch (err: any) {
+                 // If the error was caused by an abort, cancel silently and skip post-processing.
+                 if (abortController.signal.aborted || (err && err.name === "AbortError")) {
+@@ -5814,6 +5873,7 @@ export async function generateRoutes(app: FastifyInstance) {
+             try {
+               let result = await withLlmRequestTimeout(chatGenerationTimeoutMs, () => gen.next());
+               await recordAcceptedLongTermMemoryPrompt(initialProviderMessages);
++              await recordAcceptedPromptContext(initialProviderMessages);
+               while (!result.done) {
+                 if (abortController.signal.aborted) {
+                   return null;
+diff --git a/packages/server/src/services/generation/prompt-context-contributors.ts b/packages/server/src/services/generation/prompt-context-contributors.ts
+index a436ee696..e74b387ee 100644
+--- a/packages/server/src/services/generation/prompt-context-contributors.ts
++++ b/packages/server/src/services/generation/prompt-context-contributors.ts
+@@ -74,6 +74,15 @@ function contributorFor(agentId: string) {
+   return getCapabilityService<PromptContextContributorService>(`${agentId}${SERVICE_SUFFIX}`);
+ }
+ 
++/**
++ * Whether an agent has a registered contributor. Lets the caller decide, before
++ * assembling the prompt, that this agent may own a preset placement slot —
++ * without reserving a slot for every active agent.
++ */
++export function hasPromptContextContributor(agentId: string): boolean {
++  return contributorFor(agentId) !== null;
++}
++
+ /**
+  * Bound a contributor call so a stalled package cannot hold up a turn.
+  * Mirrors `withLongTermMemoryRuntimeTimeout`; kept local so this module stays
+-- 
+2.52.0.windows.1
+

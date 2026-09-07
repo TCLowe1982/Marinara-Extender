@@ -1,0 +1,229 @@
+From 370a960cd5941cfc4ed0958a28c36f50bc8f2de0 Mon Sep 17 00:00:00 2001
+From: TC Lowe <111537227+TCLowe1982@users.noreply.github.com>
+Date: Thu, 30 Jul 2026 17:30:11 -0500
+Subject: [PATCH 3/4] feat(server): optional turn-complete notification for
+ companion tools
+
+Local companion tools (memory, analytics, archival) have no way to learn
+that a conversation turn finished. Since client extensions were removed
+the only option is polling chats.lastMessageAt on a timer, which is
+laggy, infers turn boundaries from a timestamp, and races concurrent
+writes. This replaces the poll with a push.
+
+Adds services/turn-notify.ts, mirroring services/discord-webhook.ts:
+a validated configured URL, safeFetch, fire-and-forget, errors logged
+and never thrown to callers. Differences from that precedent are a 2s
+timeout so a stalled consumer cannot hold a generation open,
+maxRedirects 0, and debug-level logging because an absent companion
+tool is an ordinary state rather than an engine fault.
+
+Payload is identifiers only -- chatId, userMessageId,
+assistantMessageId, characterId, and an ISO timestamp. Consumers read
+content through the existing API. That keeps the contract free of
+payload-size, PII, and serialization concerns, and means it need not
+change when message shape does.
+
+Call site is generate.routes.ts, beside the existing
+chunkAndEmbedMessages call -- the point that already means "this turn is
+done". It fires once per completed turn and covers regeneration
+(addSwipe) and continuation (updateMessageContent) as well as new
+messages, since all three branches converge on savedMsg before it.
+
+Placed deliberately OUTSIDE the memoryRecallVectorizerAvailable check:
+a consumer that does not use embeddings must not depend on an embedder
+being configured.
+
+Guarded on a saved assistant message. Reaching the call site does not
+prove the turn produced one -- a model that spends its whole budget on
+reasoning returns empty, the engine reports "empty response", and
+lastSavedMsg stays null. Announcing that would hand consumers a user
+message with no reply: half a turn recorded as a whole one.
+
+No-op unless TURN_NOTIFY_URL is set. No new dependency, no schema
+change, no behaviour change when unset.
+
+Verified against a dev instance: delivery over loopback (safeFetch
+refuses private ranges by default, so the policy needed proving),
+payload shape, silent no-op when unset or malformed, call-site execution
+on a real generation, and no emission on either failed or
+empty-response turns.
+---
+ .env.example                                  |   9 ++
+ packages/server/src/routes/generate.routes.ts |  25 +++++
+ packages/server/src/services/turn-notify.ts   | 101 ++++++++++++++++++
+ 3 files changed, 135 insertions(+)
+ create mode 100644 packages/server/src/services/turn-notify.ts
+
+diff --git a/.env.example b/.env.example
+index a7ec83a47..cd1a26029 100644
+--- a/.env.example
++++ b/.env.example
+@@ -31,6 +31,15 @@ FILE_STORAGE_DIR=./data/storage
+ # both packages/server/data/ and data/. Do not delete either folder until
+ # recovery is confirmed.
+ 
++# Companion tools
++# Optional. When set, Marinara sends a small fire-and-forget POST to this URL
++# each time a conversation turn completes, so a local companion tool (memory,
++# analytics, archival) does not have to poll for new messages. The body carries
++# identifiers only - chatId, userMessageId, assistantMessageId, characterId,
++# and an ISO timestamp - never message text; read content through the API.
++# Leave blank to disable. Loopback addresses are permitted for this setting.
++TURN_NOTIFY_URL=
++
+ # Encryption key for API keys at rest (generate with: openssl rand -hex 32)
+ ENCRYPTION_KEY=
+ # Required secret for privileged APIs such as admin cleanup, backups, bulk import,
+diff --git a/packages/server/src/routes/generate.routes.ts b/packages/server/src/routes/generate.routes.ts
+index e6400a990..51a6b4a4b 100644
+--- a/packages/server/src/routes/generate.routes.ts
++++ b/packages/server/src/routes/generate.routes.ts
+@@ -190,6 +190,7 @@ import {
+   resolveMemoryRecallEmbeddingSource,
+ } from "../services/memory-recall-embedding.js";
+ import { postToDiscordWebhook } from "../services/discord-webhook.js";
++import { notifyTurnComplete } from "../services/turn-notify.js";
+ import {
+   recallLongTermMemory,
+   recordLongTermMemoryPromptAccepted,
+@@ -9159,6 +9160,30 @@ export async function generateRoutes(app: FastifyInstance) {
+             ).catch((err) => logger.error(err, "[memory-recall] Background chunking failed"));
+           }
+         }
++
++        // ── Notify a configured companion tool that this turn completed ──
++        // Deliberately outside the vectorizer check above: a consumer that does
++        // not use embeddings must not depend on an embedder being configured.
++        // No-op unless TURN_NOTIFY_URL is set.
++        //
++        // Requires a saved assistant message. Reaching here does not prove the
++        // turn produced one: a model that spends its whole budget on reasoning
++        // returns empty, the engine reports "empty response", and lastSavedMsg
++        // stays null. Announcing that as a completed turn would hand consumers
++        // a user message with no reply — half a turn, recorded as a whole one.
++        const notifyAssistantMessageId = (lastSavedMsg as { id?: string } | null)?.id ?? null;
++        if (notifyAssistantMessageId) {
++          notifyTurnComplete({
++            chatId: input.chatId,
++            userMessageId: currentTurnUserMessageId,
++            assistantMessageId: notifyAssistantMessageId,
++            characterId:
++              typeof (lastSavedMsg as { characterId?: unknown } | null)?.characterId === "string"
++                ? ((lastSavedMsg as { characterId: string }).characterId)
++                : null,
++            at: new Date().toISOString(),
++          });
++        }
+         break;
+       } // end of Professor Mari follow-up loop
+ 
+diff --git a/packages/server/src/services/turn-notify.ts b/packages/server/src/services/turn-notify.ts
+new file mode 100644
+index 000000000..0f243f5fe
+--- /dev/null
++++ b/packages/server/src/services/turn-notify.ts
+@@ -0,0 +1,101 @@
++// ──────────────────────────────────────────────
++// Turn-Complete Notification — one-way outbound ping
++// ──────────────────────────────────────────────
++// Notifies a locally configured companion tool that a conversation turn
++// finished, so it does not have to poll `chats.lastMessageAt` on a timer.
++//
++// Identifiers only — no message bodies. A consumer reads content through the
++// existing API, which keeps this payload free of size, PII, and serialization
++// concerns, and means the notification never has to change when message shape
++// does.
++//
++// Disabled unless TURN_NOTIFY_URL is set. Same posture as discord-webhook.ts:
++// fire-and-forget, errors logged, never thrown to callers.
++
++import { logger } from "../lib/logger.js";
++import { safeFetch } from "../utils/security.js";
++
++/** Give up quickly — a stalled consumer must never hold a generation open. */
++const REQUEST_TIMEOUT_MS = 2000;
++
++export interface TurnCompletePayload {
++  chatId: string;
++  /**
++   * The user message that opened this turn. Null for turns the user did not
++   * start — autonomous messages and greetings.
++   */
++  userMessageId: string | null;
++  /**
++   * The assistant message that closed it — a new message, a regenerated swipe,
++   * or a continuation. Required: a turn with no assistant message did not
++   * complete, and callers must not announce it.
++   */
++  assistantMessageId: string;
++  /** Replying character, so a consumer need not re-read the message to route it. */
++  characterId: string | null;
++  /** ISO-8601, when the turn completed. */
++  at: string;
++}
++
++/**
++ * Read at call time, not module load, so a TURN_NOTIFY_URL edited in .env
++ * takes effect without a restart (runtime-config re-populates process.env).
++ */
++function configuredUrl(): string | null {
++  const raw = process.env.TURN_NOTIFY_URL?.trim();
++  if (!raw) return null;
++  try {
++    const parsed = new URL(raw);
++    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
++      logger.warn("[turn-notify] Ignoring TURN_NOTIFY_URL: only http and https are supported");
++      return null;
++    }
++    return parsed.toString();
++  } catch {
++    logger.warn("[turn-notify] Ignoring TURN_NOTIFY_URL: not a valid URL");
++    return null;
++  }
++}
++
++/**
++ * Announce that a turn completed. No-op unless TURN_NOTIFY_URL is configured.
++ *
++ * Fire-and-forget by design: this runs on the generation path, so it must never
++ * block, throw, or fail a turn because a companion tool is down or slow.
++ */
++export function notifyTurnComplete(payload: TurnCompletePayload): void {
++  const url = configuredUrl();
++  if (!url) return;
++
++  void (async () => {
++    try {
++      const res = await safeFetch(url, {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify(payload),
++        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
++        maxResponseBytes: 4 * 1024,
++        allowMissingContentType: true,
++        policy: {
++          // The operator opted in by setting TURN_NOTIFY_URL in .env, at the
++          // same trust level as DATA_DIR or ADMIN_SECRET. Companion tools are
++          // expected to run on the same host, so loopback must be reachable.
++          allowLocal: true,
++          allowLoopback: true,
++          allowedProtocols: ["http:", "https:"],
++          // A notification target that redirects is misconfigured, not routed.
++          maxRedirects: 0,
++          flagName: "TURN_NOTIFY_URL",
++        },
++      });
++      if (!res.ok) {
++        logger.warn("[turn-notify] POST failed (%d)", res.status);
++      }
++    } catch (err) {
++      // Includes the timeout above. Logged at debug: a companion tool being
++      // absent is an ordinary state, not an engine fault, and this fires on
++      // every turn.
++      logger.debug(err, "[turn-notify] Notification failed");
++    }
++  })();
++}
+-- 
+2.52.0.windows.1
+

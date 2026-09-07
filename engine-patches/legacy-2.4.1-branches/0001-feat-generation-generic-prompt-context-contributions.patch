@@ -1,0 +1,424 @@
+From 4740d09e98d0a18cc157aa151301d16f4cdc8ea1 Mon Sep 17 00:00:00 2001
+From: TC Lowe <111537227+TCLowe1982@users.noreply.github.com>
+Date: Mon, 3 Aug 2026 13:31:13 -0500
+Subject: [PATCH 1/2] feat(generation): generic prompt-context contributions
+ for capability packages
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Capability packages can supply retrieved context to a generation, but only
+through a feature-specific Engine module: long-term-memory-runtime.ts
+resolves one hard-coded service key. Every further contributor needs its
+own Engine file and its own call site, so the integration cost falls on
+the Engine rather than on the package.
+
+This states the contract once. A package registers a service under
+`<agentId>:prompt-context`, where the agent id is one it already declares.
+The generation route knows which agents are active for a chat, so the key
+is derived from data the caller holds — no registry change, no discovery
+mechanism, and no third-party name in Engine source.
+
+Behaviour matches the existing long-term-memory path: calls are bounded by
+AGENT_CALL_TIMEOUT_MS, contributions are trimmed and capped at 100k
+characters, empty results are dropped, and failures are logged and skipped
+so a misbehaving package degrades to "no extra context" rather than a
+failed turn. Contributors run in the caller's agent order so injection is
+deterministic across turns. Acceptance reporting is optional and is kept
+separate from collection, because assembling a contribution and shipping
+it are different events.
+
+Additive only. getCapabilityService returns null for unregistered keys, so
+an install with no participating packages does one map lookup per active
+agent and contributes nothing. The long-term-memory path is untouched.
+
+Adds scripts/regressions/prompt-context-contributors.regression.ts,
+covering the no-package no-op, ordering, trimming, the 100k cap, empty and
+null contributions, abort handling, timeout, and containment of both
+contribution and accounting failures. Wired into `pnpm regression`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ package.json                                  |   3 +-
+ .../generation/prompt-context-contributors.ts | 162 ++++++++++++++++
+ .../prompt-context-contributors.regression.ts | 178 ++++++++++++++++++
+ 3 files changed, 342 insertions(+), 1 deletion(-)
+ create mode 100644 packages/server/src/services/generation/prompt-context-contributors.ts
+ create mode 100644 scripts/regressions/prompt-context-contributors.regression.ts
+
+diff --git a/package.json b/package.json
+index ec2d64fd4..6bfd90ce4 100644
+--- a/package.json
++++ b/package.json
+@@ -30,7 +30,7 @@
+     "localization:check": "node ./scripts/check-locales.mjs && pnpm localization:ui-check",
+     "localization:ui-check": "node ./scripts/migrate-static-jsx-localization.mjs --check --notices packages/client/src",
+     "lint": "pnpm -r run lint",
+-    "regression": "pnpm regression:spatial && pnpm regression:prompt && pnpm regression:timezone && pnpm regression:noodle && pnpm regression:emoji && pnpm regression:providers && pnpm regression:jsonish && pnpm regression:tts && pnpm regression:issues && pnpm regression:backup && pnpm regression:extensions-security && pnpm regression:professor-mari-shell-sandbox && pnpm regression:agent-import-security && pnpm regression:custom-tool-import-security && pnpm regression:request-security && pnpm regression:runtime-integrity && pnpm regression:novelai-zip-security && pnpm regression:image-result-security && pnpm regression:expression-tools && pnpm regression:regeneration-context && pnpm regression:roleplay && pnpm regression:sprites && pnpm regression:static-cache && pnpm regression:localization && pnpm regression:docs && pnpm smoke:ui",
++    "regression": "pnpm regression:spatial && pnpm regression:prompt && pnpm regression:timezone && pnpm regression:noodle && pnpm regression:emoji && pnpm regression:providers && pnpm regression:jsonish && pnpm regression:tts && pnpm regression:issues && pnpm regression:backup && pnpm regression:extensions-security && pnpm regression:professor-mari-shell-sandbox && pnpm regression:agent-import-security && pnpm regression:custom-tool-import-security && pnpm regression:prompt-context && pnpm regression:request-security && pnpm regression:runtime-integrity && pnpm regression:novelai-zip-security && pnpm regression:image-result-security && pnpm regression:expression-tools && pnpm regression:regeneration-context && pnpm regression:roleplay && pnpm regression:sprites && pnpm regression:static-cache && pnpm regression:localization && pnpm regression:docs && pnpm smoke:ui",
+     "regression:prompt": "pnpm build:shared && pnpm --filter @marinara-engine/server exec tsx ../../scripts/regressions/prompt.regression.ts && pnpm --filter @marinara-engine/server exec tsx ../../scripts/regressions/prompt-attachments.regression.ts && pnpm --filter @marinara-engine/server exec tsx ../../scripts/regressions/context-fit.regression.ts",
+     "regression:spatial": "pnpm build:shared && pnpm --filter @marinara-engine/server exec tsx ../../scripts/regressions/spatial-context.regression.ts && pnpm --filter @marinara-engine/server exec tsx ../../scripts/regressions/spatial-location-reference.regression.ts",
+     "regression:timezone": "pnpm build:shared && pnpm --filter @marinara-engine/server exec tsx ../../scripts/regressions/timezone.regression.ts",
+@@ -49,6 +49,7 @@
+     "regression:notification-sound": "pnpm --filter @marinara-engine/server exec tsx ../../scripts/regressions/notification-sound.regression.ts",
+     "regression:agent-import-security": "pnpm build:shared && pnpm --filter @marinara-engine/server exec tsx ../../scripts/regressions/agent-import-security.regression.ts",
+     "regression:custom-tool-import-security": "pnpm build:shared && pnpm --filter @marinara-engine/server exec tsx ../../scripts/regressions/custom-tool-import-security.regression.ts",
++    "regression:prompt-context": "pnpm build:shared && pnpm --filter @marinara-engine/server exec tsx ../../scripts/regressions/prompt-context-contributors.regression.ts",
+     "regression:request-security": "pnpm build:shared && pnpm --filter @marinara-engine/server exec tsx ../../scripts/regressions/request-host-security.regression.ts && pnpm --filter @marinara-engine/server exec tsx ../../scripts/regressions/docker-proxy-auth.regression.ts",
+     "regression:runtime-integrity": "pnpm build:shared && pnpm --filter @marinara-engine/server exec tsx ../../scripts/regressions/runtime-integrity.regression.ts",
+     "regression:novelai-zip-security": "pnpm build:shared && pnpm --filter @marinara-engine/server exec tsx ../../scripts/regressions/novelai-zip-security.regression.ts",
+diff --git a/packages/server/src/services/generation/prompt-context-contributors.ts b/packages/server/src/services/generation/prompt-context-contributors.ts
+new file mode 100644
+index 000000000..a436ee696
+--- /dev/null
++++ b/packages/server/src/services/generation/prompt-context-contributors.ts
+@@ -0,0 +1,162 @@
++import type { ChatMode } from "@marinara-engine/shared";
++import { getAgentCallTimeoutMs } from "../../config/runtime-config.js";
++import { logger } from "../../lib/logger.js";
++import { getCapabilityService } from "../capability-packages/capability-service-registry.service.js";
++import { withLlmRequestTimeout } from "../llm/base-provider.js";
++
++/**
++ * Generic prompt-context contribution for capability packages.
++ *
++ * A package that wants to add retrieved context to a generation registers a
++ * service under `<agentId>:prompt-context`, where `<agentId>` is the id of an
++ * agent the package declares. The generation route already knows which agents
++ * are active for a chat, so no registry or discovery mechanism is required —
++ * the key is derived from data the caller already holds.
++ *
++ * This is the same integration shape as `long-term-memory-runtime.ts`, minus
++ * the hard-coded feature key. That file resolves exactly one service name, so
++ * every additional contributor would otherwise need its own Engine-side module
++ * and its own call site. Here the Engine states the contract once and any
++ * package — first- or third-party — satisfies it without further Engine
++ * changes.
++ *
++ * Nothing happens unless a package registers. `getCapabilityService` returns
++ * null for an unregistered key, so an install with no participating packages
++ * takes one map lookup per active agent and contributes nothing.
++ */
++
++const SERVICE_SUFFIX = ":prompt-context";
++
++/** Matches the recall cap in `long-term-memory-runtime.ts`. */
++const MAX_CONTRIBUTION_CHARACTERS = 100_000;
++
++/** Opaque to the Engine; handed back verbatim on acceptance. */
++export type PromptContextReceipt = unknown;
++
++export interface PromptContextContribution {
++  text: string;
++  receipt?: PromptContextReceipt;
++}
++
++export interface PromptContextContributorService {
++  /**
++   * Return context to inject for this generation, or null to contribute
++   * nothing. Called after the prompt messages are assembled, so `messages`
++   * reflects what the model is about to receive.
++   */
++  contribute(input: {
++    chatId: string;
++    chatMode: ChatMode;
++    characterIds: string[];
++    messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
++    signal?: AbortSignal;
++    debugMode: boolean;
++  }): Promise<PromptContextContribution | null>;
++  /**
++   * Called once the contributed text is confirmed present in the dispatched
++   * prompt. Optional: a contributor that does not track usage may omit it.
++   */
++  recordPromptAccepted?(input: {
++    chatId: string;
++    receipt: PromptContextReceipt;
++    messages: Array<{ role: string; content: string }>;
++  }): Promise<void>;
++}
++
++/** A contribution paired with the agent that produced it. */
++export interface CollectedPromptContext {
++  agentId: string;
++  text: string;
++  receipt?: PromptContextReceipt;
++}
++
++function contributorFor(agentId: string) {
++  return getCapabilityService<PromptContextContributorService>(`${agentId}${SERVICE_SUFFIX}`);
++}
++
++/**
++ * Bound a contributor call so a stalled package cannot hold up a turn.
++ * Mirrors `withLongTermMemoryRuntimeTimeout`; kept local so this module stays
++ * additive and does not require editing the existing long-term-memory path.
++ */
++export async function withPromptContextTimeout<T>(
++  timeoutMs: number,
++  operation: (signal: AbortSignal) => Promise<T>,
++  signal?: AbortSignal,
++): Promise<T> {
++  const timeoutController = new AbortController();
++  const combinedSignal = signal ? AbortSignal.any([signal, timeoutController.signal]) : timeoutController.signal;
++  const timeoutError = new Error(`Prompt-context contribution timed out after ${timeoutMs} ms`);
++  let rejectOnAbort: (() => void) | undefined;
++  const aborted = new Promise<never>((_, reject) => {
++    rejectOnAbort = () => {
++      reject(combinedSignal.reason instanceof Error ? combinedSignal.reason : timeoutError);
++    };
++    if (combinedSignal.aborted) rejectOnAbort();
++    else combinedSignal.addEventListener("abort", rejectOnAbort, { once: true });
++  });
++  const timeout = setTimeout(() => timeoutController.abort(timeoutError), timeoutMs);
++  try {
++    return await withLlmRequestTimeout(timeoutMs, () => Promise.race([operation(combinedSignal), aborted]));
++  } finally {
++    clearTimeout(timeout);
++    if (rejectOnAbort) combinedSignal.removeEventListener("abort", rejectOnAbort);
++  }
++}
++
++/**
++ * Collect contributions from every active agent that registered one.
++ *
++ * Contributors run sequentially in `agentIds` order so injection order is
++ * deterministic across turns rather than dependent on which package answered
++ * first. A contributor that fails, times out, or returns empty text is skipped;
++ * a failing package must degrade to "no extra context", never to a failed turn.
++ */
++export async function collectPromptContextContributions(
++  agentIds: readonly string[],
++  input: Parameters<PromptContextContributorService["contribute"]>[0],
++): Promise<CollectedPromptContext[]> {
++  const collected: CollectedPromptContext[] = [];
++  for (const agentId of agentIds) {
++    const service = contributorFor(agentId);
++    if (!service) continue;
++    if (input.signal?.aborted) break;
++    try {
++      const contribution = await withPromptContextTimeout(
++        getAgentCallTimeoutMs(),
++        (signal) => service.contribute({ ...input, signal }),
++        input.signal,
++      );
++      const text = contribution?.text.trim().slice(0, MAX_CONTRIBUTION_CHARACTERS) ?? "";
++      if (text) collected.push({ agentId, text, receipt: contribution?.receipt ?? null });
++    } catch (error) {
++      if (input.signal?.aborted) break;
++      logger.warn(error, "Prompt-context contribution from %s failed; continuing without it", agentId);
++    }
++  }
++  return collected;
++}
++
++/**
++ * Confirm to a contributor that its text reached the dispatched prompt.
++ *
++ * Separate from collection because contributing and shipping are different
++ * events: a contribution can be assembled and then dropped by preset placement
++ * or an aborted request. Accounting that assumed otherwise would over-report.
++ */
++export async function recordPromptContextAccepted(
++  agentId: string,
++  input: {
++    chatId: string;
++    receipt: PromptContextReceipt;
++    messages: Array<{ role: string; content: string }>;
++  },
++): Promise<void> {
++  const service = contributorFor(agentId);
++  if (!service?.recordPromptAccepted) return;
++  try {
++    await withPromptContextTimeout(getAgentCallTimeoutMs(), () => service.recordPromptAccepted!(input));
++  } catch (error) {
++    logger.warn(error, "Prompt-context accounting for %s failed", agentId);
++  }
++}
+diff --git a/scripts/regressions/prompt-context-contributors.regression.ts b/scripts/regressions/prompt-context-contributors.regression.ts
+new file mode 100644
+index 000000000..9465f9f7f
+--- /dev/null
++++ b/scripts/regressions/prompt-context-contributors.regression.ts
+@@ -0,0 +1,178 @@
++import assert from "node:assert/strict";
++
++import {
++  registerCapabilityService,
++  resetCapabilityServices,
++} from "../../packages/server/src/services/capability-packages/capability-service-registry.service.js";
++import {
++  collectPromptContextContributions,
++  recordPromptContextAccepted,
++  withPromptContextTimeout,
++  type PromptContextContributorService,
++} from "../../packages/server/src/services/generation/prompt-context-contributors.js";
++
++type ContributeInput = Parameters<PromptContextContributorService["contribute"]>[0];
++
++function input(overrides: Partial<ContributeInput> = {}): ContributeInput {
++  return {
++    chatId: "chat-1",
++    chatMode: "roleplay",
++    characterIds: ["char-1"],
++    messages: [{ role: "user", content: "hello" }],
++    debugMode: false,
++    ...overrides,
++  } as ContributeInput;
++}
++
++function contributor(
++  impl: Partial<PromptContextContributorService>,
++): PromptContextContributorService {
++  return { contribute: async () => null, ...impl } as PromptContextContributorService;
++}
++
++// An Engine carrying this seam with no participating package must behave
++// exactly as it did before. This is the property the whole change rests on.
++{
++  resetCapabilityServices();
++  const collected = await collectPromptContextContributions(["long-term-memory", "anything"], input());
++  assert.deepEqual(collected, [], "unregistered agents must contribute nothing");
++}
++
++// A registered contributor is collected, tagged with its agent id, and its
++// receipt is passed through untouched.
++{
++  resetCapabilityServices();
++  const receipt = { id: "receipt-1" };
++  registerCapabilityService(
++    "marinara-extender:prompt-context",
++    contributor({ contribute: async () => ({ text: "  remembered thing  ", receipt }) }),
++  );
++  const collected = await collectPromptContextContributions(["marinara-extender"], input());
++  assert.equal(collected.length, 1);
++  assert.equal(collected[0]!.agentId, "marinara-extender");
++  assert.equal(collected[0]!.text, "remembered thing", "text must be trimmed");
++  assert.equal(collected[0]!.receipt, receipt, "receipt must pass through by reference");
++}
++
++// Injection order must follow the caller's agent order, not whichever package
++// happened to resolve first — otherwise prompt content reorders between turns.
++{
++  resetCapabilityServices();
++  registerCapabilityService("alpha:prompt-context", contributor({ contribute: async () => ({ text: "A" }) }));
++  registerCapabilityService("beta:prompt-context", contributor({ contribute: async () => ({ text: "B" }) }));
++  const forward = await collectPromptContextContributions(["alpha", "beta"], input());
++  const reverse = await collectPromptContextContributions(["beta", "alpha"], input());
++  assert.deepEqual(forward.map((c) => c.text), ["A", "B"]);
++  assert.deepEqual(reverse.map((c) => c.text), ["B", "A"]);
++}
++
++// A failing package degrades to "no extra context" and must not prevent other
++// contributors from running, nor fail the turn.
++{
++  resetCapabilityServices();
++  registerCapabilityService(
++    "broken:prompt-context",
++    contributor({
++      contribute: async () => {
++        throw new Error("contributor exploded");
++      },
++    }),
++  );
++  registerCapabilityService("healthy:prompt-context", contributor({ contribute: async () => ({ text: "kept" }) }));
++  const collected = await collectPromptContextContributions(["broken", "healthy"], input());
++  assert.deepEqual(collected.map((c) => c.agentId), ["healthy"], "a throwing contributor is skipped, not fatal");
++}
++
++// Empty and whitespace-only contributions are dropped so they cannot introduce
++// blank sections into the prompt.
++{
++  resetCapabilityServices();
++  registerCapabilityService("blank:prompt-context", contributor({ contribute: async () => ({ text: "   \n  " }) }));
++  registerCapabilityService("null:prompt-context", contributor({ contribute: async () => null }));
++  const collected = await collectPromptContextContributions(["blank", "null"], input());
++  assert.deepEqual(collected, [], "empty contributions must not reach the prompt");
++}
++
++// A runaway contributor cannot blow the prompt budget.
++{
++  resetCapabilityServices();
++  registerCapabilityService(
++    "huge:prompt-context",
++    contributor({ contribute: async () => ({ text: "x".repeat(250_000) }) }),
++  );
++  const collected = await collectPromptContextContributions(["huge"], input());
++  assert.equal(collected[0]!.text.length, 100_000, "contribution must be capped");
++}
++
++// An already-aborted request does no contributor work at all.
++{
++  resetCapabilityServices();
++  let called = false;
++  registerCapabilityService(
++    "aborted:prompt-context",
++    contributor({
++      contribute: async () => {
++        called = true;
++        return { text: "should not happen" };
++      },
++    }),
++  );
++  const controller = new AbortController();
++  controller.abort();
++  const collected = await collectPromptContextContributions(["aborted"], input({ signal: controller.signal }));
++  assert.deepEqual(collected, []);
++  assert.equal(called, false, "an aborted request must not invoke contributors");
++}
++
++// A stalled contributor must not hold a turn open indefinitely.
++{
++  const started = Date.now();
++  await assert.rejects(
++    () => withPromptContextTimeout(50, () => new Promise(() => {})),
++    /timed out after 50 ms/,
++    "a hung contributor must reject on the timeout",
++  );
++  assert.ok(Date.now() - started < 5_000, "timeout must fire promptly");
++}
++
++// recordPromptAccepted is optional; a contributor without it must not throw.
++{
++  resetCapabilityServices();
++  registerCapabilityService("minimal:prompt-context", contributor({ contribute: async () => ({ text: "t" }) }));
++  await recordPromptContextAccepted("minimal", { chatId: "chat-1", receipt: null, messages: [] });
++}
++
++// When present, acceptance is reported with the original receipt.
++{
++  resetCapabilityServices();
++  let seen: unknown = "unset";
++  registerCapabilityService(
++    "accounting:prompt-context",
++    contributor({
++      contribute: async () => ({ text: "t", receipt: { n: 7 } }),
++      recordPromptAccepted: async ({ receipt }) => {
++        seen = receipt;
++      },
++    }),
++  );
++  await recordPromptContextAccepted("accounting", { chatId: "chat-1", receipt: { n: 7 }, messages: [] });
++  assert.deepEqual(seen, { n: 7 }, "the contributor's own receipt must be handed back");
++}
++
++// Accounting failures are contained the same way contribution failures are.
++{
++  resetCapabilityServices();
++  registerCapabilityService(
++    "bad-accounting:prompt-context",
++    contributor({
++      contribute: async () => ({ text: "t" }),
++      recordPromptAccepted: async () => {
++        throw new Error("accounting exploded");
++      },
++    }),
++  );
++  await recordPromptContextAccepted("bad-accounting", { chatId: "chat-1", receipt: null, messages: [] });
++}
++
++resetCapabilityServices();
++console.log("prompt-context contributor regression passed");
+-- 
+2.52.0.windows.1
+

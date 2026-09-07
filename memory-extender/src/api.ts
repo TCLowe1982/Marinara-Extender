@@ -99,7 +99,7 @@ import { resolveFactTarget } from "./facts.js";
 import { createEntryIfUnique, isDuplicate, readSupersessionCandidates } from "./dedup.js";
 import { Progress, progressEnabled } from "./progress.js";
 import { reviewDiscardedEntries } from "./discard-review.js";
-import { readHeld, resolveHeld } from "./reconcile-queue.js";
+import { readExamined, readHeld, resolveHeld } from "./reconcile-queue.js";
 import { computeJobKey, loadJob, saveJob, deleteJob, clearJobs } from "./story-jobs.js";
 import type { Chunk } from "./sentiment/types.js";
 import mammoth from "mammoth";
@@ -1931,10 +1931,15 @@ export function registerApiRoutes(app: FastifyInstance): void {
 
   app.get("/api/held", async (_req, reply) => {
     const held = await readHeld().catch(() => []);
+    // The population those records were drawn from (385b). Sent alongside rather
+    // than as its own route: the numerator and the denominator have to arrive
+    // together or the view can render one without the other, which is the exact
+    // ambiguity the number exists to remove.
+    const examined = await readExamined().catch(() => 0);
     // Only the discarded-swipe records. The same file also carries the curator's
     // withheld verdicts (mjp), which are a different lane with different actions
     // — filter here rather than teaching the view to ignore what it cannot act on.
-    return reply.send({ held: held.filter((h) => h.reasons?.includes("discarded-swipe")) });
+    return reply.send({ held: held.filter((h) => h.reasons?.includes("discarded-swipe")), examined });
   });
 
   // Settle one: optionally restore the discarded memory, or the older memory it

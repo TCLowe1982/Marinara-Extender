@@ -159,6 +159,74 @@ export interface HeldRecord {
   resolvedAt?: string;
 }
 
+// ── The denominator (385b) ───────────────────────────────────────────────────
+// "0 held" is a numerator, and on its own it is ambiguous between "the checker
+// opened everything and found nothing for you" and "the checker never ran". Only
+// the population it was drawn from separates those, so the lane records how many
+// discarded memories it EXAMINED, not just how many it queued.
+//
+// The population must be THIS lane's. Marie's rule, after catching herself
+// offering three denominators from three different lanes in one conversation: a
+// label that can only be true of one population cannot get filled in from another
+// one by accident. So this counts the rows reviewDiscardedEntries actually opened
+// — not re-rolls (a re-roll fans out across two scopes and N rows), not recorded
+// turns, not retrieval candidates. Each row counted here is one that could have
+// become a held record, which is what makes the ratio a proof rather than two
+// experiments printed in one sentence.
+//
+// CUMULATIVE AND ON DISK, deliberately. A per-session counter resets every
+// morning and puts us back at the ambiguous zero with extra steps.
+//
+// 0 examined on a fresh install is the CORRECT output, not a flaw: this starts
+// climbing the first time anybody re-rolls anything, so a stuck 0 becomes
+// evidence of its own.
+const examinedPath = (): string => join(QUEUE_DIR(), "examined.json");
+
+// Serialises the read-modify-write so two turns landing together cannot lose an
+// increment. Single sidecar process, so an in-process chain is the whole fix.
+let examinedChain: Promise<void> = Promise.resolve();
+
+/**
+ * Add to the running total of discarded memories examined for entanglement.
+ *
+ * NEVER THROWS. This runs inside turn ingestion, under the same rule as
+ * reviewDiscardedEntries itself: a review lane that can fail a turn is worse than
+ * one that occasionally miscounts. A lost increment understates the denominator;
+ * a thrown error costs the user their message.
+ */
+export async function recordExamined(n: number): Promise<void> {
+  if (!Number.isFinite(n) || n <= 0) return;
+  examinedChain = examinedChain.then(async () => {
+    try {
+      const now = new Date().toISOString();
+      const prev = await readExaminedRecord();
+      await mkdir(QUEUE_DIR(), { recursive: true });
+      await writeFile(
+        examinedPath(),
+        JSON.stringify({ examined: prev.examined + n, since: prev.since ?? now, updatedAt: now }),
+        "utf8",
+      );
+    } catch { /* the count is not worth a turn */ }
+  });
+  return examinedChain;
+}
+
+async function readExaminedRecord(): Promise<{ examined: number; since?: string }> {
+  try {
+    const parsed = JSON.parse(await readFile(examinedPath(), "utf8")) as { examined?: unknown; since?: unknown };
+    const n = typeof parsed.examined === "number" && Number.isFinite(parsed.examined) ? parsed.examined : 0;
+    return { examined: Math.max(0, Math.trunc(n)), since: typeof parsed.since === "string" ? parsed.since : undefined };
+  } catch {
+    // Absent or torn. Zero is the honest answer and is also the fresh-install one.
+    return { examined: 0 };
+  }
+}
+
+/** The running total. 0 means "nothing has been examined yet", never "unknown". */
+export async function readExamined(): Promise<number> {
+  return (await readExaminedRecord()).examined;
+}
+
 export async function appendHeld(rec: HeldRecord): Promise<void> {
   await mkdir(QUEUE_DIR(), { recursive: true });
   const withId: HeldRecord = { ...rec, id: rec.id ?? `hl-${Date.now().toString(36)}-${(seq++).toString(36)}` };

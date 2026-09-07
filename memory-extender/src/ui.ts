@@ -82,6 +82,10 @@ const PAGE = String.raw`<!DOCTYPE html>
      disabled — opening it is how you learn what it holds. */
   .item.quiet .lbl { color: var(--muted); }
   .item.quiet:hover .lbl { color: var(--text); }
+  /* The denominator beside the zero. Green because it is the reassuring
+     reading, and quiet because it is evidence, not an alert. */
+  .proof { color: var(--good); font-size: 11px; line-height: 1.35;
+    padding: 3px 9px 0; }
   .card { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px;
     padding: 13px 15px; margin-bottom: 10px; }
   .card .sum { font-weight: 600; margin-bottom: 5px; }
@@ -311,7 +315,7 @@ async function boot() {
         esc(r.chatId) + '<div class="k">' + esc(String(r.createdAt).replace("T", " ").slice(0, 16)) + '</div></button>').join("")
     : '<div class="empty">no turns recorded yet</div>';
   for (const b of $("receipts").querySelectorAll(".item")) {
-    b.onclick = () => { pick($("receipts"), b); state.chatId = b.dataset.chat; state.mode = "turn"; render(); };
+    b.onclick = () => { pick($("receipts"), b); state.chatId = b.dataset.chat; goMode("turn"); };
   }
 
   await buildVerdicts(rs.slice(0, 8));
@@ -485,6 +489,10 @@ async function resolveHeldRecord(btn) {
     toast(body.action === "dismiss" ? "Left retired" : "Restored");
     await loadHeldCount();
     await render();
+    // Settling the LAST one is the moment this lane exists to pay off, and it is
+    // the moment the reader is most likely to be scrolled somewhere else. Put the
+    // confirmation in front of them; leave their position alone otherwise.
+    if (!document.querySelector("[data-held]")) window.scrollTo({ top: 0 });
   } catch (err) {
     for (const b of btn.parentElement.querySelectorAll("button")) b.disabled = false;
     toast(err.message, true);
@@ -508,19 +516,62 @@ async function resolveHeldRecord(btn) {
 //     state.mode, and the render that followed drew the entries list — so clearing
 //     your queue took away the confirmation you had just earned.
 //
-// So: dim at zero, no number, and never navigate on the reader's behalf.
+// So: never navigate on the reader's behalf, and at zero print the DENOMINATOR
+// rather than nothing (385b, Marie's amendment).
+//
+// "0 held" is a numerator. Alone it cannot distinguish a checker that opened
+// everything and found nothing from a checker that never ran, and those are the
+// two readings a reader most needs told apart. The population it was drawn from
+// separates them, so at zero the lane says what it examined to get there.
+//
+// The label names the one verb THIS lane performs. Not "scored" — that word is
+// true in the retrieval lane, the turn log and the intake gate as well, which is
+// what lets a denominator from one population get printed beside a numerator from
+// another. A label that can only be true of one population cannot be filled in
+// from somewhere else by accident.
 async function loadHeldCount() {
   const nav = $("held-nav");
   if (!nav) return;
   let n = 0;
-  try { n = (await get("/api/held")).held.length; } catch { return; }
+  let examined = 0;
+  try {
+    const r = await get("/api/held");
+    n = r.held.length;
+    // 0 on a fresh install is the CORRECT output, not a gap to paper over: this
+    // total starts climbing the first time anybody re-rolls anything, so a stuck
+    // "0 examined" is itself the finding.
+    examined = Number(r.examined) || 0;
+  } catch { return; }
   const heading = nav.previousElementSibling;
   if (heading) heading.style.display = "";
   nav.innerHTML = '<button class="item' + (state.mode === "held" ? " sel" : "") + (n ? "" : " quiet") +
     '" id="go-held">' + '<span class="lbl">Held for review</span>' +
     (n ? '<span class="n" style="margin-left:auto;color:var(--warn)">' + n + "</span>" : "") +
-    "</button>";
-  $("go-held").addEventListener("click", () => { state.mode = "held"; render(); loadHeldCount(); });
+    "</button>" +
+    (n ? "" : '<div class="proof">0 held — ' + examined.toLocaleString() +
+      " discarded memories examined</div>");
+  $("go-held").addEventListener("click", () => { goMode("held"); loadHeldCount(); });
+}
+
+// Changing view must put the new view where the reader is LOOKING (385b).
+//
+// Found by rendering the held lane's empty state for the first time and measuring
+// it: with a long sidebar the page had scrolled to y=672, and "Nothing held" drew
+// 599px ABOVE the viewport. Clicking the lane — which sits at the BOTTOM of the
+// sidebar, so you are always scrolled down when you reach it — put a blank panel
+// on screen. The view had rendered; the reader simply could not see it.
+//
+// That is the same failure as the force-navigate this issue started with, arriving
+// by a different route: the screen has something to say at the moment of peak
+// trust and does not deliver it. Scroll position is part of "did the reader get
+// the confirmation", not a cosmetic afterthought.
+//
+// Mode changes only. Re-rendering in place (after an edit, say) must NOT throw a
+// reader back to the top of a long list they were working through.
+function goMode(m) {
+  state.mode = m;
+  window.scrollTo({ top: 0 });
+  render();
 }
 
 async function render() {
@@ -539,8 +590,8 @@ async function renderEntries(el) {
     '<button class="act" id="see-discarded">Discarded by the system…</button></div>';
   if (!rows.length) {
     el.innerHTML = bar + '<div class="empty">No memories stored for ' + esc(state.label) + " yet.</div>";
-    $("see-deleted").onclick = () => { state.mode = "deleted"; render(); };
-    $("see-discarded").onclick = () => { state.mode = "discarded"; render(); };
+    $("see-deleted").onclick = () => goMode("deleted");
+    $("see-discarded").onclick = () => goMode("discarded");
     return;
   }
   el.innerHTML = bar +
@@ -563,8 +614,8 @@ async function renderEntries(el) {
       '<div class="body" hidden></div>' +
       '<div class="pane"></div></div>').join("");
 
-  $("see-deleted").onclick = () => { state.mode = "deleted"; render(); };
-  $("see-discarded").onclick = () => { state.mode = "discarded"; render(); };
+  $("see-deleted").onclick = () => goMode("deleted");
+  $("see-discarded").onclick = () => goMode("discarded");
 
   for (const card of el.querySelectorAll(".card")) {
     const body = card.querySelector(".body");
@@ -828,7 +879,7 @@ async function renderDeleted(el) {
   }
 }
 
-function back() { state.mode = "entries"; render(); }
+function back() { goMode("entries"); }
 
 /** The verdict for one memory, in plain language. */
 function verdictHtml(id) {
@@ -881,7 +932,7 @@ async function renderReceipt(el) {
     "<h2>Considered and rejected — and why</h2>" + rej +
     (r.rejectedTruncated ? '<div class="note">Rejection list truncated; lowest-scoring were dropped first.</div>' : "");
 
-  $("back").onclick = () => { pick($("receipts"), null); state.mode = "entries"; render(); };
+  $("back").onclick = () => { pick($("receipts"), null); goMode("entries"); };
 }
 
 boot().catch((e) => { $("hdr").textContent = "cannot reach the memory server — " + e.message; });

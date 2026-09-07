@@ -14,6 +14,7 @@ import { mkdtemp, rm, appendFile, mkdir, readFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join, dirname } from "path";
 import { createEntry } from "../dedup.js";
+import { reviewDiscardedEntries } from "../discard-review.js";
 import {
   readIndex,
   readColdIndex,
@@ -22,7 +23,7 @@ import {
   supersedeEntry,
   restoreDiscardedEntry,
 } from "../storage.js";
-import { appendHeld, readHeld, resolveHeld, heldFilePath } from "../reconcile-queue.js";
+import { appendHeld, readHeld, resolveHeld, heldFilePath, recordExamined, readExamined } from "../reconcile-queue.js";
 
 let dir: string;
 beforeEach(async () => {
@@ -136,5 +137,85 @@ describe("restoreDiscardedEntry", () => {
     expect(await hotIds()).toEqual([a!.id]);
     const still = (await readColdIndex("chat", "c1"))!.entries.find((e) => e.id === b!.id);
     expect(still?.discardedAt).toBeTruthy();
+  });
+});
+
+// THE DENOMINATOR (385b).
+//
+// "0 held" cannot distinguish a checker that opened everything and found nothing
+// from a checker that never ran. The count of what was EXAMINED is what separates
+// those, so it is the number the empty lane prints — and it is only load-bearing
+// if it is cumulative and survives a restart. A per-session counter resets every
+// morning and puts the reader back at the ambiguous zero with extra steps.
+describe("recordExamined — the population 'N held' is drawn from", () => {
+  it("starts at zero on a fresh install, and zero means zero", async () => {
+    // Not "unknown". A fresh install has genuinely examined nothing, and that is
+    // the correct reading — the total climbs the first time anybody re-rolls.
+    expect(await readExamined()).toBe(0);
+  });
+
+  it("accumulates across calls rather than overwriting", async () => {
+    await recordExamined(3);
+    await recordExamined(4);
+    expect(await readExamined()).toBe(7);
+  });
+
+  it("does not lose increments when calls land together", async () => {
+    // Two turns can be ingested concurrently. A naive read-modify-write drops one
+    // of these, which understates the denominator on exactly the busy days where
+    // the reader is most likely to look at it.
+    await Promise.all([1, 1, 1, 1, 1, 1, 1, 1, 1, 1].map((n) => recordExamined(n)));
+    expect(await readExamined()).toBe(10);
+  });
+
+  it("survives a torn or absent counter file without throwing", async () => {
+    // Same rule the rest of this lane follows: it runs inside turn ingestion, and
+    // a counter that can fail a turn is worse than one that occasionally miscounts.
+    const path = join(process.env.MARINARA_EXTENDER_DATA!, "queue", "examined.json");
+    await mkdir(dirname(path), { recursive: true });
+    await appendFile(path, "{not json", "utf8");
+    expect(await readExamined()).toBe(0);
+    await expect(recordExamined(2)).resolves.toBeUndefined();
+    expect(await readExamined()).toBe(2);
+  });
+
+  it("ignores nonsense increments instead of corrupting the total", async () => {
+    await recordExamined(5);
+    await recordExamined(0);
+    await recordExamined(-3);
+    await recordExamined(Number.NaN);
+    expect(await readExamined()).toBe(5);
+  });
+});
+
+describe("the review pass counts what it OPENED, not what it queued", () => {
+  it("counts a clean retirement, which is the whole point", async () => {
+    // A clean retirement queues nothing. If only queued rows were counted, a
+    // perfectly working checker would report "0 held - 0 examined" and be
+    // indistinguishable from one that never ran. Clean rows ARE the evidence.
+    const e = await mk("Something the discarded reply taught", { sourceMessageId: "m1", sourceSwipeIndex: 0 });
+    await discardLosingSwipe("chat", "c1", "m1", 1);
+    const cold = (await readColdIndex("chat", "c1"))?.entries ?? [];
+    const retired = cold.filter((c) => c.id === e!.id);
+
+    const queued = await reviewDiscardedEntries("chat", "c1", retired, cold);
+
+    expect(queued).toBe(0);
+    expect(await readExamined()).toBe(1);
+  });
+
+  it("counts entangled rows too — examined is the superset", async () => {
+    const a = await mk("Recited before the reply was thrown away", {
+      sourceMessageId: "m1", sourceSwipeIndex: 0, recitationCount: 2,
+    });
+    const b = await mk("Never went anywhere", { sourceMessageId: "m1", sourceSwipeIndex: 0 });
+    await discardLosingSwipe("chat", "c1", "m1", 1);
+    const cold = (await readColdIndex("chat", "c1"))?.entries ?? [];
+    const retired = cold.filter((c) => c.id === a!.id || c.id === b!.id);
+
+    await reviewDiscardedEntries("chat", "c1", retired, cold);
+
+    expect(await readExamined()).toBe(2);
+    expect((await readHeld()).length).toBeLessThanOrEqual(2);
   });
 });

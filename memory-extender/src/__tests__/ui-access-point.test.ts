@@ -88,9 +88,39 @@ describe("the held-review lane does not vanish when it is empty (385b)", () => {
     expect(await body("/memory")).not.toContain('nav.innerHTML = "";');
   });
 
+  it("changes view in exactly one place, and that place is not data-driven", async () => {
+    // Marie's question was whether "the view you are standing in navigates away
+    // when its data changes" was a pattern rather than an incident. It was an
+    // incident — and this pins it shut: state.mode is now assigned in goMode()
+    // alone, which is only ever reached from a click handler. A second assignment
+    // appearing anywhere is the regression, whether or not it is data-driven.
+    const page = await body("/memory");
+    expect(page.match(/state\.mode = /g) ?? []).toHaveLength(1);
+    expect(page).toContain("function goMode(m)");
+  });
+
+  it("puts the view it just drew where the reader is looking", async () => {
+    // The held lane sits at the BOTTOM of a long sidebar, so a reader is always
+    // scrolled down when they reach it. Measured before this existed: the empty
+    // state drew 599px above the viewport and the reader saw a blank panel.
+    expect(await body("/memory")).toContain("window.scrollTo({ top: 0 })");
+  });
+
   it("never navigates the reader out of the lane", async () => {
     // The force-navigate that ejected you on settling the last item.
     expect(await body("/memory")).not.toContain('if (state.mode === "held")');
+  });
+
+  it("prints the denominator beside the zero, in this lane's own words", async () => {
+    // "0 held" alone cannot tell a checker that found nothing from one that never
+    // ran. The population separates them — and the LABEL has to name the verb only
+    // this lane performs. "scored" is true in the retrieval lane, the turn log and
+    // the intake gate too, which is exactly how a denominator from one population
+    // ends up printed beside a numerator from another.
+    const page = await body("/memory");
+    expect(page).toContain("discarded memories examined");
+    expect(page).not.toContain("scored</div>");
+    expect(page).toContain(".proof");
   });
 
   it("still renders the entry, dimmed, when the count is zero", async () => {

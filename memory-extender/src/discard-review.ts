@@ -24,7 +24,7 @@
 // curator is running.
 
 import type { IndexEntry, Scope } from "./storage.js";
-import { appendHeld } from "./reconcile-queue.js";
+import { appendHeld, recordExamined } from "./reconcile-queue.js";
 
 /**
  * Why retiring this entry does not settle the matter, in the order the evidence
@@ -111,6 +111,14 @@ export async function reviewDiscardedEntries(
       console.warn(`[ME:discard-review] could not record ${row.id} —`, e);
     }
   }
+  // The denominator (385b). Every row above was OPENED and judged, whether or not
+  // it turned out entangled — so the whole set is the population "N held" is drawn
+  // from, and it is counted here rather than at the call site so it can never
+  // drift from what was actually examined. Clean retirements are the majority and
+  // are exactly what the reader needs counted: they are the evidence the checker
+  // ran and found nothing, which is the reading "0 held" alone cannot support.
+  await recordExamined(retired.length);
+
   if (queued > 0) {
     console.info(
       `[ME:discard-review] ${scope}:${scopeId} — ${queued} discarded entr${queued === 1 ? "y" : "ies"} had derivatives; queued for review`,

@@ -1,0 +1,35 @@
+diff --git a/packages/server/src/routes/connections.routes.ts b/packages/server/src/routes/connections.routes.ts
+index fe5f8b6d8..6dd661a6f 100644
+--- a/packages/server/src/routes/connections.routes.ts
++++ b/packages/server/src/routes/connections.routes.ts
+@@ -1418,6 +1418,22 @@ export async function connectionsRoutes(app: FastifyInstance) {
+       // but the family tier is not. Combined with the SDK-side `modelUsage`
+       // readout below, this gives two independent signals on the same call.
+       const fastMode = conn.claudeFastMode === "true";
++      // Pin the Claude Code CLI when CLAUDE_CODE_EXECUTABLE_PATH is set. Same
++      // operator-set server env var the chat provider honours, repeated here because
++      // this route builds its OWN options object and so never saw that pin — which
++      // is exactly why chat worked while the scheduler's automatic refresh returned
++      // 500 "Native CLI binary for win32-x64 not found" on every attempt.
++      //
++      // Left unset, the SDK auto-detects the binary by resolving its optional
++      // per-platform package relative to its own module URL. Under pnpm's isolated
++      // layout that fails EVEN WHEN the package is installed and correctly linked as
++      // a sibling of the SDK, which is the case here — verified 2026-09-07 with
++      // claude-agent-sdk-win32-x64@0.3.235 present on disk and symlinked. Nothing is
++      // missing; the lookup itself is what does not survive the layout.
++      //
++      // Operator configuration from the server environment, not caller input: a
++      // connection's own fields cannot reach it.
++      const pinnedCliPath = process.env.CLAUDE_CODE_EXECUTABLE_PATH?.trim();
+       // Use the Claude Code preset for `systemPrompt`. Without it the SDK
+       // strips the model's version awareness and every model falsely answers
+       // "Sonnet" — see the chat provider for the full explanation. Passing the
+@@ -1432,6 +1448,7 @@ export async function connectionsRoutes(app: FastifyInstance) {
+           permissionMode: "bypassPermissions",
+           includePartialMessages: false,
+           settings: { fastMode },
++          ...(pinnedCliPath ? { pathToClaudeCodeExecutable: pinnedCliPath } : {}),
+           ...(conn.apiKey ? { env: { ...process.env, ANTHROPIC_API_KEY: conn.apiKey } } : {}),
+         },
+       });

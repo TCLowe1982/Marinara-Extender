@@ -270,6 +270,19 @@ SUBJECT RULE:
 - subject = who the fact is ABOUT. Use "user" for the human player; use the character's name for a fact about that character.
 - A [character] sentence may describe ANY character in the scene, not just the one whose turn it is — attribute by content, not by block label. Pick names from the "Known characters" list when one is provided.
 
+DIRECTION OF ADDRESS — "you" is the LISTENER, never the speaker.
+The [user] / [character] prefix says who SPOKE the sentence, not who it is about.
+- A [user] sentence about "you" or "your" is NEVER about the user. Nobody is the
+  person they are addressing. It is about a character.
+- A [character] sentence about "you" or "your" is about whoever that character is
+  addressing: the user in a one-on-one scene, possibly another character when
+  several are present. Decide from the content.
+- Nothing else changes. A [user] sentence about "I" is still about the user, and a
+  sentence naming someone is still about the person it names.
+The same words flip subject depending on who said them:
+- [user] "you were grown in a vat on Ceres" → character scope, character_topics, subject = the character
+- [character] "you were grown in a vat on Ceres" → character scope, user_topics, subject "user"
+
 Examples:
 - "I grew up in Texas" (said by user) → character scope, user_topics, subject "user"
 - "I cried at the MGS3 ending" (said by user) → character scope, user_topics, subject "user"
@@ -298,7 +311,20 @@ doing right now, it is scene narration — skip it.
 
 Return a JSON object of this exact shape:
 {"facts":[{"text":"<original sentence>","fact":"<concise fact>","lane":"user_topics|character_topics","scope":"character|chat","subject":"<user or character name>"}]}
-Return {"facts":[]} if nothing qualifies. Raw JSON only — no explanation, no markdown.`;
+Return {"facts":[]} if nothing qualifies. Raw JSON only — no explanation, no markdown.
+
+WHO IS SPEAKING — the turn header names the people involved. Use it.
+- The header gives the human player's names. A sentence naming any of them is
+  about the user: subject "user". Do not file it under a character who happens to
+  share the name.
+- The header also lists names that are NOT the player. Those are characters,
+  however closely they resemble the player's name.
+- The header names the character who spoke the [character] block. A [character]
+  sentence describing the speaker is about that character.
+- The header does not outrank the sentence. If the content is plainly about
+  someone else, follow the content.
+- [character] "Thomas, you never told me about Texas", where the header says
+  Thomas is the player → character scope, user_topics, subject "user"`;
 
 async function callLocal(prompt: string, system: string = SYSTEM_PROMPT): Promise<string | null> {
   if (!localEnabled()) return null;
@@ -418,6 +444,48 @@ async function declaredUserForms(): Promise<string[]> {
   }
 }
 
+// The WHO IS SPEAKING header (avii / icke arm E). Built per turn from the DECLARED
+// identity (egj3) and the session character — the two facts that resolve "I" and
+// stop a bare name being taken as the subject by default.
+//
+// WHY THIS IS THE LEVER. qs67 measured the extractor at 92% SUPPORTED but only 45%
+// ATTRIBUTED: it almost never invents, it files true sentences against the wrong
+// person. The misattributions are overwhelmingly a NAME appearing in a sentence and
+// being taken as the subject regardless of grammatical role — a vocative ("Priya I
+// love him so much" recorded as Priya loving), or the object of an action ("I make a
+// sound into Thomas's chest" recorded as Thomas making it). Knowing who spoke
+// resolves both.
+//
+// MEASURED, arm E of the icke bench, in the configuration that actually ships:
+//   A  old prompt (SHIPPED)          45% attributed   15% misattributed
+//   D  + DIRECTION OF ADDRESS        40%              22%     <- WORSE alone
+//   E  + DIRECTION + this header     60%              12%
+// D is why this shipped as ONE change: the address block without the header is a
+// regression, so the two are not separable slices.
+//
+// Absent or unreadable identity yields NO header rather than a partial one — a
+// header listing no player names teaches the model nothing and still costs tokens.
+// Never throws: this runs on the ingest path.
+export async function speakerHeader(characterName?: string): Promise<string> {
+  try {
+    const { readUserIdentity } = await import("./user-identity.js");
+    const identity = await readUserIdentity();
+    const canonical = identity?.canonical?.trim();
+    if (!canonical) return "";
+    const forms = [canonical, ...(identity?.aliases ?? [])].map((f) => String(f).trim()).filter(Boolean);
+    const excludes = (identity?.excludes ?? []).map((f) => String(f).trim()).filter(Boolean);
+    const parts = [
+      `- The [user] block was spoken by the human player: ${forms.join(", ")}. Any of those names means the user.`,
+    ];
+    if (excludes.length > 0) parts.push(`- NOT the player, despite the resemblance: ${excludes.join(", ")}.`);
+    const speaker = characterName?.trim();
+    if (speaker) parts.push(`- The [character] block was spoken by ${speaker}.`);
+    return `WHO IS SPEAKING\n${parts.join("\n")}\n\n`;
+  } catch {
+    return "";
+  }
+}
+
 export async function classifyAmbient(input: AmbientInput): Promise<AmbientFact[]> {
   // cye6: second person is admitted. The gate could see a speaker describing
   // THEMSELVES and a speaker naming a THIRD PARTY, and was structurally unable
@@ -438,7 +506,8 @@ export async function classifyAmbient(input: AmbientInput): Promise<AmbientFact[
   const rosterLine = input.roster && input.roster.length > 0
     ? `Known characters: ${input.roster.join(", ")}\n\n`
     : "";
-  const prompt = `${rosterLine}Sentences to evaluate:\n${lines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
+  const header = await speakerHeader(input.characterName);
+  const prompt = `${header}${rosterLine}Sentences to evaluate:\n${lines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
 
   let raw = await callLocal(prompt);
   if (raw !== null && !looksLikeJson(raw)) {

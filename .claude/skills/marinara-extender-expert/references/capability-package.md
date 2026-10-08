@@ -1,10 +1,10 @@
 # Marinara Extender: The Capability Package Contract
 
-*The in-Engine surface. Grounded in the Engine's own `capabilityPackageManifestSchema` (`packages/shared/src/schemas/capability-package.schema.ts`) and read against **Engine v2.4.4 (`1a299369a`), capability API 1.14** — the version the maintainer's install is pinned to. **Contracts, not coordinates** (`umz1`): everything below names a field, an enum member, an endpoint or a validation rule, because those survive refactors and line numbers do not.*
+*The in-Engine surface. Grounded in the Engine's own `capabilityPackageManifestSchema` (`packages/shared/src/schemas/capability-package.schema.ts`) and read against **Engine v2.4.4 (`1a299369a`), capability API 1.14**. ⚠ The install was bumped to **v2.5.0** on 2026-10-08 and that schema file changed by +645 lines; the contracts below have **not** been re-verified against 2.5.0 yet (`48cg`). **Contracts, not coordinates** (`umz1`): everything below names a field, an enum member, an endpoint or a validation rule, because those survive refactors and line numbers do not.*
 
 > ## ⛔ Read the Engine from the RIGHT COPY
 >
-> **The live install is `C:\Users\holyk\AppData\Local\MarinaraEngine`** (v2.4.4, tag `v2.4.4` at `1a299369a`, detached HEAD, built 2026-09-01). It serves `127.0.0.1:7860` by running `node packages/server/dist/index.js`, so a process listing shows only the relative path `dist/index.js` - **that is not enough to tell you which copy is running.**
+> **The live install is `C:\Users\holyk\AppData\Local\MarinaraEngine`** (v2.5.0, tag `v2.5.0` at `7e2823696`, detached HEAD, built 2026-10-08; was v2.4.4 at `1a299369a`). Bumps are tag-pinned by hand (`git checkout v<x>` + re-apply `engine-patches/`, then `start.bat --skip-update`); the launcher's own auto-update fails its snapshot with EPERM on a symlink and skips itself. It serves `127.0.0.1:7860` by running `node packages/server/dist/index.js`, so a process listing shows only the relative path `dist/index.js` - **that is not enough to tell you which copy is running.**
 >
 > `d:\Entertainment\Wip\Projects\Marinara-Engine` is a **stale 2.4.1 clone**, marked with `_STALE_READ_ME_FIRST.md` and kept only for four unpushed commits (preserved at `engine-patches/legacy-2.4.1-branches/`). Its schema shows **six** slots ending at `game-world-map`, and it carries an older anchor of the `8pwc` CLI-path patch.
 >

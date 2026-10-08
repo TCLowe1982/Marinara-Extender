@@ -5,6 +5,10 @@ reinstall and no `pnpm install`, and there is no file in the Engine repo that
 records it, so it lives here with the patches for the same reason they do.
 
 Created 2026-09-07 against Engine **v2.4.4** (`1a299369a`).
+Re-pointed 2026-10-08 for Engine **v2.5.0** (`7e2823696`): the SDK moved
+0.3.235 → **0.3.282** and the old junction was left dangling, exactly as warned
+below. Target is now `…claude-agent-sdk-win32-x64@0.3.282…`; verified from
+Noodle's snapshot.
 
 ## Symptom
 
